@@ -159,6 +159,13 @@ export default async function goalRoutes(app: FastifyInstance) {
       },
     });
 
+    // Private goals are shareable by design, so give every new private goal a
+    // revocable code immediately instead of waiting for the owner to discover the
+    // Share link action.
+    if (goal.visibility === 'PRIVATE') {
+      await issueInviteCode(goal.id);
+    }
+
     await ensureOccurrences(goal.id);
     reply.status(201);
     return { goal: serializeGoal(goal) };
@@ -170,6 +177,12 @@ export default async function goalRoutes(app: FastifyInstance) {
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const userId = req.user!.id;
     const { goal, participant, isOwner } = await loadGoalForUser(id, userId, 'read');
+
+    // Backfill codes for private goals created before automatic code generation was
+    // added. Only the owner ever receives this value in the response.
+    if (isOwner && goal.visibility === 'PRIVATE' && !goal.inviteCode) {
+      goal.inviteCode = await issueInviteCode(goal.id);
+    }
 
     if (participant) await ensureOccurrences(goal.id, [participant.id]);
     const today = goalToday(goal);
