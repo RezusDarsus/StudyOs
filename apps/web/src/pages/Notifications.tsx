@@ -131,8 +131,20 @@ export default function Notifications() {
               </div>
             );
 
-            return n.data.goalId ? (
-              <Link key={n.id} to={`/app/goals/${n.data.goalId}`}>
+            // An invitation notification points at a private goal before the recipient
+            // has joined it. Send them to the invitation controls first; otherwise the
+            // goal privacy gate correctly (but confusingly) renders a 404.
+            const isGoalInvitation =
+              n.type === 'FRIEND' &&
+              (Boolean(n.data.invitationId) || n.title.toLowerCase().includes('invited you to'));
+            const destination = isGoalInvitation
+              ? '/app/friends'
+              : n.data.goalId
+                ? `/app/goals/${n.data.goalId}`
+                : null;
+
+            return destination ? (
+              <Link key={n.id} to={destination}>
                 {body}
               </Link>
             ) : (

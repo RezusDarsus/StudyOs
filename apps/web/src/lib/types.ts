@@ -224,6 +224,8 @@ export interface Notification {
   body: string;
   data: {
     goalId?: string;
+    /** Present for a pending goal invitation; accepting it grants goal access. */
+    invitationId?: string;
     achievementCode?: string;
     /** Set by the daily summaries, which are about the day rather than one goal. */
     goalIds?: string[];

@@ -515,7 +515,7 @@ export default async function goalRoutes(app: FastifyInstance) {
       });
       if (already?.status === 'ACTIVE') continue;
 
-      await prisma.goalInvitation.upsert({
+      const invitation = await prisma.goalInvitation.upsert({
         where: { goalId_inviteeId: { goalId: id, inviteeId } },
         create: { goalId: id, inviterId, inviteeId, status: 'PENDING' },
         update: { status: 'PENDING', inviterId, respondedAt: null },
@@ -525,7 +525,9 @@ export default async function goalRoutes(app: FastifyInstance) {
         type: 'FRIEND',
         title: `${req.user!.name} invited you to ${goal.title}`,
         body: goal.description,
-        data: { goalId: goal.id },
+        // The invitee cannot open a private goal until they accept this invitation.
+        // Deep-link the notification to the invitation itself instead of only the goal.
+        data: { goalId: goal.id, invitationId: invitation.id },
       });
       created.push(inviteeId);
     }
