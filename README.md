@@ -7,16 +7,21 @@ A social goal, habit, productivity and challenge platform.
 **Phase 1** is the whole product with no AI at all. **Phase 2** adds a personalised
 Goal Copilot on top. The Copilot only ever *proposes* — every goal is still created
 by the same Phase 1 services, and the product remains fully usable with the AI
-switched off.
+switched off. **Phase 2.5** makes it deployable: PostgreSQL, durable jobs, scheduled
+notifications, realtime push, containers and a hardened proxy.
 
 ## Stack
 
-| Layer    | Choice                                                        |
-| -------- | ------------------------------------------------------------- |
-| Frontend | Vite + React 18 + TypeScript + Tailwind v4 + React Router      |
-| Backend  | Fastify + TypeScript + Prisma                                 |
-| Database | SQLite (swap the Prisma `provider` for Postgres in production) |
-| Tests    | Vitest                                                         |
+| Layer     | Choice                                                    |
+| --------- | --------------------------------------------------------- |
+| Frontend  | Vite + React 18 + TypeScript + Tailwind v4 + React Router |
+| Backend   | Fastify + TypeScript + Prisma                             |
+| Database  | PostgreSQL 18                                             |
+| Jobs      | pg-boss — queues and cron live in the same database        |
+| Realtime  | Centrifugo v6, private `personal:#<userId>` channels       |
+| Packaging | Docker + Compose, nginx serving the built frontend        |
+| Tests     | Vitest — a hermetic unit suite and a separate acceptance suite |
+
 
 The design system is ported from the Figma Make file
 (`Social Productivity Platform`) — colours, radii, shadows, typography and the
@@ -29,13 +34,26 @@ from it. See `apps/web/src/index.css`.
 npm install
 ```
 
-Set up the database and seed it with a realistic demo world:
+Copy the two example env files and fill them in — `.env` drives the Docker stack,
+`apps/api/.env` drives the API itself. Neither example contains a real secret.
 
 ```bash
-npm run db:push --workspace=apps/api && npm run seed --workspace=apps/api
+cp .env.example .env && cp apps/api/.env.example apps/api/.env
 ```
 
-Run both servers:
+Start the infrastructure the app needs (PostgreSQL and Centrifugo):
+
+```bash
+docker compose up -d
+```
+
+Apply migrations and seed a realistic demo world:
+
+```bash
+npm run db:deploy --workspace=apps/api && npm run seed --workspace=apps/api
+```
+
+Run both servers from source:
 
 ```bash
 npm run dev
@@ -43,6 +61,14 @@ npm run dev
 
 - Web: http://localhost:5173
 - API: http://localhost:4000 (the web dev server proxies `/api` to it)
+
+To run the product the way it is deployed — built images, nginx in front, no dev
+server — use the `app` profile instead. It listens on `APP_PORT` (8080 by default)
+and can run beside a dev server without either taking the other's ports:
+
+```bash
+docker compose --profile app up -d --build
+```
 
 ### Demo accounts
 
@@ -58,13 +84,29 @@ Password for all of them: `goalify123`
 
 ## Tests
 
+Two suites, deliberately separate.
+
 ```bash
 npm test
 ```
 
-Covers recurrence expansion, daily/average scoring, streak rules, timezone day
-boundaries and leaderboard ranking, including the edge cases that are easy to get
-wrong (rest days, pre-join days, no-task days, future days, ties).
+The hermetic suite: no database, no network, no containers. Covers recurrence expansion,
+daily/average scoring, streak rules, timezone day boundaries and leaderboard ranking,
+including the edge cases that are easy to get wrong (rest days, pre-join days,
+no-task days, future days, ties) — plus every Phase 2 guard rail and the Phase 2.5
+config audit. Runs in seconds and is what you run while working.
+
+```bash
+npm run test:acceptance --workspace=apps/api
+```
+
+The acceptance suite: the twelve end-to-end claims of Phase 2.5, against a real
+server and real PostgreSQL. Needs `docker compose up -d` running. It creates and
+uses a **separate** database — whatever `DATABASE_URL` names, suffixed
+`_acceptance` — because it truncates every table between tests, and it refuses to
+start if the database it connected to does not carry that suffix. Files are named
+`*.acceptance.ts`, which matches nothing in Vitest's default `include`, so `npm test`
+can never pick them up.
 
 ## Architecture notes
 
@@ -377,4 +419,122 @@ status — and deliberately **no prompt or completion text**. Funnel events go t
 
 No StudyOS: no course ingestion, embeddings, RAG, mastery tracking, exam prediction
 or adaptive study planning. A study goal today produces ordinary practice tasks and
-makes no claim to educational intelligence.
+makes no claim to educational intelligence. Phase 2.5 below changed nothing about
+this: it is infrastructure and interface, not new capability.
+
+## Phase 2.5 — deployment readiness
+
+Phase 2.5 adds no new domain concepts. Everything below is either the same Copilot
+reached from a new place, or the infrastructure a real deployment needs.
+
+### The widget is a surface, not a second brain
+
+The floating Copilot renders on authenticated pages only, and calls the same
+`/api/copilot/*` endpoints the full-page interview does. There is no widget-specific
+AI path, no `AiGoal`, no `AiTask` — a goal created in the widget is indistinguishable
+from one typed into the Phase 1 form, because it *is* one: `confirmDraft` writes a
+`Goal` with `TaskDefinition`s and the application's own reward bands, then generates
+occurrences the ordinary way.
+
+### The interview asks for what it does not already know
+
+The question budget is derived from the request, not fixed. "I want to read 10 pages
+every day at 9pm" already states a frequency, a time and a target, so the budget is
+0–2 questions and the model is allowed to go straight to a draft. A bare "I want to
+get fitter" states nothing, so the budget is 2–5. The backend enforces both ends: a
+model that tries to finish early is sent back for the minimum, and one that keeps
+asking is cut off at the maximum. Repeats are caught before they are asked —
+`redundancyReason` rejects a question whose id, topic or answer is already on file.
+
+A question with several true answers accepts several: `promoteMultiSelect` widens a
+`SINGLE_SELECT` to `MULTI_SELECT` when the prompt is about activities, days, times,
+formats or constraints. Widening only — never the reverse.
+
+Slashes are ordinary characters. "5/7 days" and "walking/running" reach the model
+verbatim; the only input the message field rejects is one that is empty after
+trimming.
+
+### Plans that get harder, starting easy
+
+A drafted task may carry a build-up ladder (walk 25 minutes, then 40, then 60). The
+first day is stamped with the *first* rung, and every occurrence stores the target it
+was asked for rather than reading the plan's current one — so advancing tomorrow
+cannot rewrite what yesterday demanded. Ladders are validated by the same
+`validateStages` a hand-made progression goes through, and a ladder that fails
+validation is dropped with a note while the plan is kept.
+
+### Adjustment, and who is allowed to do it
+
+`POST /goals/:id/copilot` answers questions about a live goal and may propose a stage
+change. It is recorded as a proposal and never applied: `authorizeAction` refuses
+`source: 'COPILOT'` before it even evaluates whether the change would be reasonable,
+and there is deliberately no endpoint that applies a Copilot suggestion. Advancing or
+reducing is a `POST /tasks/:id/progression/decision` from the user, and past
+occurrences keep their original targets either way.
+
+### Two scheduled notifications
+
+A morning summary at the user's chosen time (08:00 by default) and an evening
+incomplete-task check (20:30). Both run from one five-minute tick, because both start
+with the same question — what time is it where this user is. Each user's own IANA
+timezone decides, never a fixed offset.
+
+Correctness does not depend on the cron firing on time. A unique
+`userId:TYPE:localDate` key means a second tick inside the same window sends nothing,
+so frequency buys punctuality only. Each notification has a late tolerance (four
+hours for the morning, two and a half for the evening) and neither window wraps past
+midnight, so a missed nudge stays missed rather than arriving overnight. Nothing is
+sent when there is nothing to say: no tasks scheduled, or none left.
+
+### Realtime is a convenience, never a record
+
+A notification is a PostgreSQL row first and a Centrifugo push second, and the push
+is allowed to fail — `publishToUser` never throws and returns whether it landed.
+Centrifugo runs on its in-memory engine with no history and is never asked what a
+client missed; the client fetches `GET /api/notifications` on connect and on every
+reconnect. Delete the realtime layer and the product is still correct, only less
+immediate.
+
+Each user has one channel, `personal:#<userId>`. The `personal` namespace sets
+`allow_user_limited_channels`, so Centrifugo itself checks the id against the
+subscriber's connection token and rejects everyone else — which is why there are no
+per-channel subscription tokens to issue, leak or forget to scope. Tokens come from
+`GET /api/realtime/token`, are valid for fifteen minutes, and take their subject from
+the resolved session rather than from anything the client sent.
+
+### Durable jobs in the database that is already trusted
+
+pg-boss keeps its queues and its cron entry in a `pgboss` schema inside the same
+PostgreSQL. Jobs are rows, so a restart resumes rather than skips, and there is no
+second datastore to get wrong. Declaring the queue and the schedule are both upserts:
+a deploy loop re-declares them without leaving five cron entries behind.
+
+### Packaging and hardening
+
+`docker compose up -d` gives PostgreSQL and Centrifugo for development;
+`--profile app` additionally builds the API and the frontend and puts nginx in front
+of them. The API exposes `GET /health` (liveness — process is up) and
+`GET /health/ready` (readiness — database reachable, migrations applied), both
+deliberately unprefixed because they are for the orchestrator rather than the
+browser, and neither reveals a secret or a version string.
+
+A startup config audit refuses to boot in production on an unset `DATABASE_URL`, a
+Centrifugo secret still set to the placeholder published in this repository, a
+wildcard or malformed CORS origin, or an ambiguous `TRUST_PROXY` — it exits non-zero
+rather than serving a subtly wrong configuration. Everything that is merely suspicious
+(a plain-http origin that will silently drop `Secure` session cookies, `JOBS_ENABLED`
+off, a debug log level that would print cookies) is a warning that names the
+consequence. `TRUST_PROXY` rejects a bare hop count on purpose: Fastify maps any
+number to "trust nothing", so a `1` that looks like "trust one proxy" would silently
+disable the setting it appears to enable.
+
+Security headers, a CSP, and per-address auth throttling are applied at the proxy and
+in the app; every nginx `location` that sets its own headers re-includes the security
+snippet, because `add_header` in a location replaces inherited headers rather than
+adding to them.
+
+### Not applicable this phase
+
+Email delivery was taken out of Phase 2.5, so there is no `EmailProvider` and no
+transactional email integration. Notifications are in-app and realtime only. The
+acceptance suite records this as a skipped test rather than silently omitting it.

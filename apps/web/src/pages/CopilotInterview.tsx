@@ -1,164 +1,49 @@
-import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Send, Sparkles, X } from 'lucide-react';
+import { useState } from 'react';
+import { ArrowLeft, ArrowRight, Sparkles, X } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Modal, useToast } from '../components/ui';
-import { ApiError, api } from '../lib/api';
-import { WEEKDAY_LABEL, type CopilotQuestion, type InterviewTurn } from '../lib/types';
-
-interface Bubble {
-  role: 'assistant' | 'user';
-  text: string;
-}
+import QuestionInput from '../components/QuestionInput';
+import Transcript from '../components/copilot/Transcript';
+import { useCopilotInterview } from '../lib/useCopilotInterview';
 
 /**
  * The conversational goal builder.
  *
  * Deliberately not a chat clone: it is a guided interview inside the product's
  * own visual language, with quick-select answers, a visible sense of progress,
- * and an always-available way out.
+ * and an always-available way out. The conversation itself lives in
+ * useCopilotInterview, which the floating widget shares.
  */
 export default function CopilotInterview() {
   const { sessionId: resumeId } = useParams();
   const navigate = useNavigate();
   const { push } = useToast();
 
-  const [starting, setStarting] = useState(!resumeId);
   const [goalText, setGoalText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [turn, setTurn] = useState<InterviewTurn | null>(null);
-  const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [cancelOpen, setCancelOpen] = useState(false);
-  const [generating, setGenerating] = useState(false);
 
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const interview = useCopilotInterview({
+    resumeSessionId: resumeId,
+    onError: (message) => push(message, 'error'),
+    onResumedDraft: (draftId) => navigate(`/app/goals/drafts/${draftId}`, { replace: true }),
+    onResumeFailed: () => navigate('/app/goals/new', { replace: true }),
+  });
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-  }, [bubbles, busy]);
+  const { phase, bubbles, turn, question, busy, generating, progress } = interview;
 
-  // Resuming: rebuild the conversation the user left behind.
-  useEffect(() => {
-    if (!resumeId) return;
-    let cancelled = false;
-    api
-      .get<{
-        sessionId: string;
-        status: string;
-        initialGoalText: string;
-        questionCount: number;
-        canGenerate: boolean;
-        context: Record<string, unknown>;
-        draftId: string | null;
-        messages: Array<{ role: string; content: string }>;
-        question: CopilotQuestion | null;
-      }>(`/copilot/goal-sessions/${resumeId}`)
-      .then((data) => {
-        if (cancelled) return;
-        if (data.draftId) {
-          navigate(`/app/goals/drafts/${data.draftId}`, { replace: true });
-          return;
-        }
-        setBubbles(
-          data.messages.map((m) => ({
-            role: m.role === 'user' ? 'user' : 'assistant',
-            text: m.content,
-          })),
-        );
-        setTurn({
-          sessionId: data.sessionId,
-          status: data.status,
-          assistantMessage: '',
-          question: data.question,
-          questionCount: data.questionCount,
-          estimatedTotal: Math.max(data.questionCount + 1, 5),
-          context: data.context,
-          canGenerate: data.canGenerate,
-        });
-        setStarting(false);
-      })
-      .catch((err: Error) => {
-        push(err.message, 'error');
-        navigate('/app/goals/new', { replace: true });
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resumeId]);
-
-  function applyTurn(next: InterviewTurn) {
-    setTurn(next);
-    if (next.assistantMessage) {
-      setBubbles((prev) => [...prev, { role: 'assistant', text: next.assistantMessage }]);
-    }
+  async function build() {
+    const draft = await interview.generate();
+    if (draft) navigate(`/app/goals/drafts/${draft.id}`, { replace: true });
   }
 
-  async function begin() {
-    const text = goalText.trim();
-    if (text.length < 3) return;
-    setBusy(true);
-    setBubbles([{ role: 'user', text }]);
-    try {
-      const next = await api.post<InterviewTurn>('/copilot/goal-sessions', { goal: text });
-      setStarting(false);
-      applyTurn(next);
-    } catch (err) {
-      setBubbles([]);
-      push(err instanceof ApiError ? err.message : 'Could not reach the Copilot', 'error');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function answer(value: unknown, label: string, skipped = false) {
-    if (!turn?.question || busy) return;
-    const questionId = turn.question.id;
-    setBusy(true);
-    setBubbles((prev) => [...prev, { role: 'user', text: label }]);
-    setTurn({ ...turn, question: null });
-
-    try {
-      const next = await api.post<InterviewTurn>(
-        `/copilot/goal-sessions/${turn.sessionId}/answers`,
-        { questionId, answer: value, skipped },
-      );
-      applyTurn(next);
-    } catch (err) {
-      // The answer is kept server-side; let them retry rather than lose the thread.
-      push(err instanceof ApiError ? err.message : 'Something went wrong', 'error');
-      setTurn(turn);
-      setBubbles((prev) => prev.slice(0, -1));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function generate() {
-    if (!turn) return;
-    setGenerating(true);
-    try {
-      const { draft } = await api.post<{ draft: { id: string } }>(
-        `/copilot/goal-sessions/${turn.sessionId}/generate`,
-        {},
-      );
-      navigate(`/app/goals/drafts/${draft.id}`, { replace: true });
-    } catch (err) {
-      push(err instanceof ApiError ? err.message : 'Could not build the plan', 'error');
-    } finally {
-      setGenerating(false);
-    }
-  }
-
-  async function cancel(discard: boolean) {
-    if (turn && discard) {
-      await api.del(`/copilot/goal-sessions/${turn.sessionId}`).catch(() => {});
-    }
+  async function leave(discard: boolean) {
+    if (discard) await interview.discard();
     navigate('/app/goals', { replace: true });
   }
 
   // ------------------------------------------------------- opening screen
 
-  if (starting) {
+  if (phase === 'OPENING') {
     return (
       <div className="p-5 sm:p-6 lg:p-8 max-w-xl mx-auto">
         <button
@@ -206,14 +91,14 @@ export default function CopilotInterview() {
             What would you like to achieve?
           </h1>
           <p style={{ color: '#8b88b0', fontSize: '0.88rem', marginTop: 6, marginBottom: 18 }}>
-            Say it however you like. I'll ask a few questions before suggesting anything.
+            Say it however you like. The more detail you give, the fewer questions I need to ask.
           </p>
 
           <textarea
             value={goalText}
             onChange={(e) => setGoalText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) begin();
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) interview.begin(goalText);
             }}
             rows={3}
             autoFocus
@@ -247,7 +132,7 @@ export default function CopilotInterview() {
 
           <button
             className="btn-primary w-full mt-5 py-3.5 text-sm flex items-center justify-center gap-2"
-            onClick={begin}
+            onClick={() => interview.begin(goalText)}
             disabled={busy || goalText.trim().length < 3}
             style={{ opacity: busy || goalText.trim().length < 3 ? 0.55 : 1 }}
           >
@@ -259,9 +144,6 @@ export default function CopilotInterview() {
   }
 
   // ---------------------------------------------------------- interview
-
-  const question = turn?.question ?? null;
-  const progress = turn ? Math.min(100, (turn.questionCount / turn.estimatedTotal) * 100) : 0;
 
   return (
     <div className="p-5 sm:p-6 lg:p-8 max-w-2xl mx-auto flex flex-col" style={{ minHeight: '100%' }}>
@@ -304,76 +186,20 @@ export default function CopilotInterview() {
         </span>
       </div>
 
-      {/* transcript */}
-      <div
-        ref={scrollRef}
-        className="card shadow-card flex-1 p-4 sm:p-5 overflow-y-auto"
-        style={{ maxHeight: '52vh' }}
-      >
-        <div className="flex flex-col gap-3">
-          {bubbles.map((bubble, index) => (
-            <div
-              key={index}
-              className={bubble.role === 'user' ? 'self-end' : 'self-start'}
-              style={{ maxWidth: '86%' }}
-            >
-              <div
-                className="px-3.5 py-2.5 rounded-2xl animate-slide-up"
-                style={{
-                  background: bubble.role === 'user' ? '#7c3aed' : '#f5f4ff',
-                  color: bubble.role === 'user' ? '#fff' : '#1a1635',
-                  border: bubble.role === 'user' ? 'none' : '1px solid #e8e6f5',
-                  fontSize: '0.88rem',
-                  lineHeight: 1.55,
-                  borderBottomRightRadius: bubble.role === 'user' ? 6 : 16,
-                  borderBottomLeftRadius: bubble.role === 'user' ? 16 : 6,
-                }}
-              >
-                {bubble.text}
-              </div>
-            </div>
-          ))}
-
-          {busy && (
-            <div className="self-start">
-              <div
-                className="px-3.5 py-2.5 rounded-2xl flex items-center gap-1.5"
-                style={{ background: '#f5f4ff', border: '1px solid #e8e6f5' }}
-              >
-                {[0, 1, 2].map((i) => (
-                  <span
-                    key={i}
-                    className="rounded-full animate-float"
-                    style={{
-                      width: 6,
-                      height: 6,
-                      background: '#b8b5d5',
-                      animationDelay: `${i * 0.15}s`,
-                      animationDuration: '1s',
-                    }}
-                  />
-                ))}
-                <span style={{ fontSize: '0.78rem', color: '#8b88b0', marginLeft: 4 }}>
-                  Thinking about the best next question…
-                </span>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
+      <Transcript bubbles={bubbles} busy={busy} maxHeight="52vh" />
 
       {/* answer area */}
       <div className="mt-4">
         {question ? (
-          <QuestionInput question={question} disabled={busy} onAnswer={answer} />
-        ) : turn?.canGenerate ? (
+          <QuestionInput question={question} disabled={busy} onAnswer={interview.answer} />
+        ) : phase === 'READY' ? (
           <div className="card shadow-card p-5 text-center">
             <p style={{ fontSize: '0.9rem', color: '#4b4870', marginBottom: 14 }}>
               That's everything I need. Ready to see your plan?
             </p>
             <button
               className="btn-primary w-full py-3.5 text-sm flex items-center justify-center gap-2"
-              onClick={generate}
+              onClick={build}
               disabled={generating}
             >
               <Sparkles size={15} />
@@ -389,13 +215,13 @@ export default function CopilotInterview() {
         title="Leave the Copilot?"
         footer={
           <>
-            <button className="btn-ghost px-4 py-2.5 text-sm" onClick={() => cancel(false)}>
+            <button className="btn-ghost px-4 py-2.5 text-sm" onClick={() => leave(false)}>
               Save for later
             </button>
             <button
               className="btn-primary px-4 py-2.5 text-sm"
               style={{ background: '#c8253c', boxShadow: 'none' }}
-              onClick={() => cancel(true)}
+              onClick={() => leave(true)}
             >
               Discard
             </button>
@@ -409,183 +235,4 @@ export default function CopilotInterview() {
       </Modal>
     </div>
   );
-}
-
-/** Renders whichever input the question type calls for. */
-function QuestionInput({
-  question,
-  disabled,
-  onAnswer,
-}: {
-  question: CopilotQuestion;
-  disabled: boolean;
-  onAnswer: (value: unknown, label: string, skipped?: boolean) => void;
-}) {
-  const [multi, setMulti] = useState<string[]>([]);
-  const [text, setText] = useState('');
-
-  // A new question means a fresh input.
-  useEffect(() => {
-    setMulti([]);
-    setText('');
-  }, [question.id]);
-
-  const chip = (active: boolean) => ({
-    background: active ? '#f0ebff' : '#fff',
-    border: `1.5px solid ${active ? '#7c3aed' : '#e8e6f5'}`,
-    color: active ? '#7c3aed' : '#4b4870',
-    fontWeight: 600,
-    fontSize: '0.85rem',
-    fontFamily: 'Plus Jakarta Sans, sans-serif',
-    minHeight: 44,
-  });
-
-  const skip = question.optional ? (
-    <button
-      className="btn-ghost px-4 py-2.5 text-sm"
-      onClick={() => onAnswer(null, 'Skipped', true)}
-      disabled={disabled}
-    >
-      Skip
-    </button>
-  ) : null;
-
-  if (question.type === 'SINGLE_SELECT' || question.type === 'MULTI_SELECT') {
-    const isMulti = question.type === 'MULTI_SELECT';
-    return (
-      <div className="card shadow-card p-4">
-        <div className="flex flex-wrap gap-2">
-          {(question.options ?? []).map((option) => {
-            const active = multi.includes(option);
-            return (
-              <button
-                key={option}
-                aria-pressed={isMulti ? active : undefined}
-                disabled={disabled}
-                onClick={() => {
-                  if (!isMulti) return onAnswer(option, option);
-                  // Functional update: two quick taps must not overwrite each other.
-                  setMulti((prev) =>
-                    prev.includes(option) ? prev.filter((o) => o !== option) : [...prev, option],
-                  );
-                }}
-                className="px-4 py-2.5 rounded-xl"
-                style={chip(isMulti && active)}
-              >
-                {option}
-              </button>
-            );
-          })}
-        </div>
-
-        {question.allowCustomAnswer && (
-          <input
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && text.trim()) onAnswer(text.trim(), text.trim());
-            }}
-            placeholder="Or type your own…"
-            className="w-full px-4 py-2.5 text-sm mt-3"
-            disabled={disabled}
-          />
-        )}
-
-        <div className="flex gap-2 mt-3">
-          {skip}
-          {isMulti && (
-            <button
-              className="btn-primary flex-1 py-2.5 text-sm"
-              disabled={disabled || (multi.length === 0 && !text.trim())}
-              style={{ opacity: disabled || (multi.length === 0 && !text.trim()) ? 0.5 : 1 }}
-              onClick={() => {
-                const values = text.trim() ? [...multi, text.trim()] : multi;
-                onAnswer(values, values.join(', '));
-              }}
-            >
-              Continue
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  if (question.type === 'DAYS_OF_WEEK') {
-    return (
-      <div className="card shadow-card p-4">
-        <div className="flex gap-1.5 flex-wrap">
-          {WEEKDAY_LABEL.map((label) => {
-            const active = multi.includes(label);
-            return (
-              <button
-                key={label}
-                aria-pressed={active}
-                disabled={disabled}
-                onClick={() =>
-                  setMulti((prev) =>
-                    prev.includes(label) ? prev.filter((d) => d !== label) : [...prev, label],
-                  )
-                }
-                className="rounded-xl"
-                style={{ ...chip(active), width: 52 }}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-        <div className="flex gap-2 mt-3">
-          {skip}
-          <button
-            className="btn-primary flex-1 py-2.5 text-sm"
-            disabled={disabled || multi.length === 0}
-            style={{ opacity: disabled || multi.length === 0 ? 0.5 : 1 }}
-            onClick={() => onAnswer(multi, multi.join(', '))}
-          >
-            Continue
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  const inputType =
-    question.type === 'NUMBER' ? 'number' : question.type === 'DATE' ? 'date' : question.type === 'TIME' ? 'time' : 'text';
-
-  return (
-    <div className="card shadow-card p-4">
-      <div className="flex gap-2">
-        <input
-          type={inputType}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && text.trim()) submit();
-          }}
-          placeholder={question.type === 'FREE_TEXT' ? 'Type your answer…' : ''}
-          className="flex-1 px-4 py-3 text-sm"
-          disabled={disabled}
-          autoFocus
-          aria-label={question.prompt}
-        />
-        <button
-          className="btn-primary px-4 flex items-center justify-center"
-          onClick={submit}
-          disabled={disabled || !text.trim()}
-          style={{ opacity: disabled || !text.trim() ? 0.5 : 1 }}
-          aria-label="Send answer"
-        >
-          <Send size={16} />
-        </button>
-      </div>
-      {skip && <div className="mt-3">{skip}</div>}
-    </div>
-  );
-
-  function submit() {
-    if (!text.trim()) return;
-    const value = question.type === 'NUMBER' ? Number(text) : text.trim();
-    onAnswer(value, String(text).trim());
-  }
 }

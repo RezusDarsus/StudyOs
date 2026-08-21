@@ -14,3 +14,4 @@ export const unauthorized = (m = 'You must be signed in') => new HttpError(401, 
 export const forbidden = (m = 'You do not have access to this') => new HttpError(403, m, 'FORBIDDEN');
 export const notFound = (m = 'Not found') => new HttpError(404, m, 'NOT_FOUND');
 export const conflict = (m: string, code?: string) => new HttpError(409, m, code);
+export const tooManyRequests = (m: string) => new HttpError(429, m, 'TOO_MANY_REQUESTS');

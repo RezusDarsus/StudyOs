@@ -117,7 +117,51 @@ h1, h2, h3, h4, h5, h6 { font-family: "Plus Jakarta Sans", sans-serif; }
   transition: width .8s cubic-bezier(.4, 0, .2, 1);
 }
 
+/* ============ COPILOT WIDGET ============ */
+
+/*
+ * Positioned in CSS rather than JS so it responds to a resize or an on-screen
+ * keyboard without a re-render. Below `lg` the mobile tab bar owns the bottom of
+ * the screen, so the button sits above it; the panel covers it outright.
+ */
+.copilot-fab {
+  right: 20px;
+  bottom: calc(env(safe-area-inset-bottom) + 88px);
+}
+
+.copilot-panel {
+  left: 0; right: 0; bottom: 0;
+  height: 88dvh;
+  max-height: 88dvh;
+  border-radius: 20px 20px 0 0;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+@media (min-width: 640px) {
+  .copilot-panel {
+    left: auto;
+    right: 24px;
+    bottom: 24px;
+    width: 400px;
+    height: 620px;
+    max-height: calc(100dvh - 48px);
+    border-radius: 20px;
+    padding-bottom: 0;
+  }
+}
+
+@media (min-width: 1024px) {
+  .copilot-fab { right: 24px; bottom: 24px; }
+}
+
+/* Short viewports (a landscape phone) get the whole screen — 88dvh of 380px is
+   not enough room for a question and its options. */
+@media (max-height: 460px) {
+  .copilot-panel { height: 100dvh; max-height: 100dvh; border-radius: 0; }
+}
+
 /* ============ FORMS ============ */
+
 input, textarea, select {
   color: #1a1635; background: #fdfcff;
   border: 1.5px solid #e8e6f5; border-radius: 12px; outline: none;

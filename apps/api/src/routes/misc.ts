@@ -1,12 +1,15 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { isValidTimezone } from '../domain/dates.js';
+import { isTimeString, isValidTimezone } from '../domain/dates.js';
 import { GOAL_CATEGORY } from '../domain/enums.js';
 import { prisma } from '../lib/prisma.js';
 import { levelProgress } from '../services/engagement.js';
 import { loadGoalForUser, participantSummary } from '../services/goals.js';
+import { notificationPayload } from '../services/notifications.js';
 import { goalToday } from '../services/occurrences.js';
 import { publicUser } from './auth.js';
+
+const timeOfDay = z.string().refine(isTimeString, 'Use HH:MM, 24-hour');
 
 export default async function miscRoutes(app: FastifyInstance) {
   // ------------------------------------------------------------ discover
@@ -71,15 +74,7 @@ export default async function miscRoutes(app: FastifyInstance) {
       take: 60,
     });
     return {
-      notifications: notifications.map((n) => ({
-        id: n.id,
-        type: n.type,
-        title: n.title,
-        body: n.body,
-        data: JSON.parse(n.data || '{}'),
-        readAt: n.readAt,
-        createdAt: n.createdAt,
-      })),
+      notifications: notifications.map(notificationPayload),
       unread: notifications.filter((n) => !n.readAt).length,
     };
   });
@@ -117,6 +112,11 @@ export default async function miscRoutes(app: FastifyInstance) {
             friendActivity: z.boolean().optional(),
             leaderboardUpdates: z.boolean().optional(),
             achievements: z.boolean().optional(),
+            morningSummary: z.boolean().optional(),
+            eveningCheck: z.boolean().optional(),
+            // Read in the profile's own timezone, so no offset is accepted or needed.
+            morningTime: timeOfDay.optional(),
+            eveningTime: timeOfDay.optional(),
           })
           .optional(),
       })
@@ -135,6 +135,10 @@ export default async function miscRoutes(app: FastifyInstance) {
         notifyFriendActivity: body.notifications?.friendActivity,
         notifyLeaderboardUpdate: body.notifications?.leaderboardUpdates,
         notifyAchievements: body.notifications?.achievements,
+        notifyMorningSummary: body.notifications?.morningSummary,
+        notifyEveningCheck: body.notifications?.eveningCheck,
+        morningTime: body.notifications?.morningTime,
+        eveningTime: body.notifications?.eveningTime,
       },
     });
 

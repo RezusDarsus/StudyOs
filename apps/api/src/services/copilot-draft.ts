@@ -17,6 +17,7 @@ import {
   rewardForTask,
   validateAndNormalizeDraft,
   type NormalizedDraft,
+  type NormalizedProgression,
 } from '../ai/draft-validator.js';
 import { todayIn } from '../domain/dates.js';
 import type { RecurrenceType } from '../domain/enums.js';
@@ -24,6 +25,7 @@ import { validateRecurrence } from '../domain/recurrence.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
 import { ensureOccurrences } from './occurrences.js';
+import { createProgressionPlan } from './progression.js';
 import { recordEvent } from './copilot-analytics.js';
 import { extractPreferences, getPreferencesForPrompt } from './preferences.js';
 import { loadSession } from './copilot-session.js';
@@ -40,6 +42,30 @@ const TRANSCRIPT_WINDOW = 20;
 async function userTimezone(userId: string) {
   const profile = await prisma.profile.findUnique({ where: { userId } });
   return profile?.timezone ?? 'UTC';
+}
+
+/**
+ * Read a stored ladder back, defensively.
+ *
+ * The column is JSON written by this application, but it is still the one place a
+ * draft carries a nested structure, and a half-written or hand-edited row must not
+ * be able to break confirmation. Anything unreadable is simply no ladder.
+ */
+export function parseLadder(json: string | null): NormalizedProgression | null {
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json) as NormalizedProgression;
+    if (!Array.isArray(parsed?.stages) || parsed.stages.length < 2) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/** Where a minute ladder starts, so a task's minutes and its first day agree. */
+function startingMinutes(json: string | null): number | null {
+  const ladder = parseLadder(json);
+  return ladder?.metricType === 'MINUTES' ? ladder.stages[0].target : null;
 }
 
 async function persistDraft(opts: {
@@ -68,6 +94,7 @@ async function persistDraft(opts: {
           recurrenceConfig: JSON.stringify(task.recurrenceConfig),
           estimatedMinutes: task.estimatedMinutes,
           preferredTime: task.preferredTime,
+          progressionConfig: task.progression ? JSON.stringify(task.progression) : null,
           reason: task.reason,
           sortOrder: index,
         })),
@@ -227,6 +254,13 @@ export interface ManualDraftEdit {
     estimatedMinutes?: number | null;
     preferredTime?: string | null;
     reason?: string;
+    /**
+     * Omitted means "leave the build-up alone" — it is carried across by title.
+     * Explicit null removes it. There is no way to *add* one by hand here: the
+     * ladder editor on a real task is the place for that, and a draft that has
+     * been confirmed is a real task.
+     */
+    progression?: null;
   }>;
 }
 
@@ -241,19 +275,44 @@ export async function applyManualEdit(draftId: string, userId: string, edit: Man
     for (const task of edit.tasks) {
       validateRecurrence(task.recurrenceType, task.recurrenceConfig);
     }
+
+    // Rows are replaced wholesale, so anything the client does not send would be
+    // lost. A build-up the user never mentioned is not theirs to lose, so it is
+    // matched back by id, and by title for a client that sends neither.
+    const laddersById = new Map(
+      draft.tasks.filter((t) => t.progressionConfig).map((t) => [t.id, t.progressionConfig!]),
+    );
+    const laddersByTitle = new Map(
+      draft.tasks
+        .filter((t) => t.progressionConfig)
+        .map((t) => [t.title.trim().toLowerCase(), t.progressionConfig!]),
+    );
+    const carriedLadder = (task: { id?: string; title: string; progression?: null }) => {
+      if (task.progression === null) return null;
+      const byId = task.id ? laddersById.get(task.id) : undefined;
+      return byId ?? laddersByTitle.get(task.title.trim().toLowerCase()) ?? null;
+    };
+
     await prisma.goalDraftTask.deleteMany({ where: { draftId } });
     await prisma.goalDraftTask.createMany({
-      data: edit.tasks.map((task, index) => ({
-        draftId,
-        title: task.title.trim(),
-        description: task.description?.trim() ?? '',
-        recurrenceType: task.recurrenceType,
-        recurrenceConfig: JSON.stringify(task.recurrenceConfig ?? {}),
-        estimatedMinutes: task.estimatedMinutes ?? null,
-        preferredTime: task.preferredTime ?? null,
-        reason: task.reason ?? '',
-        sortOrder: index,
-      })),
+      data: edit.tasks.map((task, index) => {
+        const progressionConfig = carriedLadder(task);
+        return {
+          draftId,
+          title: task.title.trim(),
+          description: task.description?.trim() ?? '',
+          recurrenceType: task.recurrenceType,
+          recurrenceConfig: JSON.stringify(task.recurrenceConfig ?? {}),
+          // A minute ladder decides where the task starts, here as much as at
+          // generation time — otherwise a hand-typed 40 would sit next to a day
+          // that asks for 15.
+          estimatedMinutes: startingMinutes(progressionConfig) ?? task.estimatedMinutes ?? null,
+          preferredTime: task.preferredTime ?? null,
+          progressionConfig,
+          reason: task.reason ?? '',
+          sortOrder: index,
+        };
+      }),
     });
   }
 
@@ -474,8 +533,41 @@ export async function confirmDraft(draftId: string, userId: string) {
         })),
       },
     },
+    include: { tasks: true },
   });
 
+  // Any build-up the Copilot proposed becomes an ordinary ProgressionPlan here,
+  // through the same service the manual ladder editor calls. Matching is a queue
+  // per title rather than a lookup, so two tasks that ended up with the same name
+  // cannot end up sharing one ladder.
+  const pending = new Map<string, string[]>();
+  for (const task of draft.tasks) {
+    if (!task.progressionConfig) continue;
+    const key = task.title.trim().toLowerCase();
+    pending.set(key, [...(pending.get(key) ?? []), task.progressionConfig]);
+  }
+  if (pending.size > 0) {
+    for (const task of goal.tasks) {
+      const queue = pending.get(task.title.trim().toLowerCase());
+      const ladder = parseLadder(queue?.shift() ?? null);
+      if (!ladder) continue;
+      // A ladder that no longer validates loses the ladder, not the goal — the
+      // user confirmed a plan, and they get the plan.
+      try {
+        await createProgressionPlan({
+          taskDefinitionId: task.id,
+          metricType: ladder.metricType,
+          unitLabel: ladder.unitLabel,
+          stages: ladder.stages,
+        });
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  // After the plans, deliberately. Occurrences are born carrying their stage's
+  // target, so day one asks for the first rung instead of nothing.
   await ensureOccurrences(goal.id);
 
   await prisma.goalDraft.update({

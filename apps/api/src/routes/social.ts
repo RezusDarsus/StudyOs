@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { FriendState } from '../domain/enums.js';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
-import { notify } from '../services/engagement.js';
+import { notify } from '../services/notifications.js';
 import { ensureOccurrences, goalToday } from '../services/occurrences.js';
 
 /** Friendships are stored one row per pair with userAId < userBId, which makes a
@@ -159,14 +159,22 @@ export default async function socialRoutes(app: FastifyInstance) {
       }
       // They already asked us — accept instead of creating a mirror request.
       await prisma.friendship.update({ where: { id: existing.id }, data: { status: 'ACCEPTED' } });
-      await notify(targetId, 'FRIEND', `${req.user!.name} accepted your friend request`);
+      await notify({
+        userId: targetId,
+        type: 'FRIEND',
+        title: `${req.user!.name} accepted your friend request`,
+      });
       return { ok: true, state: 'FRIENDS' as FriendState };
     }
 
     await prisma.friendship.create({
       data: { ...key, status: 'PENDING', requestedById: userId },
     });
-    await notify(targetId, 'FRIEND', `${req.user!.name} sent you a friend request`);
+    await notify({
+      userId: targetId,
+      type: 'FRIEND',
+      title: `${req.user!.name} sent you a friend request`,
+    });
     return { ok: true, state: 'REQUEST_SENT' as FriendState };
   });
 
@@ -182,7 +190,11 @@ export default async function socialRoutes(app: FastifyInstance) {
     if (friendship.requestedById === userId) throw forbidden('You sent this request');
 
     await prisma.friendship.update({ where: { id }, data: { status: 'ACCEPTED' } });
-    await notify(friendship.requestedById, 'FRIEND', `${req.user!.name} accepted your friend request`);
+    await notify({
+      userId: friendship.requestedById,
+      type: 'FRIEND',
+      title: `${req.user!.name} accepted your friend request`,
+    });
     return { ok: true };
   });
 
@@ -285,13 +297,12 @@ export default async function socialRoutes(app: FastifyInstance) {
       data: { status: 'ACCEPTED', respondedAt: new Date() },
     });
     await ensureOccurrences(invitation.goalId, [participant.id]);
-    await notify(
-      invitation.inviterId,
-      'FRIEND',
-      `${req.user!.name} joined ${invitation.goal.title}`,
-      '',
-      { goalId: invitation.goalId },
-    );
+    await notify({
+      userId: invitation.inviterId,
+      type: 'FRIEND',
+      title: `${req.user!.name} joined ${invitation.goal.title}`,
+      data: { goalId: invitation.goalId },
+    });
 
     return { ok: true, goalId: invitation.goalId };
   });

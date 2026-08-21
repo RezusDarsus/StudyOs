@@ -22,6 +22,7 @@ import {
   discardDraft,
   generateDraft,
   loadDraft,
+  parseLadder,
 } from '../services/copilot-draft.js';
 import { askGoalCopilot } from '../services/copilot-goal.js';
 import { deletePreference, listPreferences } from '../services/preferences.js';
@@ -54,9 +55,22 @@ function serializeDraft(draft: Awaited<ReturnType<typeof loadDraft>>) {
       estimatedMinutes: task.estimatedMinutes,
       preferredTime: task.preferredTime,
       reason: task.reason,
+      // The proposed build-up, so the review screen can show it before the user
+      // agrees to it. Nothing here exists as a ProgressionPlan yet.
+      progression: parseLadder(task.progressionConfig),
     })),
   };
 }
+
+/**
+ * A free-text message to the Copilot.
+ *
+ * One character is enough. This used to require two, which meant a message of
+ * "/" — a legitimate thing to type, and one of the reported slash failures —
+ * came back as an opaque 400 while the Send button sat there enabled. Slashes
+ * are never stripped: "5/7 days" and "walking/running" reach the model verbatim.
+ */
+const copilotMessage = z.string().trim().min(1, 'Type something first').max(400);
 
 /** Turn provider failures into something a person can act on. */
 function toUserFacing(err: unknown): never {
@@ -199,6 +213,10 @@ export default async function copilotRoutes(app: FastifyInstance) {
                 .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
                 .nullish(),
               reason: z.string().trim().max(300).optional(),
+              // Only null is meaningful: "remove the build-up". Omitting the key
+              // keeps whatever the draft already had. A ladder cannot be authored
+              // here — that belongs to the real task, once it exists.
+              progression: z.null().optional(),
             }),
           )
           .max(8)
@@ -212,9 +230,7 @@ export default async function copilotRoutes(app: FastifyInstance) {
 
   app.post('/copilot/goal-drafts/:id/copilot-edit', { preHandler: app.requireAuth }, async (req) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
-    const { message } = z
-      .object({ message: z.string().trim().min(2).max(400) })
-      .parse(req.body);
+    const { message } = z.object({ message: copilotMessage }).parse(req.body);
     try {
       const { draft, assistantMessage, applied } = await applyCopilotEdit(id, req.user!.id, message);
       return { draft: serializeDraft(draft), assistantMessage, applied };
@@ -247,9 +263,7 @@ export default async function copilotRoutes(app: FastifyInstance) {
 
   app.post('/goals/:id/copilot', { preHandler: app.requireAuth }, async (req) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
-    const { message } = z
-      .object({ message: z.string().trim().min(2).max(400) })
-      .parse(req.body);
+    const { message } = z.object({ message: copilotMessage }).parse(req.body);
     try {
       return await askGoalCopilot(id, req.user!.id, message);
     } catch (err) {

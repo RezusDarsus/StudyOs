@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { isDayString, isValidTimezone, todayIn } from '../domain/dates.js';
+import { isDayString, isTimeString, isValidTimezone, todayIn } from '../domain/dates.js';
 import {
   GOAL_CATEGORY,
   GOAL_STATUS,
@@ -12,7 +12,8 @@ import {
 import { validateRecurrence, type RecurrenceConfig } from '../domain/recurrence.js';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
-import { notify } from '../services/engagement.js';
+import { notify } from '../services/notifications.js';
+import { buildAdjustmentOffers } from '../services/adjustments.js';
 import {
   buildLeaderboard,
   loadGoalForUser,
@@ -20,6 +21,8 @@ import {
 } from '../services/goals.js';
 import { buildScoreInput, ensureOccurrences, goalToday, scheduleOf } from '../services/occurrences.js';
 import { findGoalByCode, issueInviteCode, revokeInviteCode } from '../services/invite-codes.js';
+import { loadPlansForGoal, progressionSummary } from '../services/progression.js';
+import { feedbackSummariesForGoal } from '../services/task-feedback.js';
 import { scoreDays } from '../domain/scoring.js';
 
 const dayString = z.string().refine(isDayString, 'Expected a YYYY-MM-DD date');
@@ -42,7 +45,7 @@ const taskSchema = z.object({
   endDate: dayString.nullish(),
   reminderTime: z
     .string()
-    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use HH:MM')
+    .refine(isTimeString, 'Use HH:MM')
     .nullish(),
 });
 
@@ -175,6 +178,17 @@ export default async function goalRoutes(app: FastifyInstance) {
       orderBy: { createdAt: 'asc' },
     });
 
+    // Which of these tasks climb a ladder, fetched once for the whole goal so the
+    // task list can show "Stage 2 of 4" without a request per row.
+    const plans = await loadPlansForGoal(goal.id);
+    const planByTask = new Map(plans.map((p) => [p.taskDefinitionId, p]));
+
+    // How each task has been feeling to *this* participant. Absent for a visitor
+    // reading a public goal — there is nobody whose ratings those would be.
+    const difficultyByTask = participant
+      ? await feedbackSummariesForGoal(goal.id, participant.id, today)
+      : new Map();
+
     let me = null;
     let history: Array<{ day: string; percent: number | null; completed: number; required: number }> = [];
     if (participant) {
@@ -204,7 +218,14 @@ export default async function goalRoutes(app: FastifyInstance) {
         // Only the owner ever receives the code itself.
         inviteCode: isOwner ? goal.inviteCode : null,
       },
-      tasks: tasks.map(serializeTask),
+      tasks: tasks.map((task) => {
+        const plan = planByTask.get(task.id);
+        return {
+          ...serializeTask(task),
+          progression: plan ? progressionSummary(plan) : null,
+          difficulty: difficultyByTask.get(task.id) ?? null,
+        };
+      }),
       participants: goal.participants
         .filter((p) => p.status === 'ACTIVE')
         .map((p) => ({
@@ -220,6 +241,20 @@ export default async function goalRoutes(app: FastifyInstance) {
       history,
       today,
     };
+  });
+
+  /**
+   * Changes worth offering, derived from how the participant has rated their days.
+   *
+   * A read, and a cheap one: no model is called, so this works with the Copilot off
+   * and costs nothing to poll. Every offer points at the progression endpoints —
+   * there is no apply route here, because there is no adjustment the user could not
+   * already make by hand, and inventing a second one would be a second way to change
+   * a goal that has to be secured all over again.
+   */
+  app.get('/goals/:id/adjustments', { preHandler: app.requireAuth }, async (req) => {
+    const { id } = z.object({ id: z.string() }).parse(req.params);
+    return await buildAdjustmentOffers(id, req.user!.id);
   });
 
   app.patch('/goals/:id', { preHandler: app.requireAuth }, async (req) => {
@@ -308,8 +343,11 @@ export default async function goalRoutes(app: FastifyInstance) {
 
     await ensureOccurrences(id, [participant.id]);
     if (goal.ownerId !== userId) {
-      await notify(goal.ownerId, 'FRIEND', `${req.user!.name} joined ${goal.title}`, '', {
-        goalId: goal.id,
+      await notify({
+        userId: goal.ownerId,
+        type: 'FRIEND',
+        title: `${req.user!.name} joined ${goal.title}`,
+        data: { goalId: goal.id },
       });
     }
     return { ok: true, participantId: participant.id };
@@ -434,8 +472,12 @@ export default async function goalRoutes(app: FastifyInstance) {
 
     await ensureOccurrences(goal.id, [participant.id]);
     if (goal.ownerId !== userId) {
-      await notify(goal.ownerId, 'FRIEND', `${req.user!.name} joined ${goal.title}`, 'via your invite link', {
-        goalId: goal.id,
+      await notify({
+        userId: goal.ownerId,
+        type: 'FRIEND',
+        title: `${req.user!.name} joined ${goal.title}`,
+        body: 'via your invite link',
+        data: { goalId: goal.id },
       });
     }
     return { ok: true, goalId: goal.id, alreadyJoined: false };
@@ -478,13 +520,13 @@ export default async function goalRoutes(app: FastifyInstance) {
         create: { goalId: id, inviterId, inviteeId, status: 'PENDING' },
         update: { status: 'PENDING', inviterId, respondedAt: null },
       });
-      await notify(
-        inviteeId,
-        'FRIEND',
-        `${req.user!.name} invited you to ${goal.title}`,
-        goal.description,
-        { goalId: goal.id },
-      );
+      await notify({
+        userId: inviteeId,
+        type: 'FRIEND',
+        title: `${req.user!.name} invited you to ${goal.title}`,
+        body: goal.description,
+        data: { goalId: goal.id },
+      });
       created.push(inviteeId);
     }
 

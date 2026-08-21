@@ -1,9 +1,13 @@
 // Goalify — Phase 1 domain model.
 //
 // Design notes:
-//  * SQLite does not support native enums or Json columns in Prisma, so status-like
-//    fields are Strings validated at the application boundary (see src/domain/enums.ts)
-//    and structured config is stored as a JSON-encoded String.
+//  * Status-like fields are Strings validated at the application boundary (see
+//    src/domain/enums.ts) rather than native enums, and structured config is stored
+//    as a JSON-encoded String. Both choices date from SQLite, which supported
+//    neither; they are kept on PostgreSQL because the validation already lives in
+//    one place and because changing a column's type is a data migration, not a
+//    rename. Converting them is a deliberate future change, not a side effect of
+//    changing database.
 //  * A "challenge" is NOT a separate entity. A Goal with >1 GoalParticipant *is* a
 //    challenge. Private goal = 1 participant. Public challenge = many.
 //  * TaskDefinition (the recurring rule) is separate from TaskOccurrence (one dated
@@ -15,7 +19,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -66,6 +70,16 @@ model Profile {
   notifyFriendActivity    Boolean @default(true)
   notifyLeaderboardUpdate Boolean @default(true)
   notifyAchievements      Boolean @default(true)
+
+  // The two scheduled daily notifications (Phase 2.5). Separate toggles because
+  // they answer different questions: the morning one is a plan, the evening one is a
+  // nudge, and wanting one is no reason to want the other.
+  notifyMorningSummary Boolean @default(true)
+  notifyEveningCheck   Boolean @default(true)
+
+  /// HH:MM, read in this profile's own `timezone` — never in server time.
+  morningTime String @default("08:00")
+  eveningTime String @default("20:30")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -158,6 +172,7 @@ model GoalParticipant {
   createdAt DateTime @default(now())
 
   occurrences TaskOccurrence[]
+  feedback    TaskFeedback[]
 
   @@unique([goalId, userId])
   @@index([userId])
@@ -193,6 +208,8 @@ model TaskDefinition {
   updatedAt  DateTime  @updatedAt
 
   occurrences TaskOccurrence[]
+  progression ProgressionPlan?
+  feedback    TaskFeedback[]
 
   @@index([goalId])
 }
@@ -208,14 +225,161 @@ model TaskOccurrence {
   dueDate String // YYYY-MM-DD
   status  String @default("PENDING") // PENDING | COMPLETED | MISSED | SKIPPED
 
+  // Copied from the progression stage that was current when this day was
+  // materialised, NOT read through the relation. Denormalised on purpose: it is
+  // what makes history immutable. Advancing from "walk 15 min" to "walk 20 min"
+  // must leave yesterday still saying 15, even though the stage row now says 20.
+  // Null on tasks with no progression plan.
+  progressionStageIndex Int?
+  progressionTarget     Int?
+
   completedAt DateTime?
   createdAt   DateTime  @default(now())
 
-  reward RewardTransaction?
+  reward   RewardTransaction?
+  feedback TaskFeedback?
 
   @@unique([taskDefinitionId, participantId, dueDate])
   @@index([participantId, dueDate])
   @@index([dueDate, status])
+}
+
+/// How hard a task felt on one particular day, in the participant's own words:
+/// too easy, just right, too hard.
+///
+/// Anchored on the occurrence rather than on (task, day) so the day is never
+/// something a client gets to assert — it comes from the row being rated, which
+/// the server has already checked belongs to the caller. The @unique on
+/// taskOccurrenceId is what makes re-rating an update rather than a second vote.
+///
+/// taskDefinitionId, participantId and day are copied from the occurrence so the
+/// "how has this task been feeling lately?" query needs no join. Cascade delete is
+/// deliberate: only future PENDING occurrences are ever deleted, and a day that has
+/// not happened yet cannot have been rated.
+///
+/// This is evidence, not authority. A run of TOO_EASY never advances a stage on its
+/// own — progression reviews stay purely numeric (see domain/progression.ts). All
+/// this changes is what the Copilot may suggest and what the app offers to do.
+model TaskFeedback {
+  id               String         @id @default(cuid())
+  taskOccurrenceId String         @unique
+  taskOccurrence   TaskOccurrence @relation(fields: [taskOccurrenceId], references: [id], onDelete: Cascade)
+
+  taskDefinitionId String          @map("taskId")
+  taskDefinition   TaskDefinition  @relation(fields: [taskDefinitionId], references: [id], onDelete: Cascade)
+  participantId    String
+  participant      GoalParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+
+  /// The rated day, in the goal's timezone. Copied from the occurrence.
+  day String // YYYY-MM-DD
+
+  /// TOO_EASY | JUST_RIGHT | TOO_HARD
+  rating String
+  /// Optional free text. Shown back to the user; never fed to the model as an
+  /// instruction, only as quoted context.
+  note   String @default("")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([taskDefinitionId, participantId, day])
+  @@index([participantId, day])
+}
+
+// ---------------------------------------------------------------- progression
+//
+// A progression plan makes a task get harder on purpose: walk 15 → 20 → 25 → 30
+// minutes. It hangs off an ordinary TaskDefinition rather than replacing it, so a
+// progressive goal is still a Phase 1 goal — the same occurrences, the same
+// scoring, the same leaderboards.
+//
+// Two rules shape the whole design:
+//  * Advancing is never automatic on poor completion. Every change is a
+//    ProgressionDecision with the numbers it was based on, and the backend decides
+//    ADVANCE / STAY / REDUCE / ASK_USER — the AI may only ever suggest.
+//  * Past days are never rewritten. Stage targets are stamped onto each
+//    TaskOccurrence when it is materialised, and only future days are restamped.
+
+model ProgressionPlan {
+  id               String         @id @default(cuid())
+  taskDefinitionId String         @unique
+  taskDefinition   TaskDefinition @relation(fields: [taskDefinitionId], references: [id], onDelete: Cascade)
+
+  // MINUTES | REPS | DISTANCE_KM | PAGES | AMOUNT | COUNT
+  metricType String
+  /// Display-only suffix, e.g. "min", "pages", "km". Never parsed.
+  unitLabel  String @default("")
+
+  /// 0-based. The "2" in "Stage 2 of 4" is currentStageIndex + 1.
+  currentStageIndex Int @default(0)
+
+  /// Completion rate (0-100) over the review window required before ADVANCE.
+  advanceThreshold Int @default(80)
+  /// Below this the plan proposes REDUCE rather than STAY.
+  reduceThreshold  Int @default(40)
+
+  /// Day the current stage started, in the goal's timezone. The review window
+  /// starts here, so a stage that has just changed cannot immediately advance
+  /// again on last week's numbers.
+  stageStartedOn String // YYYY-MM-DD
+  lastReviewedOn String? // YYYY-MM-DD
+
+  status String @default("ACTIVE") // ACTIVE | COMPLETED | ABANDONED
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  stages    ProgressionStage[]
+  decisions ProgressionDecision[]
+}
+
+model ProgressionStage {
+  id     String          @id @default(cuid())
+  planId String
+  plan   ProgressionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  /// 0-based and contiguous; the application enforces no gaps.
+  stageIndex Int
+  /// The number being progressed: 15, 20, 25, 30.
+  target     Int
+  /// Optional override for the task title while this stage is current.
+  label      String @default("")
+  /// Minimum days to hold this stage before it is eligible to advance.
+  minDays    Int    @default(7)
+
+  @@unique([planId, stageIndex])
+}
+
+/// The audit trail. One row per evaluation, applied or not, so a stage change can
+/// always be explained with the numbers that produced it.
+model ProgressionDecision {
+  id     String          @id @default(cuid())
+  planId String
+  plan   ProgressionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  action         String // ADVANCE | STAY | REDUCE | ASK_USER
+  fromStageIndex Int
+  toStageIndex   Int
+
+  // The evidence, frozen at decision time.
+  windowStart    String // YYYY-MM-DD
+  windowEnd      String // YYYY-MM-DD
+  completedCount Int
+  eligibleCount  Int
+  completionRate Int // 0-100
+
+  /// SYSTEM (a scheduled review) | USER (they chose) | COPILOT (a suggestion).
+  /// A COPILOT row is never applied without a matching USER row.
+  source String @default("SYSTEM")
+  reason String @default("")
+
+  /// Null until the decision actually moved currentStageIndex. An unapplied row
+  /// is a proposal, which is how ASK_USER stays a question rather than a change.
+  appliedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([planId, createdAt])
 }
 
 // ---------------------------------------------------------------- social
@@ -270,16 +434,32 @@ model Notification {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // REMINDER | FRIEND | PROGRESS | LEADERBOARD | ACHIEVEMENT
+  //   | MORNING_SUMMARY | EVENING_INCOMPLETE
   type  String
   title String
   body  String @default("")
   // JSON-encoded payload for deep-linking, e.g. { "goalId": "..." }
   data  String @default("{}")
 
+  /// The calendar day this is *about*, in the recipient's own timezone. Set for the
+  /// scheduled daily notifications and null for event-driven ones, which are about a
+  /// moment rather than a day.
+  localDate String?
+
+  /// "userId:TYPE:localDate" for anything that must arrive at most once a day.
+  ///
+  /// Unique so the database is what enforces it. A job that runs twice — a retry, an
+  /// overlapping worker, a server restart mid-batch — is normal, and a check-then-write
+  /// in application code races. Null for event-driven notifications: PostgreSQL treats
+  /// NULLs as distinct in a unique index, so any number of them coexist, which is
+  /// exactly right here (and the opposite of what UserPreference.category needs).
+  dedupeKey String? @unique
+
   readAt    DateTime?
   createdAt DateTime  @default(now())
 
   @@index([userId, readAt])
+  @@index([userId, createdAt])
 }
 
 model Achievement {
@@ -427,6 +607,12 @@ model GoalDraftTask {
   estimatedMinutes Int?
   preferredTime    String? // HH:MM
 
+  /// A proposed build-up ladder, as JSON: { metricType, unitLabel, stages[] }.
+  /// Null for the ordinary case. Stored on the draft rather than as rows because a
+  /// draft is a proposal — the real ProgressionPlan is created from this on
+  /// confirmation, through the same service manual creation uses.
+  progressionConfig String?
+
   /// The personalised justification, quoted back to the user on review.
   reason    String @default("")
   sortOrder Int    @default(0)
@@ -441,8 +627,9 @@ model UserPreference {
 
   /// GLOBAL | CATEGORY | GOAL
   scope String @default("GLOBAL")
-  /// Empty string for GLOBAL scope. NOT nullable: SQLite treats NULLs as distinct
-  /// in a unique index, which would let duplicate global preferences pile up.
+  /// Empty string for GLOBAL scope. NOT nullable: a NULL is never equal to another
+  /// NULL in a unique index — true on PostgreSQL as it was on SQLite — so nullable
+  /// here would let duplicate global preferences pile up unnoticed.
   category String @default("")
 
   key   String

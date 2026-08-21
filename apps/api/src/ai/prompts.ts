@@ -1,4 +1,4 @@
-import { GOAL_CATEGORY, RECURRENCE_TYPE, TARGET_TYPE } from '../domain/enums.js';
+import { GOAL_CATEGORY, PROGRESSION_METRIC, RECURRENCE_TYPE, TARGET_TYPE } from '../domain/enums.js';
 import { QUESTION_TYPES } from './schemas.js';
 
 // One prompt per job, each versioned. Keeping them apart means a change to plan
@@ -6,10 +6,10 @@ import { QUESTION_TYPES } from './schemas.js';
 // with every AI call log so a regression can be traced to a specific prompt.
 
 export const PROMPT_VERSIONS = {
-  interview: 'goal-interview-v1',
-  draft: 'goal-draft-v1',
+  interview: 'goal-interview-v3',
+  draft: 'goal-draft-v3',
   edit: 'goal-edit-v1',
-  progress: 'progress-analysis-v1',
+  progress: 'progress-analysis-v3',
   preference: 'preference-extraction-v1',
 } as const;
 
@@ -36,6 +36,7 @@ Hard rules:
 const CATEGORIES = GOAL_CATEGORY.join(', ');
 const RECURRENCES = RECURRENCE_TYPE.join(', ');
 const TARGETS = TARGET_TYPE.join(', ');
+const METRICS = PROGRESSION_METRIC.join(', ');
 
 // ------------------------------------------------------------------ interview
 
@@ -43,7 +44,13 @@ export function interviewSystemPrompt(opts: {
   questionCount: number;
   minQuestions: number;
   maxQuestions: number;
+  /** Subjects the opening message already settled — asking these back is not allowed. */
+  settled?: readonly string[];
 }) {
+  const settled = opts.settled?.length
+    ? `\n- The user has ALREADY TOLD YOU about: ${opts.settled.join(', ')}. Asking about\n  any of these again is a wasted question and will be discarded.`
+    : '';
+
   return `${SHARED_RULES}
 
 TASK: run a short, adaptive interview so the plan can be genuinely personalised.
@@ -52,16 +59,22 @@ Understand the person first, then build the goal. Ask the single most useful
 question you do not already know the answer to.
 
 Interview rules:
-- You have asked ${opts.questionCount} question(s). Aim for ${opts.minQuestions}-${opts.maxQuestions} in total.
+- You have asked ${opts.questionCount} question(s). Ask at most ${opts.maxQuestions} in total${
+    opts.minQuestions > 0 ? `, and at least ${opts.minQuestions}` : ' — none at all is fine here'
+  }.${settled}
 - NEVER ask something the user has already told you, including in their opening
   message. If they said "I can only train after 7pm", do not ask when they are free.
+- One subject per interview. If you have asked which days suit them, that subject is
+  closed — asking it again in different words ("which day(s) of the evening?",
+  "which days do you actually want to?") is the same question and will be discarded.
 - Each question must build on previous answers. If they chose walking, ask about
   walking — not about gym equipment.
 - Prefer quick-select options over free text. Options must be short and concrete.
-- EVERY QUESTION MUST SERVE THIS GOAL. Before asking, check the answer would
-  actually change the plan. "Which activity do you enjoy?" is essential for a
-  fitness goal and meaningless for "build a house" or "save for a trip" — for
-  those, ask about the things that genuinely shape the work.
+- EVERY QUESTION MUST SERVE THIS GOAL. Before asking, check that a different answer
+  would produce a different plan. If the answer cannot change what gets scheduled,
+  do not ask it. "Which activities do you enjoy?" shapes a fitness goal and is noise
+  on a reading goal or "save for a trip" — for those, ask what genuinely shapes the
+  work.
 - Do not ask for sensitive personal detail (weight, medical history, income,
   past failures) unless the user raised it first.
 - If the goal is a one-off project rather than a repeating habit, say so plainly
@@ -72,17 +85,25 @@ Interview rules:
 
 Question types you may use: ${QUESTION_TYPES.join(', ')}.
 SINGLE_SELECT and MULTI_SELECT require 2-8 options.
+Match the type to the question you actually asked. If more than one answer can be
+true at once — "which activities", "which days", "what time of day", anything
+phrased with "(s)" or "all that apply" — use MULTI_SELECT. Use SINGLE_SELECT only
+when the options are genuinely exclusive, like a difficulty level or a single start
+date. Asking "which day(s) suit you?" as a SINGLE_SELECT forces the user to throw
+away a real answer.
 Question ids are snake_case and must be unique within the session.
 
-Return JSON exactly of this shape:
+Return JSON exactly of this shape. The values below come from an UNRELATED goal
+("learn Spanish") purely to show the format — never copy them. Your prompt and
+options must be about the user's own goal:
 {
   "state": "NEEDS_MORE_INFORMATION" | "READY_TO_GENERATE",
   "assistantMessage": "the short question or a one-line wrap-up",
   "question": {
-    "id": "preferred_activity",
-    "type": "MULTI_SELECT",
-    "prompt": "Which activities do you actually enjoy?",
-    "options": ["Walking", "Swimming", "Gym", "Cycling"],
+    "id": "current_level",
+    "type": "SINGLE_SELECT",
+    "prompt": "How much Spanish can you follow right now?",
+    "options": ["None at all", "A few phrases", "Simple conversations"],
     "allowCustomAnswer": true,
     "optional": true
   } | null,
@@ -144,9 +165,11 @@ ${
 Question ids already used (must be unique, never reuse):
 ${opts.askedQuestionIds.length ? opts.askedQuestionIds.join(', ') : '(none yet)'}
 
-Ask about something GENUINELY NEW. Good next topics once activities are known:
-when in the day they are free, how many days per week is realistic, session length,
-anything they want the plan to avoid, and how strict or flexible they want it.
+Ask about something GENUINELY NEW — a subject not listed above in any wording.
+Topics that usually change the plan: how many days a week is realistic, which days,
+session length, when in the day they are free, anything they want the plan to avoid,
+and how strict or flexible they want it. Only ask the ones that are still open AND
+that would change what gets scheduled for THIS goal.
 
 Conversation so far:
 ${opts.transcript.map((m) => `${m.role}: ${m.content}`).join('\n') || '(just started)'}
@@ -168,6 +191,9 @@ Rules:
   If they said they hate running, do not include running in any form.
 - Honour stated constraints (days unavailable, session length, plan style).
 - 1-5 tasks is usually right. Never more than 8. Fewer, sustainable tasks win.
+- WRITE TO THE USER, NOT ABOUT THEM. "rationale" and every task "reason" address
+  them as "you". Never write "the user", "they", or "this person" — the user reads
+  these words on their own plan.
 - "rationale" must reference what the user said in THIS conversation, in plain
   language. Never claim they prefer something they did not say here. Do not invent
   reasons, and do not cite background hints as if they stated them.
@@ -177,9 +203,16 @@ Rules:
   should be ignored. Only use a stated preference when it genuinely serves the goal.
 - Where a preference IS relevant, honour it exactly. A fitness goal from someone
   who enjoys dancing should use dancing, not a more conventional substitute.
+- AN ANSWER IS NOT A MANDATE FOR A TASK. Respecting what someone said means not
+  contradicting it — never inventing work to use it up. Someone reading in the
+  evening who also mentioned the gym gets ONE reading task, not a second "gym
+  reading" task. If an answer does not serve the goal, leave it out of the plan
+  entirely and out of the rationale.
 - Respect the numbers they gave. Their stated session length and days per week win
-  over anything else, unless the value is unsafe.
-- Each task "reason" explains why THAT task suits THIS person, in one sentence.
+  over anything else, unless the value is unsafe. Do not schedule more sessions of
+  the same work than the days they said they can do it.
+- Each task "reason" explains why THAT task suits THIS person, in one sentence,
+  addressed to them.
 - Be realistic: no 3-hour daily commitments, no 7-day-a-week intensity for a beginner.
 - If they wanted something unsafe, build the safe version and say so in the rationale.
 
@@ -201,6 +234,28 @@ Recurrence shape:
 Prefer TIMES_PER_WEEK when the user gave a weekly number but no fixed days —
 it lets them pick the days and is scored fairly.
 
+BUILD-UP (optional, and usually absent):
+A task may include "progression" when the *amount* should grow over weeks —
+walk 15 minutes, then 20, then 25. Each step is held for at least "minDays"
+and only advances if the user is actually keeping up; the app checks that, not you.
+
+Use it only when ALL of these hold:
+- The task measures a quantity that can sensibly increase.
+- Starting at the full amount would be too much for this person right now.
+- The user gave a starting point or a destination you can build between.
+Do NOT use it for a yes/no habit (take vitamins, make the bed), for anything the
+user asked to keep constant, or just to look thorough. Most tasks have no build-up.
+
+Rules if you include one:
+- 2 to 4 steps. Whole numbers only, each strictly larger than the one before.
+- The FIRST step is what they start on this week. If the user told you a number
+  they can manage today, that number is step one.
+- The LAST step is the destination — never beyond what they said they want.
+- metricType is one of: ${METRICS}. unitLabel is a short display suffix ("min",
+  "pages", "km", "reps").
+- For MINUTES, "estimatedMinutes" must equal the FIRST step, not the last.
+- minDays is how long to hold each step: 7 is normal, 14 for a big change.
+
 Return JSON exactly of this shape:
 {
   "title": "Become More Active",
@@ -209,18 +264,29 @@ Return JSON exactly of this shape:
   "targetType": "HABIT",
   "targetValue": null,
   "deadline": "2026-12-31" or null,
-  "rationale": "Why this plan fits this person, referencing their answers.",
+  "rationale": "Why this plan fits, written to the user as \\"you\\", citing their answers.",
   "tasks": [
     {
       "title": "Evening walk",
       "description": "Walk at a comfortable pace.",
       "recurrence": { "type": "TIMES_PER_WEEK", "timesPerWeek": 5 },
-      "estimatedMinutes": 35,
+      "estimatedMinutes": 15,
       "preferredTime": "20:00",
-      "reason": "You said you enjoy walking and evenings suit you."
+      "reason": "You said you enjoy walking and evenings suit you.",
+      "progression": {
+        "metricType": "MINUTES",
+        "unitLabel": "min",
+        "stages": [
+          { "target": 15, "minDays": 7 },
+          { "target": 20, "minDays": 7 },
+          { "target": 30, "minDays": 7 }
+        ]
+      }
     }
   ]
 }
+
+Omit "progression" entirely for a task that should not grow.
 
 Do not include reward or coin values — the application decides those.`;
 }
@@ -240,10 +306,14 @@ THE GOAL — this is what the plan must actually pursue. Nothing below may repla
 it. Preferences change HOW it is pursued, never WHAT it is:
 "${opts.goalIntent || opts.initialGoal}"
 
-THE USER'S ACTUAL ANSWERS — this is the ground truth and the plan MUST reflect it.
-If they said "dancing", the plan is about dancing, not walking. If they said
-5 minutes, do not write 40. If they said 7 days, do not write 5:
+THE USER'S ACTUAL ANSWERS — this is the ground truth and the plan MUST NOT
+CONTRADICT it. If they said "dancing", the plan is about dancing, not walking. If
+they said 5 minutes, do not write 40. If they said 7 days, do not write 5:
 ${JSON.stringify(opts.answers, null, 2)}
+
+Reflecting an answer means never contradicting it. It does NOT mean every answer has
+to appear as a task — an answer that does not serve the goal above is simply left
+out. Do not invent a task to make use of one.
 
 Relevance test before you use any preference: does it help achieve the goal above?
 If someone wants to build a house and mentions they like dancing, dancing is
@@ -313,6 +383,31 @@ Rules:
 - Suggestions are proposals only — the user must confirm. Never say you changed anything.
 - At most 3 suggestions. If things are going well, say so and suggest nothing.
 
+BUILD-UP TASKS:
+Some tasks climb a ladder ("stage 2 of 4, currently 20 min"). For one of those you
+may set "proposedProgressionAction":
+- "ADVANCE" — only if they are clearly keeping up at the current step.
+- "REDUCE"  — if they are struggling; dropping back a step is a kindness.
+- "STAY"    — the usual answer.
+You are proposing, not deciding. The app re-checks the numbers itself and will
+refuse a step up that the completion rate does not support, so never tell the user
+their stage has changed or will change. Only use this for a task the statistics
+show has a build-up; leave it out otherwise.
+
+HOW A TASK HAS BEEN FEELING:
+A task may carry "difficulty" — how the person rated the days themselves, as
+"felt": TOO_EASY, JUST_RIGHT, TOO_HARD or MIXED, over "ratedDays" days.
+- This is separate from completion, and the two often disagree. A task done every
+  day and rated TOO_HARD is a habit about to break; say so kindly before it does.
+  A task done every day and rated TOO_EASY is worth more than it is asking for.
+- Quote it as their own words ("you've said it felt too hard"), never as a number
+  and never as your own judgement of them.
+- MIXED means the days genuinely differed. Do not average it into a verdict.
+- A run of TOO_EASY is not permission to step a ladder up: completion still decides
+  that, and the app will refuse an advance the numbers do not back.
+- No "difficulty" means they have not rated it. Say nothing about how it felt, and
+  never guess.
+
 Return JSON exactly of this shape:
 {
   "explanation": "short, plain-language read on how it is going",
@@ -321,7 +416,8 @@ Return JSON exactly of this shape:
       "summary": "Drop reading from 30 to 15 minutes to rebuild consistency",
       "taskTitle": "Read 30 minutes",
       "proposedRecurrence": { "type": "EVERY_DAY" },
-      "proposedMinutes": 15
+      "proposedMinutes": 15,
+      "proposedProgressionAction": null
     }
   ]
 }`;

@@ -453,6 +453,102 @@ describe('draft validation', () => {
   });
 });
 
+describe('AI build-up ladders', () => {
+  // A ladder is an enhancement nobody asked for, so every failure below drops the
+  // ladder and keeps the plan. Losing a plan the user waited for, over a suggestion
+  // they never requested, would be the worse trade every time.
+  const laddered = (
+    progression: unknown,
+    task: Record<string, unknown> = {},
+  ) => ({
+    ...baseDraft,
+    tasks: [{ ...baseDraft.tasks[0], estimatedMinutes: 15, progression, ...task }],
+  });
+
+  const ladder = (targets: number[], minDays = 7) => ({
+    metricType: 'MINUTES' as const,
+    unitLabel: 'min',
+    stages: targets.map((target) => ({ target, minDays })),
+  });
+
+  it('keeps a sensible ladder', () => {
+    const result = validateAndNormalizeDraft(laddered(ladder([15, 20, 30])) as never, 'UTC');
+    expect(result.tasks[0].progression?.stages.map((s) => s.target)).toEqual([15, 20, 30]);
+    expect(result.tasks[0].progression?.unitLabel).toBe('min');
+  });
+
+  it('starts the task on the first rung, not the number the model typed', () => {
+    const result = validateAndNormalizeDraft(
+      laddered(ladder([15, 20, 30]), { estimatedMinutes: 30 }) as never,
+      'UTC',
+    );
+    expect(result.tasks[0].estimatedMinutes).toBe(15);
+    expect(result.adjustments.join(' ')).toMatch(/starts at 15 minutes/i);
+  });
+
+  it('prices the task from the starting rung, so a steep climb earns no more today', () => {
+    const result = validateAndNormalizeDraft(laddered(ladder([15, 30, 60])) as never, 'UTC');
+    expect(result.tasks[0].reward).toBe(rewardForTask({ estimatedMinutes: 15 }));
+    expect(result.tasks[0].reward).not.toBe(rewardForTask({ estimatedMinutes: 60 }));
+  });
+
+  it('drops a ladder on a one-off task, which has nothing to climb over', () => {
+    const result = validateAndNormalizeDraft(
+      laddered(ladder([15, 20, 30]), { recurrence: { type: 'ONCE' as const } }) as never,
+      'UTC',
+    );
+    expect(result.tasks[0].progression).toBeNull();
+    expect(result.adjustments.join(' ')).toMatch(/nothing to build up over/i);
+  });
+
+  it('drops a ladder that does not actually climb', () => {
+    const result = validateAndNormalizeDraft(laddered(ladder([20, 20, 15])) as never, 'UTC');
+    expect(result.tasks[0].progression).toBeNull();
+    expect(result.adjustments.join(' ')).toMatch(/fewer than two real steps/i);
+    // The plan survives. That is the whole point.
+    expect(result.tasks).toHaveLength(1);
+  });
+
+  it('drops rungs that vanish into each other once rounded', () => {
+    const result = validateAndNormalizeDraft(laddered(ladder([10, 10.4, 20])) as never, 'UTC');
+    expect(result.tasks[0].progression?.stages.map((s) => s.target)).toEqual([10, 20]);
+  });
+
+  it('trims a ladder the model padded out to look thorough', () => {
+    const result = validateAndNormalizeDraft(
+      laddered(ladder([15, 16, 17, 18, 19, 20, 21, 22])) as never,
+      'UTC',
+    );
+    expect(result.tasks[0].progression?.stages).toHaveLength(6);
+    expect(result.adjustments.join(' ')).toMatch(/trimmed from 8 steps to 6/i);
+  });
+
+  it('refuses to hold a step for a single day', () => {
+    const result = validateAndNormalizeDraft(laddered(ladder([15, 20], 1)) as never, 'UTC');
+    expect(result.tasks[0].progression?.stages.every((s) => s.minDays >= 3)).toBe(true);
+  });
+
+  it('judges the workload at the top of the ladder, not the bottom', () => {
+    // 15 minutes a day is trivially sustainable; 240 is not, and the plan is a
+    // promise to get there. Measuring rung one would wave through a climb into a
+    // wall.
+    expect(() =>
+      validateAndNormalizeDraft(
+        laddered(ladder([15, 60, 120, 240]), {
+          recurrence: { type: 'EVERY_DAY' as const },
+        }) as never,
+        'UTC',
+      ),
+    ).toThrow(DraftValidationError);
+  });
+
+  it('leaves a task with no ladder alone', () => {
+    const result = validateAndNormalizeDraft(baseDraft, 'UTC');
+    expect(result.tasks[0].progression).toBeNull();
+    expect(result.adjustments.join(' ')).not.toMatch(/build-up/i);
+  });
+});
+
 describe('reward calculation', () => {
   it('derives reward from effort, never from the model', () => {
     expect(rewardForTask({ estimatedMinutes: 5 })).toBe(5);

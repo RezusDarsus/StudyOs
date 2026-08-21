@@ -34,6 +34,41 @@ export function isValidTimezone(tz: string): boolean {
   }
 }
 
+// ------------------------------------------------------------- time of day
+
+/**
+ * A wall-clock time with no date and no zone: "08:00", "20:30".
+ *
+ * Used for task reminders and for the two scheduled daily notifications. Always
+ * interpreted in someone's own timezone, which is why it is stored without one — an
+ * instant would pin 08:00 to whichever offset happened to apply the day it was saved.
+ */
+export type TimeString = string; // HH:MM, 24-hour
+
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+export function isTimeString(value: string): value is TimeString {
+  return TIME_RE.test(value);
+}
+
+/** Minutes since local midnight, for comparing two TimeStrings. */
+export function minutesOfDay(time: TimeString): number {
+  const [h, m] = time.split(':').map(Number);
+  return h * 60 + m;
+}
+
+/** The wall-clock time it currently is in `timezone`, as HH:MM. */
+export function timeInTimezone(instant: Date, timezone: string): TimeString {
+  // hourCycle h23 rather than hour12:false — the latter yields "24:05" at midnight in
+  // some runtimes, which is a valid-looking string that no comparison handles.
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: timezone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(instant);
+}
+
 /**
  * The calendar day it currently is in `timezone`.
  * This is the definition of "today" for every goal-scoped calculation.

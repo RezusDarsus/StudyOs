@@ -4,6 +4,7 @@ import { occurrenceDays, parseRecurrenceConfig, type TaskSchedule } from '../dom
 import type { ParticipantScoreInput } from '../domain/scoring.js';
 import type { RecurrenceType } from '../domain/enums.js';
 import { prisma } from '../lib/prisma.js';
+import { stampForNewOccurrence } from './progression.js';
 
 /** How far ahead of today occurrences are materialised. */
 const LOOKAHEAD_DAYS = 14;
@@ -53,7 +54,12 @@ export async function ensureOccurrences(
   const goal = await prisma.goal.findUnique({
     where: { id: goalId },
     include: {
-      tasks: { where: { archivedAt: null } },
+      // The progression plan comes along for the ride so each new day can be born
+      // with its stage target already stamped on it.
+      tasks: {
+        where: { archivedAt: null },
+        include: { progression: { include: { stages: true } } },
+      },
       participants: participantIds
         ? { where: { id: { in: participantIds }, status: 'ACTIVE' } }
         : { where: { status: 'ACTIVE' } },
@@ -64,7 +70,13 @@ export async function ensureOccurrences(
   const today = goalToday(goal, now);
   const horizon = addDays(today, LOOKAHEAD_DAYS);
 
-  const rows: Array<{ taskDefinitionId: string; participantId: string; dueDate: DayString }> = [];
+  const rows: Array<{
+    taskDefinitionId: string;
+    participantId: string;
+    dueDate: DayString;
+    progressionStageIndex?: number;
+    progressionTarget?: number;
+  }> = [];
 
   for (const participant of goal.participants) {
     const from = maxDay(goal.startDate, participant.joinedOn);
@@ -74,17 +86,25 @@ export async function ensureOccurrences(
     if (to < from) continue;
 
     for (const task of goal.tasks) {
+      const stamp = stampForNewOccurrence(task.progression);
       for (const dueDate of occurrenceDays(scheduleOf(task), from, to)) {
-        rows.push({ taskDefinitionId: task.id, participantId: participant.id, dueDate });
+        rows.push({
+          taskDefinitionId: task.id,
+          participantId: participant.id,
+          dueDate,
+          ...(stamp ?? {}),
+        });
       }
     }
   }
 
   if (rows.length === 0) return;
 
-  // SQLite has no INSERT ... ON CONFLICT DO NOTHING via Prisma's `skipDuplicates`,
-  // so the already-materialised rows are read once and filtered out here. The
-  // unique index remains the real guard against duplicates.
+  // Read the already-materialised rows once and filter them out here rather than
+  // relying on createMany's `skipDuplicates`. Both work on PostgreSQL; this keeps the
+  // insert an all-or-nothing statement and makes "how many were actually new?"
+  // answerable, which matters because this runs on every read of a day. The unique
+  // index remains the real guard against duplicates.
   const existing = await prisma.taskOccurrence.findMany({
     where: {
       participantId: { in: goal.participants.map((p) => p.id) },

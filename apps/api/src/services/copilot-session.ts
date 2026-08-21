@@ -11,6 +11,13 @@ import {
   type InterviewResponse,
 } from '../ai/schemas.js';
 import {
+  promoteMultiSelect,
+  questionBudget,
+  questionTopic,
+  redundancyReason,
+  type QuestionTopic,
+} from '../ai/interview-plan.js';
+import {
   applyModelExtraction,
   createContext,
   currentSessionFacts,
@@ -30,12 +37,11 @@ import { recordEvent } from './copilot-analytics.js';
 
 // Interview limits are enforced by the backend, not by trusting the model to
 // stop. A chatty model cannot trap the user in an endless questionnaire.
-export const MIN_QUESTIONS = 2;
-// Lowered from 7 once the harness went green on quality. Interview turns are the
-// dominant cost of a session — a 5-question run spent ~38s of its ~43s here — and
-// runs were routinely reaching 5-6 questions without the extra ones changing the
-// plan. Quality is re-verified by the harness after any change to this.
-export const RECOMMENDED_MAX_QUESTIONS = 5;
+//
+// The limit that binds is the per-request budget from ai/interview-plan.ts, which is
+// smaller for someone who already said what they want. This is the absolute ceiling
+// on top of it — a backstop against a future budget being widened by mistake, not
+// something a normal run ever reaches.
 export const HARD_MAX_QUESTIONS = 10;
 
 const SESSION_TTL_HOURS = 48;
@@ -119,6 +125,27 @@ export function answeredPairs(messages: SessionMessage[]) {
   return pairs;
 }
 
+/**
+ * Every subject already put to the user, read back off the transcript.
+ *
+ * Derived rather than stored: the asked question ids are persisted but an id says
+ * nothing about what it asked, and the assistant messages already carry the full
+ * question. One less column to keep in step with reality.
+ */
+export function askedTopics(messages: SessionMessage[]): QuestionTopic[] {
+  const topics: QuestionTopic[] = [];
+  for (const message of messages) {
+    if (message.role !== 'assistant' || !message.structuredPayload) continue;
+    const payload = safeParse(message.structuredPayload) as
+      | { prompt?: string; type?: CopilotQuestion['type']; options?: string[] }
+      | null;
+    if (!payload?.prompt) continue;
+    const topic = questionTopic(payload.prompt, payload.type, payload.options);
+    if (!topics.includes(topic)) topics.push(topic);
+  }
+  return topics;
+}
+
 async function runInterviewTurn(
   session: CopilotSession & { messages: SessionMessage[] },
 ): Promise<{ result: InterviewResponse; preferences: Array<{ key: string; value: string }> }> {
@@ -129,6 +156,11 @@ async function runInterviewTurn(
   // the category the model reported — see ai/category.ts for why.
   const gate = memoryGateCategory(session.initialGoalText, session.category);
   const preferences = await getPreferencesForPrompt(session.userId, gate.category);
+
+  // Quote the model the same budget applyTurn will hold it to. It is only advice
+  // either way, but advice that contradicts the enforcement produces a model that
+  // asks a fifth question and a backend that throws it away.
+  const budget = questionBudget(session.initialGoalText);
 
   const result = await chatJson(
     {
@@ -149,8 +181,9 @@ async function runInterviewTurn(
           role: 'system',
           content: interviewSystemPrompt({
             questionCount: session.questionCount,
-            minQuestions: MIN_QUESTIONS,
-            maxQuestions: RECOMMENDED_MAX_QUESTIONS,
+            minQuestions: budget.min,
+            maxQuestions: budget.max,
+            settled: budget.stated,
           }),
         },
         {
@@ -192,15 +225,30 @@ async function applyTurn(
   let question = result.question ?? null;
   let state = result.state;
 
-  // The model does not get to repeat itself.
-  const repeated = Boolean(question && asked.includes(question.id));
-  if (repeated) question = null;
+  // How much interview this request has earned. Someone who opened with "read 20
+  // pages every evening on weekdays" gets a plan, not a questionnaire.
+  const budget = questionBudget(session.initialGoalText);
 
-  // Too few questions and the plan is generic; too many and it is a survey.
-  if (state === 'READY_TO_GENERATE' && session.questionCount < MIN_QUESTIONS) {
+  // The model does not get to ask the same thing twice — and "the same thing" means
+  // the same subject, not the same id. Three runs of "which days suit you?" under
+  // three fresh ids is what the id check alone let through, and the user answered
+  // them differently each time, so the plan was built on a contradiction.
+  const redundant = question
+    ? redundancyReason(question, {
+        askedIds: asked,
+        askedTopics: askedTopics(session.messages),
+        stated: budget.stated,
+      })
+    : null;
+  if (redundant) question = null;
+
+  // Too few questions and the plan is generic; too many and it is a survey. Both
+  // ends come from the budget, so a detailed opening message can legitimately skip
+  // the interview altogether.
+  if (state === 'READY_TO_GENERATE' && session.questionCount < budget.min) {
     state = 'NEEDS_MORE_INFORMATION';
   }
-  if (session.questionCount >= HARD_MAX_QUESTIONS) {
+  if (session.questionCount >= Math.min(budget.max, HARD_MAX_QUESTIONS)) {
     state = 'READY_TO_GENERATE';
     question = null;
   }
@@ -210,13 +258,19 @@ async function applyTurn(
     state = 'READY_TO_GENERATE';
   }
 
+  // Let the user give every answer that is true for them. The model is asked to do
+  // this itself and does not reliably: "what time of day do you read?" came back as
+  // a radio group, forcing someone who reads morning *and* night to discard half
+  // their answer.
+  if (question) question = promoteMultiSelect(question);
+
   const nextCount = question ? session.questionCount + 1 : session.questionCount;
   const nextAsked = question ? [...asked, question.id] : asked;
   const status = state === 'READY_TO_GENERATE' ? 'READY_TO_GENERATE' : 'INTERVIEWING';
 
-  // A repeated question is suppressed above. Without this, its message was still
-  // recorded and the user saw the same question twice with nothing to answer.
-  const assistantMessage = repeated && state === 'READY_TO_GENERATE'
+  // A suppressed question must not leave its message behind. Without this the user
+  // saw the question text with nothing to answer it with.
+  const assistantMessage = redundant && state === 'READY_TO_GENERATE'
     ? "That's everything I need."
     : result.assistantMessage;
 
@@ -246,7 +300,11 @@ async function applyTurn(
     assistantMessage,
     question,
     questionCount: nextCount,
-    estimatedTotal: Math.max(nextCount + (question ? 1 : 0), Math.min(RECOMMENDED_MAX_QUESTIONS, 5)),
+    // The budget's ceiling, which is now actually enforced, so "3 of ~5" can no
+    // longer become 9. Ending early is a pleasant surprise; a bar that moves its own
+    // goalpost upward is the thing being fixed. With nothing outstanding the total is
+    // what was asked, which lets the bar finish rather than stall short.
+    estimatedTotal: question ? budget.max : nextCount,
     context: toPlainObject(context),
     provenance: describeProvenance(context),
     canGenerate: status === 'READY_TO_GENERATE',

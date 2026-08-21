@@ -5,21 +5,30 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js",
     "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:export": "tsx prisma/export-data.ts",
+    "db:import": "tsx prisma/import-data.ts",
     "generate": "prisma generate",
     "seed": "tsx prisma/seed.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:acceptance": "vitest run --config vitest.acceptance.config.ts"
   },
-  "prisma": { "seed": "tsx prisma/seed.ts" },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^10.0.2",
     "@prisma/client": "^6.2.1",
     "bcryptjs": "^2.4.3",
     "fastify": "^5.2.1",
+    "pg-boss": "^12.27.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {

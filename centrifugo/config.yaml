@@ -1,0 +1,68 @@
+# Centrifugo — the realtime transport, and nothing else.
+#
+# Everything in this file is deliberately non-secret, because this file is committed.
+# The three values that must never be are supplied from the environment, which takes
+# precedence over the file (file < env < flags):
+#
+#   CENTRIFUGO_CLIENT_TOKEN_HMAC_SECRET_KEY   verifies the connection JWTs the API signs
+#   CENTRIFUGO_HTTP_API_KEY                   authenticates the API's publish calls
+#   CENTRIFUGO_CLIENT_ALLOWED_ORIGINS         space-separated list, never "*"
+#
+# docker-compose.yml declares all three with `:?`, so the stack refuses to start rather
+# than come up with an unauthenticated API or an unrestricted origin.
+#
+# There is no `engine` block, and no namespace below turns on history. That is the
+# design, not an omission: PostgreSQL holds every notification, and this process holds
+# a message only for as long as it takes to hand it to the sockets currently connected.
+# It remembers nothing across a restart, so it cannot become a second, disagreeing copy
+# of the truth. A client that was offline does not replay from here — it refetches
+# GET /api/notifications, which by construction cannot be stale.
+
+channel:
+  namespaces:
+    # One channel per user: personal:#<userId>.
+    #
+    # `#` is Centrifugo's user boundary, and `allow_user_limited_channels` is what makes
+    # it binding: the segment after it must equal the user ID in the subscriber's own
+    # connection JWT — which the API signs from the session cookie, never from anything
+    # the browser sent. Any other user asking for the same channel gets
+    # `103: permission denied` from Centrifugo, before a single byte reaches them.
+    #
+    # Note what is *not* here. `allow_subscribe_for_client` would let any authenticated
+    # connection subscribe to any channel in this namespace, which is precisely the
+    # opposite of what the namespace exists for. Centrifugo evaluates the user-limited
+    # check first and independently of that flag, so leaving it off costs nothing — and
+    # off is also the default, which means the fallback for an unmatched channel is
+    # denial rather than access.
+    #
+    # Nothing grants publish. Clients may only listen; the API is the sole publisher,
+    # and it publishes over the server API, which bypasses these checks by design.
+    - name: personal
+      allow_user_limited_channels: true
+
+client:
+  # Overridden by CENTRIFUGO_CLIENT_ALLOWED_ORIGINS. The empty list here is not a safe
+  # default and is not relied on: Centrifugo skips the Origin check altogether when this
+  # list is empty, so an unset value would accept WebSocket upgrades from any website on
+  # the internet. That is exactly why the compose file makes the variable mandatory.
+  allowed_origins: []
+
+  token:
+    # hmac_secret_key arrives from the environment. Named explicitly so that `configdoc`
+    # and a reader of this file both see which algorithm family is in use: HS256, a
+    # shared secret, which is appropriate because the only issuer is our own API.
+    hmac_secret_key: ''
+
+# Liveness for `docker compose` and for the API's own readiness probe. Returns 200
+# unconditionally: it reports that the process is up, not that it is useful, which is
+# all a container healthcheck is entitled to claim.
+health:
+  enabled: true
+
+# The admin UI ships inside the binary and stays off. It is another authenticated
+# surface to get wrong, and the product does not need it to run.
+admin:
+  enabled: false
+
+log:
+  level: info

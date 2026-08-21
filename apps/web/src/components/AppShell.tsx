@@ -12,9 +12,10 @@ import {
   Zap,
 } from 'lucide-react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { CopilotProvider } from './copilot/CopilotProvider';
 import { useAuth } from '../lib/auth';
-import { api } from '../lib/api';
-import { useAsync, ProgressBar } from './ui';
+import { NotificationsProvider, useNotifications } from '../lib/notifications';
+import { ProgressBar } from './ui';
 
 const navItems = [
   { icon: Home, label: 'Home', to: '/app' },
@@ -33,15 +34,12 @@ const mobileTabs = [
   { icon: User, label: 'Profile', to: '/app/profile' },
 ];
 
-function useUnreadCount() {
-  const { data } = useAsync(() => api.get<{ unread: number }>('/notifications'), []);
-  return data?.unread ?? 0;
-}
-
 function Sidebar() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const unread = useUnreadCount();
+  // Both this and the mobile header read the one shared count, so the two badges can never
+  // disagree, and both update the moment a notification arrives rather than on next load.
+  const { unread } = useNotifications();
 
   return (
     <aside
@@ -240,7 +238,7 @@ function MobileNav() {
 
 /** Mobile-only top bar, so the logo and notifications stay reachable. */
 function MobileHeader() {
-  const unread = useUnreadCount();
+  const { unread } = useNotifications();
   return (
     <header
       className="lg:hidden sticky top-0 z-40 flex items-center justify-between px-4 py-3"
@@ -283,18 +281,24 @@ function MobileHeader() {
 
 export default function AppShell() {
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: '#f5f4ff' }}>
-      <a href="#main" className="skip-link">
-        Skip to content
-      </a>
-      <Sidebar />
-      <div className="flex-1 flex flex-col min-w-0">
-        <MobileHeader />
-        <main className="flex-1 overflow-y-auto min-w-0 pb-24 lg:pb-0" id="main">
-          <Outlet />
-        </main>
-      </div>
-      <MobileNav />
-    </div>
+    // Inside the authenticated shell, which is what keeps the socket off the landing, login
+    // and register pages: there is no session cookie to authenticate a connection there.
+    <NotificationsProvider>
+      <CopilotProvider>
+        <div className="flex h-screen overflow-hidden" style={{ background: '#f5f4ff' }}>
+          <a href="#main" className="skip-link">
+            Skip to content
+          </a>
+          <Sidebar />
+          <div className="flex-1 flex flex-col min-w-0">
+            <MobileHeader />
+            <main className="flex-1 overflow-y-auto min-w-0 pb-24 lg:pb-0" id="main">
+              <Outlet />
+            </main>
+          </div>
+          <MobileNav />
+        </div>
+      </CopilotProvider>
+    </NotificationsProvider>
   );
 }

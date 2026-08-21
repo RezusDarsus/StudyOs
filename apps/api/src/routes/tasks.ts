@@ -1,58 +1,44 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { isDayString } from '../domain/dates.js';
+import { isDayString, isTimeString } from '../domain/dates.js';
 import { validateRecurrence, type RecurrenceConfig } from '../domain/recurrence.js';
-import { availableTasksOn, computeStreak, dailyScore } from '../domain/scoring.js';
+import { stageLabel } from '../domain/progression.js';
+import { computeStreak, dailyScore } from '../domain/scoring.js';
 import { badRequest, forbidden, notFound } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
-import { evaluateAchievements, grantReward, notify, revertRewardFor } from '../services/engagement.js';
+import { loadUserDay, totalsFor } from '../services/daily.js';
+import { evaluateAchievements, grantReward, revertRewardFor } from '../services/engagement.js';
+import { notify } from '../services/notifications.js';
 import { loadGoalForUser } from '../services/goals.js';
 import { buildScoreInput, ensureOccurrences, goalToday } from '../services/occurrences.js';
+import {
+  clearFeedback,
+  feedbackByOccurrence,
+  isDifficultyRating,
+  recordFeedback,
+} from '../services/task-feedback.js';
 
 export default async function taskRoutes(app: FastifyInstance) {
   /**
    * Everything the Home screen needs to answer "what should I do today?".
    * Grouped by goal, because that is how the dashboard presents it.
+   *
+   * The numbers come from services/daily.ts, which the 08:00 and 20:30 notification
+   * jobs also read — so a summary can never quote a figure this screen disagrees with.
    */
   app.get('/today', { preHandler: app.requireAuth }, async (req) => {
-    const userId = req.user!.id;
-
-    const participations = await prisma.goalParticipant.findMany({
-      where: { userId, status: 'ACTIVE', goal: { status: 'ACTIVE' } },
-      include: { goal: true },
-    });
-
-    let totalRequired = 0;
-    let totalCompleted = 0;
-    let coinsToday = 0;
-    let bestStreak = 0;
+    const days = await loadUserDay(req.user!.id);
+    const summary = totalsFor(days);
 
     const groups = await Promise.all(
-      participations.map(async ({ goal, ...participant }) => {
-        await ensureOccurrences(goal.id, [participant.id]);
-        const today = goalToday(goal);
+      days.map(async (day) => {
+        // What the user already said about today, so a rating given an hour ago
+        // reads as given rather than being asked for a second time.
+        const ratings = await feedbackByOccurrence(day.occurrences.map((o) => o.id));
 
-        const tasks = await prisma.taskDefinition.findMany({
-          where: { goalId: goal.id, archivedAt: null },
-        });
-        const input = await buildScoreInput(goal, participant, today, tasks);
-
-        const availableIds = new Set(availableTasksOn(input, today));
-        const occurrences = await prisma.taskOccurrence.findMany({
-          where: { participantId: participant.id, dueDate: today },
-          include: { taskDefinition: true },
-        });
-
-        const score = dailyScore(input, today);
-        const streak = computeStreak(input, today);
-        totalRequired += score.required;
-        totalCompleted += score.completed;
-        bestStreak = Math.max(bestStreak, streak.current);
-
-        const items = occurrences
-          .filter((o) => availableIds.has(o.taskDefinitionId) || o.status === 'COMPLETED')
+        const items = day.occurrences
           .map((o) => {
-            if (o.status === 'COMPLETED') coinsToday += o.taskDefinition.reward;
+            const plan = o.taskDefinition.progression;
             return {
               occurrenceId: o.id,
               taskId: o.taskDefinitionId,
@@ -62,17 +48,34 @@ export default async function taskRoutes(app: FastifyInstance) {
               reminderTime: o.taskDefinition.reminderTime,
               status: o.status,
               dueDate: o.dueDate,
+              /** TOO_EASY | JUST_RIGHT | TOO_HARD, or null if unrated. */
+              feedback: ratings.get(o.id) ?? null,
+              // The target this day was stamped with, not the plan's current one.
+              // On a day generated before an advance, these disagree — and the
+              // stamp is the honest answer to "what was I asked to do today?".
+              progression:
+                plan && o.progressionTarget !== null
+                  ? {
+                      target: o.progressionTarget,
+                      unitLabel: plan.unitLabel,
+                      metricType: plan.metricType,
+                      stageLabel: stageLabel(
+                        o.progressionStageIndex ?? plan.currentStageIndex,
+                        plan.stages.length,
+                      ),
+                    }
+                  : null,
             };
           })
           .sort((a, b) => (a.reminderTime ?? '99:99').localeCompare(b.reminderTime ?? '99:99'));
 
         return {
-          goalId: goal.id,
-          goalTitle: goal.title,
-          category: goal.category,
-          visibility: goal.visibility,
-          streak: streak.current,
-          today,
+          goalId: day.goal.id,
+          goalTitle: day.goal.title,
+          category: day.goal.category,
+          visibility: day.goal.visibility,
+          streak: day.streak.current,
+          today: day.today,
           tasks: items,
         };
       }),
@@ -81,11 +84,11 @@ export default async function taskRoutes(app: FastifyInstance) {
     return {
       groups: groups.filter((g) => g.tasks.length > 0),
       summary: {
-        required: totalRequired,
-        completed: totalCompleted,
-        percent: totalRequired === 0 ? null : Math.round((totalCompleted / totalRequired) * 100),
-        coinsToday,
-        streak: bestStreak,
+        required: summary.required,
+        completed: summary.completed,
+        percent: summary.percent,
+        coinsToday: summary.coinsToday,
+        streak: summary.streak,
       },
     };
   });
@@ -149,7 +152,12 @@ export default async function taskRoutes(app: FastifyInstance) {
     const unlocked = await evaluateAchievements(userId, streak.current);
 
     if (score.required > 0 && score.completed === score.required) {
-      await notify(userId, 'PROGRESS', `${goal.title}: today is done`, '', { goalId: goal.id });
+      await notify({
+        userId,
+        type: 'PROGRESS',
+        title: `${goal.title}: today is done`,
+        data: { goalId: goal.id },
+      });
     }
 
     return { ok: true, reward, streak: streak.current, today: score, unlocked };
@@ -202,6 +210,40 @@ export default async function taskRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  // ------------------------------------------------------- difficulty feedback
+  //
+  // Hung off the occurrence, not the task definition, so the day being rated is
+  // whatever day that row is — never a value the client gets to name. Rating a day
+  // changes nothing on its own: it is evidence the Copilot may cite and the
+  // progression review deliberately ignores.
+
+  app.post('/task-occurrences/:id/feedback', { preHandler: app.requireAuth }, async (req) => {
+    const { id } = z.object({ id: z.string() }).parse(req.params);
+    const body = z
+      .object({
+        rating: z.string().refine(isDifficultyRating, 'Unknown rating'),
+        note: z.string().trim().max(500).optional(),
+      })
+      .parse(req.body);
+
+    const feedback = await recordFeedback({
+      occurrenceId: id,
+      userId: req.user!.id,
+      rating: body.rating,
+      note: body.note,
+    });
+    // Said out loud in the response because it is the whole contract of this
+    // endpoint: the plan is untouched, and the client should not redraw as if
+    // something moved.
+    return { ok: true, feedback, changedPlan: false };
+  });
+
+  app.delete('/task-occurrences/:id/feedback', { preHandler: app.requireAuth }, async (req) => {
+    const { id } = z.object({ id: z.string() }).parse(req.params);
+    await clearFeedback({ occurrenceId: id, userId: req.user!.id });
+    return { ok: true, feedback: null, changedPlan: false };
+  });
+
   // ------------------------------------------------------- task definitions
 
   app.patch('/tasks/:id', { preHandler: app.requireAuth }, async (req) => {
@@ -211,10 +253,7 @@ export default async function taskRoutes(app: FastifyInstance) {
         title: z.string().trim().min(1).max(120).optional(),
         description: z.string().trim().max(500).optional(),
         reward: z.number().int().min(0).max(1000).optional(),
-        reminderTime: z
-          .string()
-          .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
-          .nullish(),
+        reminderTime: z.string().refine(isTimeString, 'Use HH:MM').nullish(),
         endDate: z.string().refine(isDayString).nullish(),
         recurrenceType: z.string().optional(),
         recurrenceConfig: z.record(z.unknown()).optional(),

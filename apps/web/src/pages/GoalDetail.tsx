@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowLeft, Calendar, LogOut, Plus, Settings, Share2, Sparkles, Trash2, UserPlus, Users } from 'lucide-react';
+import { ArrowLeft, Calendar, Gauge, LogOut, Plus, Settings, Share2, Sparkles, Trash2, TrendingUp, UserPlus, Users } from 'lucide-react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import TaskRow from '../components/TaskRow';
 import {
@@ -16,12 +16,16 @@ import {
 import Leaderboard from '../components/LeaderboardPanel';
 import { AddTaskModal, EditGoalModal } from '../components/GoalManage';
 import ShareGoalModal from '../components/ShareGoalModal';
-import GoalCopilotModal from '../components/GoalCopilotModal';
+import ProgressionModal from '../components/ProgressionPanel';
+import AdjustmentOffers from '../components/AdjustmentOffers';
+import { useCopilot, useCopilotGoalContext } from '../components/copilot/CopilotProvider';
 import { ApiError, api } from '../lib/api';
 import {
   CATEGORY_EMOJI,
   CATEGORY_LABEL,
+  describeDifficulty,
   describeRecurrence,
+  formatTarget,
   type Friend,
   type GoalDetailResponse,
   type TodayTask,
@@ -39,7 +43,6 @@ export default function GoalDetail() {
   const [editOpen, setEditOpen] = useState(false);
   const [addTaskOpen, setAddTaskOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
-  const [copilotOpen, setCopilotOpen] = useState(false);
   const [joining, setJoining] = useState(false);
 
   const { data, loading, error, reload } = useAsync(
@@ -50,6 +53,13 @@ export default function GoalDetail() {
   const today = useAsync(
     () => api.get<{ groups: Array<{ goalId: string; tasks: TodayTask[] }> }>('/today'),
     [id],
+  );
+
+  // Lets the floating Copilot offer to talk about *this* goal instead of asking
+  // which one. Only for goals the user is actually in.
+  const copilot = useCopilot();
+  useCopilotGoalContext(
+    data?.goal.isParticipant ? { id: data.goal.id, title: data.goal.title } : null,
   );
 
   if (loading) {
@@ -245,7 +255,9 @@ export default function GoalDetail() {
           {goal.isParticipant && (
             <button
               className="btn-secondary px-4 py-2.5 text-sm flex items-center gap-2"
-              onClick={() => setCopilotOpen(true)}
+              onClick={() =>
+                copilot.open({ view: 'goal', goalId: goal.id, goalTitle: goal.title })
+              }
             >
               <Sparkles size={15} /> Ask Copilot
             </button>
@@ -419,7 +431,10 @@ export default function GoalDetail() {
       {/* ------------------------------------------------------- tasks */}
       {tab === 'Tasks' && (
         <div className="card shadow-card p-5">
-          <TaskList tasks={tasks} />
+          {/* Above the list, because it is about the list. Renders nothing at all
+              unless the user's own ratings have actually said something. */}
+          {goal.isParticipant && <AdjustmentOffers goalId={goal.id} onChanged={reload} />}
+          <TaskList tasks={tasks} isOwner={goal.isOwner} onChanged={reload} />
           {goal.isOwner && (
             <button
               className="w-full mt-3 py-3.5 rounded-xl flex items-center justify-center gap-2"
@@ -486,13 +501,6 @@ export default function GoalDetail() {
         </div>
       )}
 
-      <GoalCopilotModal
-        goalId={goal.id}
-        goalTitle={goal.title}
-        open={copilotOpen}
-        onClose={() => setCopilotOpen(false)}
-      />
-
       <InviteModal
         goalId={goal.id}
         goalTitle={goal.title}
@@ -531,7 +539,25 @@ export default function GoalDetail() {
   );
 }
 
-function TaskList({ tasks }: { tasks: GoalDetailResponse['tasks'] }) {
+/**
+ * The goal's tasks as definitions rather than as today's to-do list. Tasks that
+ * climb a ladder say where they currently stand, and the owner can open the full
+ * progression from here.
+ */
+function TaskList({
+  tasks,
+  isOwner = false,
+  onChanged,
+}: {
+  tasks: GoalDetailResponse['tasks'];
+  isOwner?: boolean;
+  onChanged?: () => void;
+}) {
+  // One modal for the whole list, so only the task actually being looked at gets
+  // fetched.
+  const [openTask, setOpenTask] = useState<GoalDetailResponse['tasks'][number] | null>(null);
+  const [stale, setStale] = useState(false);
+
   if (tasks.length === 0) {
     return <p style={{ fontSize: '0.85rem', color: '#8b88b0' }}>No tasks yet.</p>;
   }
@@ -549,17 +575,104 @@ function TaskList({ tasks }: { tasks: GoalDetailResponse['tasks'] }) {
               style={{ fontSize: '0.88rem', fontWeight: 600, color: '#1a1635', fontFamily: 'Plus Jakarta Sans' }}
             >
               {task.title}
+              {/* The target the task is asking for at the moment — the same
+                  wording as on the day's own task row. */}
+              {task.progression?.currentTarget !== null && task.progression && (
+                <span
+                  className="ml-2 whitespace-nowrap"
+                  style={{ fontSize: '0.75rem', fontWeight: 800, color: '#7c3aed' }}
+                >
+                  {formatTarget(task.progression.currentTarget!, task.progression)}
+                </span>
+              )}
             </div>
             <div style={{ fontSize: '0.72rem', color: '#b8b5d5', marginTop: 1 }}>
               {describeRecurrence(task)}
               {task.reminderTime ? ` · ${task.reminderTime}` : ''}
             </div>
+            {/* What the user has been saying about this task, in their words. An
+                observation only — it is stated, never acted on, and the sentence
+                itself carries the meaning so the tint is only reinforcement. */}
+            {task.difficulty && describeDifficulty(task.difficulty) && (
+              <div
+                className="flex items-center gap-1 mt-1"
+                style={{
+                  fontSize: '0.72rem',
+                  color:
+                    task.difficulty.signal === 'TOO_EASY' || task.difficulty.signal === 'TOO_HARD'
+                      ? '#7c3aed'
+                      : '#8b88b0',
+                }}
+              >
+                <Gauge size={11} aria-hidden="true" />
+                {describeDifficulty(task.difficulty)}
+              </div>
+            )}
           </div>
+
+          {/* Owners get here whether or not a ladder exists — the modal offers to
+              set one up. Everyone else only sees the button when there is
+              something to look at. Deliberately terse: on a narrow screen the
+              task's own name matters more than this, and the full "Stage 2 of 4"
+              is spelled out in the panel and on the day's task row. */}
+          {(task.progression || isOwner) && (
+            <button
+              onClick={() => setOpenTask(task)}
+              title={
+                task.progression
+                  ? `${task.progression.stageLabel} — open progression`
+                  : 'Add a progression'
+              }
+              aria-label={
+                task.progression
+                  ? `${task.progression.stageLabel} of ${task.title} — open progression`
+                  : `Add a progression to ${task.title}`
+              }
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 flex-shrink-0"
+              style={{
+                background: task.progression ? '#f0ebff' : '#f5f4ff',
+                color: task.progression ? '#7c3aed' : '#8b88b0',
+                border: `1px solid ${task.progression ? '#ddd0ff' : '#e8e6f5'}`,
+                fontSize: 11,
+                fontWeight: 700,
+                fontFamily: 'Plus Jakarta Sans',
+              }}
+            >
+              <TrendingUp size={11} />
+              {task.progression
+                ? `${task.progression.currentStageIndex + 1}/${task.progression.stageCount}`
+                : // No ladder yet, so there is no number to show. The glyph alone
+                  // keeps a long task name from being clipped on a phone; the
+                  // words are on the button's label and its tooltip.
+                  <Plus size={11} />}
+            </button>
+          )}
+
           <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#f59e0b' }}>
             +{task.reward}🪙
           </span>
         </div>
       ))}
+
+      {openTask && (
+        <ProgressionModal
+          open
+          taskId={openTask.id}
+          taskTitle={openTask.title}
+          isOwner={isOwner}
+          onClose={() => {
+            setOpenTask(null);
+            // Refetching the goal puts the page back into its loading state, which
+            // would tear the modal down mid-read. So the chip's "Stage 2 of 4" is
+            // brought up to date once the user is done looking.
+            if (stale) {
+              setStale(false);
+              onChanged?.();
+            }
+          }}
+          onChanged={() => setStale(true)}
+        />
+      )}
     </div>
   );
 }

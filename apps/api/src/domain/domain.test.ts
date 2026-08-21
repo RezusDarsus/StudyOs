@@ -5,7 +5,10 @@ import {
   daysBetween,
   eachDay,
   isDayString,
+  isTimeString,
+  minutesOfDay,
   startOfWeek,
+  timeInTimezone,
   todayIn,
   weekdayOf,
 } from './dates.js';
@@ -77,6 +80,57 @@ describe('dates', () => {
     expect(startOfWeek('2026-08-19')).toBe('2026-08-17'); // Monday
     expect(startOfWeek('2026-08-17')).toBe('2026-08-17');
     expect(startOfWeek('2026-08-23')).toBe('2026-08-17'); // Sunday belongs to that week
+  });
+});
+
+describe('times of day', () => {
+  it('validates HH:MM in 24-hour form', () => {
+    expect(isTimeString('08:00')).toBe(true);
+    expect(isTimeString('20:30')).toBe(true);
+    expect(isTimeString('00:00')).toBe(true);
+    expect(isTimeString('23:59')).toBe(true);
+    // The shapes a hand-typed or hand-migrated value actually takes.
+    expect(isTimeString('8:00')).toBe(false);
+    expect(isTimeString('24:00')).toBe(false);
+    expect(isTimeString('23:60')).toBe(false);
+    expect(isTimeString('08:00:00')).toBe(false);
+    expect(isTimeString('08:00 PM')).toBe(false);
+    expect(isTimeString('')).toBe(false);
+  });
+
+  it('orders two times by minutes since midnight', () => {
+    expect(minutesOfDay('00:00')).toBe(0);
+    expect(minutesOfDay('08:00')).toBe(480);
+    expect(minutesOfDay('20:30')).toBe(1230);
+    expect(minutesOfDay('23:59')).toBe(1439);
+    // Why this exists: "20:30" < "08:00" is false as a string compare, but the
+    // scheduler needs to know the evening notification comes after the morning one.
+    expect(minutesOfDay('20:30')).toBeGreaterThan(minutesOfDay('08:00'));
+  });
+
+  it('reads the wall clock in a specific timezone', () => {
+    // 04:00 UTC is 08:00 in Tbilisi (UTC+4) — the morning notification's moment.
+    const instant = new Date('2026-08-19T04:00:00Z');
+    expect(timeInTimezone(instant, 'UTC')).toBe('04:00');
+    expect(timeInTimezone(instant, 'Asia/Tbilisi')).toBe('08:00');
+    expect(timeInTimezone(instant, 'Asia/Kolkata')).toBe('09:30'); // half-hour offset
+  });
+
+  it('reports local midnight as 00:00, never 24:00', () => {
+    // The h23 hour cycle exists for exactly this: some runtimes render midnight as
+    // hour 24 with hour12:false, and "24:00" compares wrong against every stored time.
+    const midnightTbilisi = new Date('2026-08-19T20:00:00Z');
+    expect(timeInTimezone(midnightTbilisi, 'Asia/Tbilisi')).toBe('00:00');
+    expect(isTimeString(timeInTimezone(midnightTbilisi, 'Asia/Tbilisi'))).toBe(true);
+  });
+
+  it('reads the same instant as a different day and time either side of midnight', () => {
+    // The pair a scheduled job compares: 20:05 UTC is already the 20th in Tbilisi.
+    const instant = new Date('2026-08-19T20:05:00Z');
+    expect(dayInTimezone(instant, 'UTC')).toBe('2026-08-19');
+    expect(timeInTimezone(instant, 'UTC')).toBe('20:05');
+    expect(dayInTimezone(instant, 'Asia/Tbilisi')).toBe('2026-08-20');
+    expect(timeInTimezone(instant, 'Asia/Tbilisi')).toBe('00:05');
   });
 });
 

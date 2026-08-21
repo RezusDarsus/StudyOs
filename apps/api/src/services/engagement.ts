@@ -1,5 +1,5 @@
 import { prisma } from '../lib/prisma.js';
-import type { NotificationType } from '../domain/enums.js';
+import { notify } from './notifications.js';
 
 /** Coins needed per level. Deliberately simple — motivation, not an economy. */
 const COINS_PER_LEVEL = 500;
@@ -12,27 +12,6 @@ export const levelProgress = (totalCoins: number) => ({
   perLevel: COINS_PER_LEVEL,
   percent: Math.round(((totalCoins % COINS_PER_LEVEL) / COINS_PER_LEVEL) * 100),
 });
-
-export async function notify(
-  userId: string,
-  type: NotificationType,
-  title: string,
-  body = '',
-  data: Record<string, unknown> = {},
-) {
-  const profile = await prisma.profile.findUnique({ where: { userId } });
-  if (profile) {
-    const muted =
-      (type === 'REMINDER' && !profile.notifyTaskReminders) ||
-      (type === 'FRIEND' && !profile.notifyFriendActivity) ||
-      (type === 'LEADERBOARD' && !profile.notifyLeaderboardUpdate) ||
-      (type === 'ACHIEVEMENT' && !profile.notifyAchievements);
-    if (muted) return null;
-  }
-  return prisma.notification.create({
-    data: { userId, type, title, body, data: JSON.stringify(data) },
-  });
-}
 
 /** Award coins and keep the denormalised profile total in step. */
 export async function grantReward(opts: {
@@ -117,13 +96,13 @@ export async function unlockAchievement(userId: string, code: AchievementCode) {
   if (achievement.reward > 0) {
     await grantReward({ userId, amount: achievement.reward, reason: 'ACHIEVEMENT' });
   }
-  await notify(
+  await notify({
     userId,
-    'ACHIEVEMENT',
-    `You unlocked ${achievement.title}`,
-    achievement.description,
-    { achievementCode: achievement.code },
-  );
+    type: 'ACHIEVEMENT',
+    title: `You unlocked ${achievement.title}`,
+    body: achievement.description,
+    data: { achievementCode: achievement.code },
+  });
   return achievement;
 }
 

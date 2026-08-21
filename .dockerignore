@@ -1,0 +1,41 @@
+# The build context is the repository root, because this is an npm workspaces monorepo:
+# both images need the root package-lock.json to install reproducibly, so neither can
+# use its own app directory as the context.
+#
+# Everything here is either rebuilt inside the image, useless to it, or must never be
+# copied into it.
+
+# Rebuilt by `npm ci`. Copying a host node_modules would also carry the host's platform
+# binaries — the Prisma query engine among them — into a Linux image.
+node_modules
+**/node_modules
+
+# Rebuilt by the build stage.
+dist
+**/dist
+*.tsbuildinfo
+
+# Secrets. .env.example is a template and is allowed; a real .env is not, and would end
+# up baked into an image layer where `docker history` can read it back out.
+.env
+.env.*
+!.env.example
+
+# Development leftovers with real data in them: the pre-migration SQLite database and a
+# full table dump including password hashes.
+*.db
+*.db-journal
+apps/api/prisma/data-export.json
+
+# History and tooling the running application has no use for.
+.git
+.gitignore
+.github
+.claude
+.figma-src
+.idea
+.vscode
+README.md
+docker-compose.yml
+**/Dockerfile
+.dockerignore

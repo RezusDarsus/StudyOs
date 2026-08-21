@@ -1,7 +1,9 @@
 import { addDays, todayIn } from '../domain/dates.js';
-import type { RecurrenceType } from '../domain/enums.js';
+import type { ProgressionMetric, RecurrenceType } from '../domain/enums.js';
+import { validateStages } from '../domain/progression.js';
 import { validateRecurrence, type RecurrenceConfig } from '../domain/recurrence.js';
 import type { DraftTaskInput, GoalDraftInput } from './schemas.js';
+import { toSecondPerson } from './voice.js';
 
 // The deterministic safety net between the model and the database.
 //
@@ -11,6 +13,13 @@ import type { DraftTaskInput, GoalDraftInput } from './schemas.js';
 // anything genuinely broken is rejected with a reason.
 
 export class DraftValidationError extends Error {}
+
+/** A build-up ladder the model proposed, once it has been made safe. */
+export interface NormalizedProgression {
+  metricType: ProgressionMetric;
+  unitLabel: string;
+  stages: Array<{ target: number; minDays: number }>;
+}
 
 export interface NormalizedTask {
   title: string;
@@ -22,6 +31,8 @@ export interface NormalizedTask {
   reason: string;
   /** Computed by the application, never by the model. */
   reward: number;
+  /** Null unless this task genuinely gets harder over time. */
+  progression: NormalizedProgression | null;
 }
 
 export interface NormalizedDraft {
@@ -39,6 +50,20 @@ export interface NormalizedDraft {
 
 const MAX_TASKS = 8;
 const MAX_DAILY_MINUTES = 240;
+
+/**
+ * A model-proposed ladder is held to tighter bounds than a hand-made one.
+ *
+ * Phase 1 allows up to 12 stages because someone typing them out knows what they
+ * want. A model given twelve slots fills them, and "walk 15, 16, 17, 18…" is not
+ * a plan, it is a spreadsheet. Six rungs is enough to express a real build-up.
+ *
+ * MIN_STAGE_DAYS exists for the same reason: a stage the model set to one day is a
+ * ladder pretending to be a schedule.
+ */
+const MAX_AI_STAGES = 6;
+const MIN_STAGE_DAYS = 3;
+const MAX_STAGE_DAYS = 28;
 
 /**
  * Where tolerance stops.
@@ -143,6 +168,63 @@ function normalizeRecurrence(
   return { type, config };
 }
 
+/**
+ * Make a proposed build-up ladder safe, or drop it.
+ *
+ * Dropping rather than throwing is the whole point. A ladder is an enhancement the
+ * user never asked for; losing a perfectly good plan because the model wrote
+ * "15, 15, 20" would be trading something they wanted for something they did not.
+ * So every failure here returns null and says so in `adjustments`.
+ */
+function normalizeProgression(
+  task: DraftTaskInput,
+  recurrenceType: RecurrenceType,
+  adjustments: string[],
+): NormalizedProgression | null {
+  const proposed = task.progression;
+  if (!proposed) return null;
+
+  const drop = (why: string) => {
+    adjustments.push(`Dropped the build-up on "${task.title}": ${why}`);
+    return null;
+  };
+
+  // A one-off cannot climb a ladder — there is no second day to climb on.
+  if (recurrenceType === 'ONCE') return drop('a one-off task has nothing to build up over');
+
+  const metricType = proposed.metricType;
+
+  // Round first, then require each rung to clear the one below it. Rounding can
+  // flatten 2.4 and 2.6 into the same number, which is exactly the kind of ladder
+  // that wastes a week of someone's time, so the check happens after.
+  const rungs: Array<{ target: number; minDays: number }> = [];
+  for (const stage of proposed.stages) {
+    const target = Math.round(stage.target);
+    if (target <= 0) continue;
+    if (rungs.length > 0 && target <= rungs[rungs.length - 1].target) continue;
+    if (metricType === 'MINUTES' && target > MAX_DAILY_MINUTES) break;
+    rungs.push({
+      target,
+      minDays: Math.min(MAX_STAGE_DAYS, Math.max(MIN_STAGE_DAYS, Math.round(stage.minDays ?? 7))),
+    });
+    if (rungs.length === MAX_AI_STAGES) break;
+  }
+
+  if (rungs.length < 2) return drop('it had fewer than two real steps');
+  if (proposed.stages.length > rungs.length) {
+    adjustments.push(
+      `"${task.title}" build-up trimmed from ${proposed.stages.length} steps to ${rungs.length}`,
+    );
+  }
+
+  // The same check a hand-made ladder gets. If it still complains, the ladder goes
+  // rather than the plan.
+  const errors = validateStages(rungs.map((r, i) => ({ stageIndex: i, ...r })));
+  if (errors.length > 0) return drop(errors.join(' '));
+
+  return { metricType, unitLabel: proposed.unitLabel.trim(), stages: rungs };
+}
+
 export function validateAndNormalizeDraft(
   input: GoalDraftInput,
   timezone: string,
@@ -175,7 +257,6 @@ export function validateAndNormalizeDraft(
 
   const normalizedTasks: NormalizedTask[] = tasks.map((task) => {
     const { type, config } = normalizeRecurrence(task, adjustments);
-
     let minutes = task.estimatedMinutes ?? null;
     if (minutes !== null && minutes > PLAUSIBLE.minutes) {
       throw new DraftValidationError(
@@ -187,6 +268,29 @@ export function validateAndNormalizeDraft(
       minutes = MAX_DAILY_MINUTES;
     }
 
+    const progression = normalizeProgression(task, type, adjustments);
+
+    // A minute ladder and a flat "35 min" are two claims about the same day, and
+    // the day can only ask for one number. The ladder wins, because its first rung
+    // is what the user actually starts on — otherwise the plan promises 35 minutes
+    // and day one quietly asks for 15.
+    if (progression?.metricType === 'MINUTES') {
+      const first = progression.stages[0].target;
+      if (minutes !== null && minutes !== first) {
+        adjustments.push(
+          `"${task.title}" starts at ${first} minutes, not ${minutes} — the build-up sets the pace`,
+        );
+      }
+      minutes = first;
+    }
+
+    // The user reads this sentence on their own plan, so it has to be addressed to
+    // them. The model is told this and still occasionally writes a case note.
+    const reason = toSecondPerson(task.reason?.trim() ?? '');
+    if (reason.changed) {
+      adjustments.push(`Rewrote the note on "${task.title}" to address you directly`);
+    }
+
     return {
       title: task.title.trim(),
       description: task.description?.trim() ?? '',
@@ -194,17 +298,26 @@ export function validateAndNormalizeDraft(
       recurrenceConfig: config,
       estimatedMinutes: minutes,
       preferredTime: task.preferredTime ?? null,
-      reason: task.reason?.trim() ?? '',
+      reason: reason.text,
+      // Derived from the starting rung, and it stays there. Rewarding the top of a
+      // ladder would pay out for effort not yet made, and re-pricing the task on
+      // every stage change would let someone talk the Copilot into a steep climb
+      // and out-earn everyone on the leaderboard for the same walk.
       reward: rewardForTask({ estimatedMinutes: minutes }),
+      progression,
     };
   });
 
-  // Guard against a plan nobody could sustain, e.g. six daily hour-long tasks.
-  const weeklyMinutes = normalizedTasks.reduce(
-    (sum, task) =>
-      sum + (task.estimatedMinutes ?? 15) * weeklyFrequency(task.recurrenceType, task.recurrenceConfig),
-    0,
-  );
+  // Guard against a plan nobody could sustain, e.g. six daily hour-long tasks. A
+  // laddered task is measured at the TOP of its ladder: the plan is a promise to
+  // get there, and "sustainable at week one" is not the question being asked.
+  const weeklyMinutes = normalizedTasks.reduce((sum, task) => {
+    const perSession =
+      task.progression?.metricType === 'MINUTES'
+        ? task.progression.stages[task.progression.stages.length - 1].target
+        : (task.estimatedMinutes ?? 15);
+    return sum + perSession * weeklyFrequency(task.recurrenceType, task.recurrenceConfig);
+  }, 0);
   if (weeklyMinutes > 21 * 60) {
     throw new DraftValidationError(
       'That plan would take an unrealistic amount of time each week. Try generating it again.',
@@ -237,14 +350,18 @@ export function validateAndNormalizeDraft(
   }
   if (targetType === 'HABIT') targetValue = null;
 
+  const rationale = toSecondPerson(input.rationale.trim());
+  if (rationale.changed) adjustments.push('Rewrote the rationale to address you directly');
+  const description = toSecondPerson(input.description?.trim() ?? '');
+
   return {
     title: input.title.trim(),
-    description: input.description?.trim() ?? '',
+    description: description.text,
     category: input.category,
     targetType,
     targetValue,
     deadline,
-    rationale: input.rationale.trim(),
+    rationale: rationale.text,
     tasks: normalizedTasks,
     adjustments,
   };

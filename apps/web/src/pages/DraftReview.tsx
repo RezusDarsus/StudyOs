@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import {
   ArrowLeft,
   Check,
+  ChevronRight,
   Clock,
   MessageSquare,
   Pencil,
@@ -10,14 +11,19 @@ import {
   ThumbsDown,
   ThumbsUp,
   Trash2,
+  TrendingUp,
 } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Badge, ErrorState, Modal, Skeleton, useAsync, useToast } from '../components/ui';
 import { ApiError, api } from '../lib/api';
+import { canSubmit } from '../lib/slash';
 import {
   CATEGORY_EMOJI,
   CATEGORY_LABEL,
+  describeDraftLadder,
   describeDraftRecurrence,
+  formatTarget,
+  type DraftProgression,
   type DraftTask,
   type GoalDraft,
 } from '../lib/types';
@@ -240,6 +246,8 @@ export default function DraftReview() {
               </button>
             </div>
 
+            {task.progression && <LadderPreview progression={task.progression} />}
+
             {task.reason && (
               <div
                 className="mt-3 px-3 py-2.5 rounded-xl"
@@ -355,6 +363,68 @@ export default function DraftReview() {
   );
 }
 
+/**
+ * The proposed build-up, shown before the user agrees to it.
+ *
+ * A plan whose amounts grow later is a different plan from a flat one, so it is
+ * spelled out here rather than discovered in week three. The starting rung is named
+ * in words as well as highlighted — the highlight alone would leave anyone who
+ * cannot distinguish it guessing which number they start on.
+ */
+function LadderPreview({ progression }: { progression: DraftProgression }) {
+  const { stages } = progression;
+  const holds = [...new Set(stages.map((stage) => stage.minDays))].sort((a, b) => a - b);
+  const holdText =
+    holds.length === 1
+      ? `at least ${holds[0]} days`
+      : `at least ${holds[0]}–${holds[holds.length - 1]} days`;
+
+  return (
+    <div
+      className="mt-3 px-3 py-2.5 rounded-xl"
+      style={{ background: '#f5f4ff', border: '1px solid #e8e6f5' }}
+    >
+      <span
+        className="inline-flex items-center gap-1.5"
+        style={{
+          fontSize: '0.7rem',
+          fontWeight: 700,
+          color: '#7c3aed',
+          fontFamily: 'Plus Jakarta Sans',
+        }}
+      >
+        <TrendingUp size={12} aria-hidden="true" />
+        Builds up over time
+      </span>
+
+      <div className="flex items-center gap-1 mt-2 flex-wrap">
+        {stages.map((stage, i) => (
+          <Fragment key={i}>
+            {i > 0 && <ChevronRight size={12} style={{ color: '#b8b5d5' }} aria-hidden="true" />}
+            <span
+              className="px-2 py-1 rounded-md"
+              style={{
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                background: i === 0 ? '#7c3aed' : '#fff',
+                color: i === 0 ? '#fff' : '#4b4870',
+                border: i === 0 ? '1px solid #7c3aed' : '1px solid #e8e6f5',
+              }}
+            >
+              {formatTarget(stage.target, progression)}
+            </span>
+          </Fragment>
+        ))}
+      </div>
+
+      <p style={{ fontSize: '0.78rem', color: '#6b688f', marginTop: 8, lineHeight: 1.5 }}>
+        You start at {formatTarget(stages[0].target, progression)}. Each step holds for {holdText} and
+        only moves up when you’re keeping up — never automatically.
+      </p>
+    </div>
+  );
+}
+
 /** Natural-language editing: "make Saturday a rest day". */
 function CopilotEditModal({
   draftId,
@@ -382,7 +452,7 @@ function CopilotEditModal({
   ];
 
   async function send() {
-    if (!message.trim()) return;
+    if (!canSubmit(message)) return;
     setBusy(true);
     setReply(null);
     try {
@@ -453,8 +523,8 @@ function CopilotEditModal({
       <button
         className="btn-primary w-full mt-3 py-3 text-sm"
         onClick={send}
-        disabled={busy || !message.trim()}
-        style={{ opacity: busy || !message.trim() ? 0.5 : 1 }}
+        disabled={busy || !canSubmit(message)}
+        style={{ opacity: busy || !canSubmit(message) ? 0.5 : 1 }}
       >
         {busy ? 'Updating your plan…' : 'Apply change'}
       </button>
@@ -481,6 +551,7 @@ function TaskEditModal({
   const [minutes, setMinutes] = useState<string>('');
   const [time, setTime] = useState('');
   const [timesPerWeek, setTimesPerWeek] = useState<string>('');
+  const [dropLadder, setDropLadder] = useState(false);
   const [busy, setBusy] = useState(false);
 
   // Seed the form whenever a different task is opened.
@@ -493,7 +564,14 @@ function TaskEditModal({
     setTimesPerWeek(
       task.recurrenceType === 'TIMES_PER_WEEK' ? String(task.recurrenceConfig.timesPerWeek ?? 3) : '',
     );
+    setDropLadder(false);
   }
+
+  // A minutes ladder decides the session length itself — its first rung is what the
+  // task starts at. Leaving the field editable would accept a number the server then
+  // overrides, so it is locked with the reason stated instead of silently ignored.
+  const minutesSetByLadder =
+    task?.progression?.metricType === 'MINUTES' && !dropLadder;
 
   async function save() {
     if (!task) return;
@@ -513,6 +591,9 @@ function TaskEditModal({
               estimatedMinutes: minutes ? Number(minutes) : null,
               preferredTime: time || null,
               reason: t.reason,
+              // Only sent when the user asked to drop it. Omitting the key leaves the
+              // build-up as it was — it is not something this form can author.
+              ...(dropLadder ? { progression: null } : {}),
             }
           : {
               id: t.id,
@@ -630,8 +711,60 @@ function TaskEditModal({
         max={600}
         value={minutes}
         onChange={(e) => setMinutes(e.target.value)}
-        className="w-full px-4 py-3 text-sm mb-4"
+        disabled={minutesSetByLadder}
+        className="w-full px-4 py-3 text-sm"
+        style={minutesSetByLadder ? { background: '#f5f4ff', color: '#8b88b0' } : undefined}
       />
+      {minutesSetByLadder ? (
+        <p style={{ fontSize: '0.75rem', color: '#8b688f', margin: '6px 0 16px', lineHeight: 1.5 }}>
+          Set by the build-up below — this is its first step.
+        </p>
+      ) : (
+        <div style={{ height: 16 }} />
+      )}
+
+      {task?.progression && (
+        <div
+          className="px-3.5 py-3 rounded-xl mb-4"
+          style={{
+            background: dropLadder ? '#fff' : '#f5f4ff',
+            border: `1px solid ${dropLadder ? '#e8e6f5' : '#ddd0ff'}`,
+          }}
+        >
+          <div
+            className="flex items-center gap-1.5"
+            style={{
+              fontSize: '0.8rem',
+              fontWeight: 700,
+              color: dropLadder ? '#8b88b0' : '#1a1635',
+              fontFamily: 'Plus Jakarta Sans',
+            }}
+          >
+            <TrendingUp size={13} aria-hidden="true" />
+            Build-up: {describeDraftLadder(task.progression)}
+          </div>
+          <p style={{ fontSize: '0.78rem', color: '#6b688f', marginTop: 4, lineHeight: 1.5 }}>
+            {dropLadder
+              ? `Will be removed when you save. The task stays, at ${formatTarget(
+                  task.progression.stages[0].target,
+                  task.progression,
+                )} every time.`
+              : 'Keeps the same amount growing step by step, only when you’re keeping up.'}
+          </p>
+          <button
+            onClick={() => setDropLadder(!dropLadder)}
+            className="mt-2"
+            style={{
+              fontSize: '0.78rem',
+              fontWeight: 700,
+              color: dropLadder ? '#7c3aed' : '#c8253c',
+              fontFamily: 'Plus Jakarta Sans',
+            }}
+          >
+            {dropLadder ? 'Keep the build-up' : 'Remove the build-up'}
+          </button>
+        </div>
+      )}
 
       <label htmlFor="dt-time" style={label}>
         Reminder time

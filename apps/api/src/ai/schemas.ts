@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { GOAL_CATEGORY, RECURRENCE_TYPE, TARGET_TYPE } from '../domain/enums.js';
+import { GOAL_CATEGORY, PROGRESSION_METRIC, RECURRENCE_TYPE, TARGET_TYPE } from '../domain/enums.js';
 import { isDayString } from '../domain/dates.js';
 
 // Everything the model returns is parsed through these. The backend enums stay
@@ -128,6 +128,32 @@ export const draftRecurrenceSchema = z.object({
   intervalDays: z.number().int().min(1).max(90).optional(),
 });
 
+/**
+ * A proposed build-up ladder: walk 15 minutes, then 20, then 25, then 30.
+ *
+ * Deliberately permissive — an empty or one-rung "ladder" parses and is dropped
+ * later with a note, because a plan the user waited thirty seconds for should not
+ * be thrown away over a suggestion they never asked for. What is *sensible* is
+ * decided in draft-validator.ts, and the ladder itself is finally checked by the
+ * same `validateStages` Phase 1 uses for a hand-made progression.
+ */
+export const draftProgressionSchema = z.object({
+  metricType: z.enum(PROGRESSION_METRIC),
+  /** Display-only suffix: "min", "pages", "km". Never parsed. */
+  unitLabel: z.string().trim().max(16).default(''),
+  stages: z
+    .array(
+      z.object({
+        // Coerced and rounded later: models write "20" and 2.5 as readily as 20.
+        target: z.coerce.number().positive().max(100000),
+        minDays: z.coerce.number().int().min(1).max(60).nullish(),
+      }),
+    )
+    .max(12)
+    .default([]),
+});
+export type DraftProgressionInput = z.infer<typeof draftProgressionSchema>;
+
 export const draftTaskSchema = z.object({
   title: z.string().trim().min(1).max(120),
   description: z.string().trim().max(400).default(''),
@@ -136,6 +162,8 @@ export const draftTaskSchema = z.object({
   preferredTime: timeString.nullish(),
   /** The personalised justification, echoed back on the review screen. */
   reason: z.string().trim().max(300).default(''),
+  /** Optional, and rare: only for a task whose difficulty should genuinely grow. */
+  progression: draftProgressionSchema.nullish(),
 });
 export type DraftTaskInput = z.infer<typeof draftTaskSchema>;
 
@@ -251,6 +279,12 @@ export const progressAnalysisSchema = z.object({
         taskTitle: z.string().trim().max(120).nullish(),
         proposedRecurrence: draftRecurrenceSchema.nullish(),
         proposedMinutes: z.number().int().min(1).max(600).nullish(),
+        /**
+         * A stage change on a task that already has a build-up ladder. Recorded as
+         * a proposal and never applied — ASK_USER is absent on purpose, because
+         * asking is the app's job, not something the model requests.
+         */
+        proposedProgressionAction: z.enum(['ADVANCE', 'STAY', 'REDUCE']).nullish(),
       }),
     )
     .max(4)

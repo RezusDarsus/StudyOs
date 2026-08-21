@@ -1,0 +1,10 @@
+{
+  // The same compiler settings as tsconfig.json, minus the tests.
+  //
+  // `npm run build` uses this file and `npm run typecheck` uses the base one, on purpose:
+  // tests are typechecked like every other source file, but they have no business in the
+  // image that serves traffic. They import vitest, which is a devDependency the runtime
+  // image deliberately does not install.
+  "extends": "./tsconfig.json",
+  "exclude": ["src/**/*.test.ts"]
+}

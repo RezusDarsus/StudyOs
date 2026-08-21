@@ -1,0 +1,227 @@
+# Goalify, in containers.
+#
+# Two layers, and which one you get depends on the profile.
+#
+#   docker compose up -d                       infrastructure only: Postgres, Centrifugo
+#   docker compose --profile app up -d --build  the product as it is deployed
+#
+# The default is infrastructure alone because that is what development needs: the API and
+# the web app run from source on the host, against these two. The `app` profile builds and
+# runs them as images instead, on their own ports, so it can be brought up beside a running
+# dev server without either fighting the other for 4000 or 5174.
+#
+# The project name is pinned so the volume is always goalify_postgres_data rather
+# than being named after whatever the containing folder happens to be called.
+name: goalify
+
+# How the database is reached from inside this network: the service name and the port the
+# container actually listens on. Not the 5433 published to the host — that mapping exists
+# for tools running outside Docker and means nothing in here.
+x-database-url: &database-url
+  DATABASE_URL: postgresql://${POSTGRES_USER:-goalify}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-goalify}?schema=public
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: goalify-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-goalify}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required - copy .env.example to .env}
+      POSTGRES_DB: ${POSTGRES_DB:-goalify}
+      # Deterministic collation, so ORDER BY does not depend on the host's locale.
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+    ports:
+      # Bound to loopback on purpose: 5432:5432 would publish the database to every
+      # interface on the machine, including the local network. 5433 because another
+      # Postgres already holds 5432 on this host.
+      - '127.0.0.1:${POSTGRES_PORT:-5433}:5432'
+    volumes:
+      # Named volume, not a bind mount: this is the authoritative store, and it must
+      # survive `docker compose down` and container recreation.
+      #
+      # Mounted at /var/lib/postgresql rather than /var/lib/postgresql/data, which is
+      # what Postgres 17 and earlier wanted. From 18 the image keeps its data in a
+      # major-version subdirectory (18/docker) so that pg_upgrade can hard-link
+      # between versions inside one mount; mounting the old path leaves the real data
+      # directory on the container's own filesystem and the entrypoint refuses to
+      # start rather than let it be lost on the next recreate.
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      # Dependent services wait for this, so it has to mean "ready for queries" and
+      # not merely "the process started". pg_isready against the real database does.
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-goalify} -d ${POSTGRES_DB:-goalify}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # Realtime push. Transport only — see centrifugo/config.yaml for why it deliberately
+  # keeps no history and runs on the in-memory engine.
+  centrifugo:
+    image: centrifugo/centrifugo:v6
+    container_name: goalify-centrifugo
+    restart: unless-stopped
+    command: centrifugo -c /centrifugo/config.yaml
+    environment:
+      # All three are mandatory, and `:?` also rejects an empty value — which matters
+      # most for the origin list, because Centrifugo reads "no origins configured" as
+      # "do not check the Origin header" rather than as "allow nothing". Failing to
+      # start is the correct outcome; coming up accepting WebSocket upgrades from any
+      # site on the internet is not.
+      CENTRIFUGO_CLIENT_TOKEN_HMAC_SECRET_KEY: ${CENTRIFUGO_TOKEN_HMAC_SECRET:?CENTRIFUGO_TOKEN_HMAC_SECRET is required - copy .env.example to .env}
+      CENTRIFUGO_HTTP_API_KEY: ${CENTRIFUGO_API_KEY:?CENTRIFUGO_API_KEY is required - copy .env.example to .env}
+      # Space-separated, per Centrifugo's convention for string arrays in env vars.
+      CENTRIFUGO_CLIENT_ALLOWED_ORIGINS: ${CENTRIFUGO_ALLOWED_ORIGINS:?CENTRIFUGO_ALLOWED_ORIGINS is required - never set this to *}
+    volumes:
+      # Read-only: the container has no business rewriting its own configuration, and
+      # Centrifugo does not need to.
+      - ./centrifugo/config.yaml:/centrifugo/config.yaml:ro
+    ports:
+      # Loopback again, but for a different reason than Postgres: the browser does need
+      # to reach this directly, and in development the browser is on this host. A real
+      # deployment terminates TLS at a reverse proxy in front of it, which is what makes
+      # publishing the port itself unnecessary.
+      - '127.0.0.1:${CENTRIFUGO_PORT:-8000}:8000'
+    healthcheck:
+      test: ['CMD', 'wget', '--quiet', '--tries=1', '--spider', 'http://127.0.0.1:8000/health']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    ulimits:
+      # One file descriptor per connected client, plus the usual overhead. Alpine's
+      # default soft limit is low enough to become the ceiling on concurrent users.
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  # ---------------------------------------------------------------- the application
+  # Everything below is in the `app` profile and does not start with a bare
+  # `docker compose up`.
+
+  # Schema migrations: run to completion once, then gone.
+  #
+  # A service of its own rather than something the server does as it boots, because the
+  # server is the thing you run more than one of, and two instances starting together
+  # would race to apply the same migration. `service_completed_successfully` on the API
+  # below is what serialises it — one migrator, then N servers that can assume the schema.
+  migrate:
+    profiles: ['app']
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: migrate
+    container_name: goalify-migrate
+    # Explicitly not restarted. This is a one-shot that exits 0, and `unless-stopped`
+    # would re-run it every time the Docker daemon starts.
+    restart: 'no'
+    environment:
+      <<: *database-url
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    profiles: ['app']
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: runtime
+    container_name: goalify-api
+    restart: unless-stopped
+    # Application settings — the database URL and the AI credentials above all — come from
+    # the API's own .env, so a real key lives in exactly one already-gitignored place instead
+    # of being copied into a second file. Not required, so that a fresh clone can still
+    # bring the infrastructure up; the API will refuse to start without DATABASE_URL.
+    env_file:
+      - path: apps/api/.env
+        required: false
+    # Compose applies these after env_file, which is the point: a few entries in that file
+    # describe the developer's machine, and localhost:5433 and localhost:5173 mean nothing
+    # from inside this network.
+    environment:
+      <<: *database-url
+      NODE_ENV: production
+      PORT: 4000
+      WEB_ORIGIN: ${APP_ORIGIN:-http://localhost:8080}
+      # Believe X-Forwarded-For, because in this topology it is trustworthy: this service
+      # publishes no ports, so the only thing that can reach it is the nginx container, and
+      # that container overwrites the header rather than appending to it (see nginx.conf).
+      # Without this the API sees nginx's address on every request and the per-address rate
+      # limits in routes/auth.ts become one shared limit for the entire internet — ten
+      # sign-ups an hour in total, rather than ten per address.
+      #
+      # This is only safe while both halves hold. Publish a port on this service, or restore
+      # the appending form of that header, and it becomes a way for a client to choose its
+      # own identity.
+      TRUST_PROXY: 'true'
+      # How the API reaches Centrifugo, and separately what it tells browsers to open.
+      # The second cannot be derived from the first here: `centrifugo:8000` resolves on
+      # this network and nowhere else, so the API deliberately refuses to guess a
+      # browser-facing URL from a non-loopback host and would report realtime unavailable
+      # if this were left unset.
+      CENTRIFUGO_URL: http://centrifugo:8000
+      CENTRIFUGO_API_KEY: ${CENTRIFUGO_API_KEY:?CENTRIFUGO_API_KEY is required - copy .env.example to .env}
+      CENTRIFUGO_TOKEN_HMAC_SECRET: ${CENTRIFUGO_TOKEN_HMAC_SECRET:?CENTRIFUGO_TOKEN_HMAC_SECRET is required - copy .env.example to .env}
+      CENTRIFUGO_WS_URL: ${CENTRIFUGO_WS_URL:-ws://localhost:8080/connection/websocket}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      centrifugo:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # node rather than busybox wget: this asks the application whether it is listening,
+      # using the runtime that is already in the image.
+      #
+      # /health/ready rather than /health, because this result is what gates the web
+      # container's start: nginx exits if an upstream will not resolve, and a server that
+      # is listening but cannot reach PostgreSQL is not worth pointing it at yet. The
+      # endpoint answers 503 in that case and `r.ok` turns it into a failed check. It does
+      # not answer 503 for a Centrifugo outage — that is reported as degraded and left to
+      # serve traffic, so losing realtime cannot cascade into the whole product going down.
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:4000/health/ready').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # nginx serving the built front end, and reverse-proxying /api and the WebSocket so the
+  # whole product answers on one origin. This is the only container the browser talks to.
+  web:
+    profiles: ['app']
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: goalify-web
+    restart: unless-stopped
+    ports:
+      # Loopback by default, like the other two: this is a developer's machine, and
+      # 8080:80 would publish the app to every interface including the local network.
+      # APP_BIND is there for a host where that is actually the intention.
+      - '${APP_BIND:-127.0.0.1}:${APP_PORT:-8080}:80'
+    depends_on:
+      # Both, and healthy rather than started. nginx resolves an upstream hostname once
+      # when it reads its configuration and exits if it cannot, so a `web` that came up
+      # first would not serve anything at all — it would be a crash loop.
+      api:
+        condition: service_healthy
+      centrifugo:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '--quiet', '--tries=1', '--spider', 'http://127.0.0.1/']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  postgres_data:
