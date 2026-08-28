@@ -298,7 +298,7 @@ export async function askGoalCopilot(
       thinking: false,
       temperature: 0.3,
       maxTokens: 2000,
-      timeoutMs: 35_000,
+      timeoutMs: 60_000,
       messages: [
         { role: 'system', content: progressSystemPrompt() },
         {

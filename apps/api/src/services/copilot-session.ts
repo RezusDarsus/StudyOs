@@ -175,7 +175,9 @@ async function runInterviewTurn(
       // Measured: median 2.9s, p90 7.6s, p99 18.5s. A 20s cap sat exactly on p99
       // and killed calls that were about to succeed; 25s still catches a genuine
       // hang (the observed outlier was 44s) without clipping the tail.
-      timeoutMs: 25_000,
+      // NVIDIA can take longer than 25s under normal load. Keep this bounded,
+      // but leave enough room for a complete structured interview response.
+      timeoutMs: 60_000,
       messages: [
         {
           role: 'system',

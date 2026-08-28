@@ -194,13 +194,20 @@ export async function generateDraft(sessionId: string, userId: string, regenerat
         thinking: false,
         temperature: regenerate ? 0.6 : 0.35,
         maxTokens: 4000,
-        timeoutMs: 35_000,
+        timeoutMs: 60_000,
         messages,
       },
       goalDraftSchema,
     );
   } catch (err) {
-    if (!(err instanceof AiProviderError) || err.kind !== 'BAD_RESPONSE') throw err;
+    // A completed interview should still yield something editable when the
+    // provider is slow or returns malformed JSON after its bounded retry.
+    if (
+      !(err instanceof AiProviderError) ||
+      (err.kind !== 'BAD_RESPONSE' && err.kind !== 'TIMEOUT')
+    ) {
+      throw err;
+    }
     raw = fallbackDraft(
       session.initialGoalText,
       session.category as GoalDraftInput['category'] | null,
@@ -225,7 +232,7 @@ export async function generateDraft(sessionId: string, userId: string, regenerat
         thinking: false,
         temperature: 0.3,
         maxTokens: 4000,
-        timeoutMs: 35_000,
+        timeoutMs: 60_000,
         messages: [
           ...messages,
           { role: 'assistant', content: JSON.stringify(raw).slice(0, 4000) },
