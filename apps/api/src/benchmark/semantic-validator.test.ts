@@ -90,7 +90,12 @@ describe('authority and policies',()=>{
 
 describe('claims and evidence',()=>{
   it('does not treat a negated forbidden phrase as an asserted claim',()=>{
-    expect(evaluateSemanticCase({forbiddenClaims:['guaranteed','extra income']},{draft:draft([],"Do not call the best month guaranteed; use no extra income.")}).score).toBe(100);
+    const result=evaluateSemanticCase(
+      {forbiddenClaims:['guaranteed','extra income']},
+      {draft:draft([],"Do not call the best month guaranteed; use no extra income.")},
+    );
+    expect(result.failures.map((failure)=>failure.code)).not.toContain('FORBIDDEN_CLAIM');
+    expect(result.critical).toContain('STRUCTURE');
   });
   it('requires all meaningful evidence tokens',()=>{
     expect(evaluateSemanticCase({requiredEvidence:['streaming prototype']},{draft:draft([], 'A streaming course only.')} ).failures.map((failure)=>failure.code)).toContain('EVIDENCE');

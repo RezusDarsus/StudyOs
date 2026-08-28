@@ -1,5 +1,6 @@
 import type { RecurrenceType } from '../domain/enums.js';
 import { computeFinancialFeasibility, monthlyCapPeriods, parseFinancialPlan } from '../ai/financial-plan.js';
+import { evaluateUsefulness, passesQualityGates, scoreStructuralQuality } from './quality-evaluator.js';
 
 export type BenchmarkRole = 'STRENGTH' | 'TRAIL' | 'LONG_RUN' | 'FINANCE_TRANSFER' | 'PROJECT_EVIDENCE' | 'INTERVIEW_PREP';
 export interface BenchmarkTask {
@@ -91,11 +92,20 @@ function topicPresent(topic:string,text:string):boolean{
 export function evaluateSemanticCase(
   expected:SemanticExpectations,
   result:{draft?:BenchmarkDraft;interview?:Array<{question:{prompt:string}}>;prompt?:string;today?:string},
-):{score:number;failures:SemanticFailure[];critical:string[];constraintPass:boolean}{
+):{
+  score:number;
+  structuralScore:number;
+  usefulnessScore:number;
+  usefulness:ReturnType<typeof evaluateUsefulness>|null;
+  failures:SemanticFailure[];
+  critical:string[];
+  constraintPass:boolean;
+  finalPass:boolean;
+}{
   const failures:SemanticFailure[]=[];
   const add=(code:string,detail:string,critical=false)=>failures.push({code,detail,critical});
   const draft=result.draft;
-  if(!draft)return{score:0,failures:[{code:'TRANSPORT',detail:'No generated draft',critical:true}],critical:['TRANSPORT'],constraintPass:false};
+  if(!draft)return{score:0,structuralScore:0,usefulnessScore:0,usefulness:null,failures:[{code:'TRANSPORT',detail:'No generated draft',critical:true}],critical:['TRANSPORT'],constraintPass:false,finalPass:false};
   const tasks=draft.tasks;
   const totalWeekly=tasks.reduce((sum,task)=>sum+weeklyOccurrences(task),0);
   if(expected.exactWeekly!==undefined&&Math.abs(totalWeekly-expected.exactWeekly)>.01)add('RECURRENCE',`Expected exactly ${expected.exactWeekly} weekly occurrences; found ${totalWeekly}`,true);
@@ -192,10 +202,25 @@ export function evaluateSemanticCase(
     }
   }
   const score=Math.max(0,100-failures.reduce((sum,failure)=>sum+(failure.critical?20:8),0));
-  return{score:failures.some((failure)=>failure.critical)?Math.min(score,50):score,failures,critical:[...new Set(failures.filter((failure)=>failure.critical).map((failure)=>failure.code))],constraintPass:!failures.some((failure)=>failure.critical)};
+  const semanticStructural=failures.some((failure)=>failure.critical)?Math.min(score,50):score;
+  const generalStructural=scoreStructuralQuality(draft,result.today);
+  for(const issue of generalStructural.issues)add('STRUCTURE',issue,true);
+  const structuralScore=Math.min(semanticStructural,generalStructural.score);
+  const critical=[...new Set(failures.filter((failure)=>failure.critical).map((failure)=>failure.code))];
+  const usefulness=evaluateUsefulness(result.prompt??draft.title,draft,result.interview??[]);
+  return{
+    score:structuralScore,
+    structuralScore,
+    usefulnessScore:usefulness.usefulnessScore,
+    usefulness,
+    failures,
+    critical,
+    constraintPass:critical.length===0,
+    finalPass:passesQualityGates({criticalFailure:critical.length>0,structuralScore,usefulnessScore:usefulness.usefulnessScore}),
+  };
 }
 
-export function buildRunSummary(fixtureTotal:number,results:Array<{transportSuccess:boolean;schemaValid?:boolean;semanticScore:number;constraintPass:boolean}>){
+export function buildRunSummary(fixtureTotal:number,results:Array<{transportSuccess:boolean;schemaValid?:boolean;semanticScore:number;structuralScore?:number;usefulnessScore?:number;constraintPass:boolean;finalPass?:boolean}>){
   const executed=results.length;
   const transport=results.filter((result)=>result.transportSuccess).length;
   const schema=results.filter((result)=>result.schemaValid??result.transportSuccess).length;
@@ -203,6 +228,9 @@ export function buildRunSummary(fixtureTotal:number,results:Array<{transportSucc
     fixtureTotal,executedCases:executed,transportSuccessful:transport,schemaValid:schema,
     transportSuccessRate:executed?transport/executed:0,
     averageSemanticScore:executed?Number((results.reduce((sum,result)=>sum+result.semanticScore,0)/executed).toFixed(2)):null,
+    averageStructuralScore:executed?Number((results.reduce((sum,result)=>sum+(result.structuralScore??result.semanticScore),0)/executed).toFixed(2)):null,
+    averageUsefulnessScore:executed?Number((results.reduce((sum,result)=>sum+(result.usefulnessScore??0),0)/executed).toFixed(2)):null,
     constraintPass:results.filter((result)=>result.constraintPass).length,
+    finalPass:results.filter((result)=>result.finalPass??result.constraintPass).length,
   };
 }

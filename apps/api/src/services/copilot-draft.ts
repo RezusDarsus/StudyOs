@@ -40,6 +40,7 @@ import {
   MEMORY_GATE_CONFIDENCE,
   memoryGateCategory,
 } from '../ai/category.js';
+import { scorePlanQuality } from '../ai/plan-quality.js';
 import { AiProviderError } from '../ai/provider.js';
 
 const TRANSCRIPT_WINDOW = 20;
@@ -237,8 +238,17 @@ export async function generateDraft(sessionId: string, userId: string, regenerat
   // or a frequency that is not a real schedule. Give it the same single corrective
   // retry the JSON parser gets, rather than handing the user a dead end.
   let normalized: NormalizedDraft;
+  const requireUsefulPlan = (draft: NormalizedDraft) => {
+    const quality = scorePlanQuality(session.initialGoalText, draft, JSON.stringify(answers));
+    if (quality.planScore < 50) {
+      throw new DraftValidationError(
+        `The plan is structurally valid but not useful enough: ${quality.issues.join('; ')}`,
+      );
+    }
+  };
   try {
     normalized = validateAndNormalizeDraft(raw, timezone, new Date(), validationSource);
+    requireUsefulPlan(normalized);
   } catch (err) {
     if (!(err instanceof DraftValidationError)) throw err;
 
@@ -273,6 +283,7 @@ export async function generateDraft(sessionId: string, userId: string, regenerat
       repaired = { ...repaired, category: categoryGuess.category };
     }
     normalized = validateAndNormalizeDraft(repaired, timezone, new Date(), validationSource);
+    requireUsefulPlan(normalized);
   }
   const draft = await persistDraft({ userId, sessionId, draft: normalized });
 

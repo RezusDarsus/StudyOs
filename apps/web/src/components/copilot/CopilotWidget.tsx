@@ -617,7 +617,7 @@ export default function CopilotWidget({
                   <span style={{ fontSize: '0.68rem', color: '#8b88b0', fontWeight: 600 }}>
                     {interview.phase === 'READY'
                       ? 'Ready'
-                      : `${interview.turn?.questionCount ?? 0} of ~${interview.turn?.estimatedTotal ?? 3}`}
+                      : `${interview.turn?.questionCount ?? 0} of ~${interview.turn?.estimatedTotal ?? 2}`}
                   </span>
                 </div>
                 <Transcript

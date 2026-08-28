@@ -67,7 +67,7 @@ describe('Copilot acceptance', () => {
 
     expect(first.question.type).toBe('MULTI_SELECT');
     expect(first.questionCount).toBe(1);
-    expect(first.estimatedTotal).toBe(3);
+    expect(first.estimatedTotal).toBe(2);
     expect(first.canGenerate).toBe(false);
 
     const second = await h.ok(user, 'POST', `/api/copilot/goal-sessions/${first.sessionId}/answers`, {

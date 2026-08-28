@@ -185,7 +185,7 @@ export default function CopilotInterview() {
         <span style={{ fontSize: '0.72rem', color: '#8b88b0', fontWeight: 600, whiteSpace: 'nowrap' }}>
           {phase === 'READY'
             ? 'Ready'
-            : `${turn?.questionCount ?? 0} of ~${turn?.estimatedTotal ?? 3}`}
+            : `${turn?.questionCount ?? 0} of ~${turn?.estimatedTotal ?? 2}`}
         </span>
       </div>
 

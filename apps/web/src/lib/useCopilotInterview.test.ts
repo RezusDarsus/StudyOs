@@ -8,7 +8,7 @@ const turn = (overrides: Partial<InterviewTurn>): InterviewTurn => ({
   assistantMessage: '',
   question: null,
   questionCount: 0,
-  estimatedTotal: 3,
+  estimatedTotal: 2,
   context: {},
   canGenerate: false,
   ...overrides,
@@ -20,7 +20,7 @@ describe('Copilot interview progress', () => {
   });
 
   it('tracks an adaptive interview without dividing by zero', () => {
-    expect(interviewProgress(turn({ questionCount: 1, estimatedTotal: 3 }))).toBeCloseTo(33.33, 1);
+    expect(interviewProgress(turn({ questionCount: 1, estimatedTotal: 2 }))).toBe(50);
     expect(interviewProgress(turn({ estimatedTotal: 0 }))).toBe(0);
   });
 });

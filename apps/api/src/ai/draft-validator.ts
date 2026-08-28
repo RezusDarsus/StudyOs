@@ -753,15 +753,6 @@ export function validateAndNormalizeDraft(
     if (errors.length) throw new DraftValidationError(errors.join(' '));
   }
 
-  const genericPlaceholder = normalizedTasks.length === 1
-    && /^(?:take (?:the )?first (?:concrete )?step|work on (?:the |your )?goal|get started|start working)$/i
-      .test(normalizedTasks[0].title.trim());
-  if (genericPlaceholder) {
-    throw new DraftValidationError(
-      'The plan returned a generic placeholder instead of an executable task.',
-    );
-  }
-
   const rationale = toSecondPerson(input.rationale.trim());
   if (rationale.changed) adjustments.push('Rewrote the rationale to address you directly');
   const description = toSecondPerson(input.description?.trim() ?? '');

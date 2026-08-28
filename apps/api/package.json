@@ -17,7 +17,8 @@
     "seed": "tsx prisma/seed.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:acceptance": "vitest run --config vitest.acceptance.config.ts"
+    "test:acceptance": "vitest run --config vitest.acceptance.config.ts",
+    "benchmark:quality": "tsx scripts/real-world-quality-benchmark.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

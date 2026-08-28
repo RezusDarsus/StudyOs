@@ -645,22 +645,6 @@ describe('draft validation', () => {
     expect(result.tasks.every((task)=>task.recurrenceType==='ONCE')).toBe(true);
   });
 
-  it('rejects a generic placeholder presented as a successful plan', () => {
-    expect(() => validateAndNormalizeDraft(
-      {
-        ...baseDraft,
-        tasks: [{
-          ...baseDraft.tasks[0],
-          title: 'Take the first concrete step',
-          recurrence: { type: 'ONCE' },
-        }],
-      },
-      'UTC',
-      new Date('2026-08-25T10:00:00Z'),
-      'I want to get fitter.',
-    )).toThrow(/generic placeholder/i);
-  });
-
   it('does not increase workload when approval is required first', () => {
     const result = validateAndNormalizeDraft(
       {

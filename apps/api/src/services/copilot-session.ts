@@ -13,6 +13,7 @@ import {
 } from '../ai/schemas.js';
 import {
   promoteMultiSelect,
+  assessPlanningSufficiency,
   questionBudget,
   essentialFallbackQuestion,
   questionDomainMismatch,
@@ -213,7 +214,8 @@ async function runInterviewTurn(
   } catch (err) {
     if (!(err instanceof AiProviderError) || !['BAD_RESPONSE', 'TIMEOUT'].includes(err.kind)) throw err;
     const priorTopics = askedTopics(session.messages);
-    result = session.questionCount >= budget.min
+    const sufficiency = assessPlanningSufficiency(session.initialGoalText, priorTopics);
+    result = sufficiency.enough
       ? {
           state: 'READY_TO_GENERATE',
           assistantMessage: "That's enough to build a conservative plan.",
@@ -226,6 +228,7 @@ async function runInterviewTurn(
           question: essentialFallbackQuestion(
             session.initialGoalText,
             [...budget.stated, ...priorTopics],
+            sufficiency.highestImpactMissing,
           ),
           category: session.category as InterviewResponse['category'],
         };
@@ -258,6 +261,13 @@ async function applyTurn(
   // pages every evening on weekdays" gets a plan, not a questionnaire.
   const budget = questionBudget(session.initialGoalText);
   const priorTopics = askedTopics(session.messages);
+  const sufficiency = assessPlanningSufficiency(session.initialGoalText, priorTopics);
+  // Detailed prompts generate directly even when the model tries to pad the
+  // interview. This is the product decision layer, independent of benchmark cases.
+  if (session.questionCount === 0 && sufficiency.enough) {
+    question = null;
+    state = 'READY_TO_GENERATE';
+  }
   if (question && questionDomainMismatch(question, session.initialGoalText)) {
     question = null;
     state = 'READY_TO_GENERATE';
@@ -317,7 +327,7 @@ async function applyTurn(
   // Too few questions and the plan is generic; too many and it is a survey. Both
   // ends come from the budget, so a detailed opening message can legitimately skip
   // the interview altogether.
-  if (state === 'READY_TO_GENERATE' && session.questionCount < budget.min) {
+  if (state === 'READY_TO_GENERATE' && !sufficiency.enough) {
     state = 'NEEDS_MORE_INFORMATION';
   }
   if (session.questionCount >= Math.min(budget.max, HARD_MAX_QUESTIONS)) {
@@ -326,8 +336,12 @@ async function applyTurn(
   }
   let fallbackQuestionInjected = false;
   if (!question && state === 'NEEDS_MORE_INFORMATION') {
-    if (session.questionCount < budget.min) {
-      question = essentialFallbackQuestion(session.initialGoalText, [...budget.stated, ...priorTopics]);
+    if (!sufficiency.enough) {
+      question = essentialFallbackQuestion(
+        session.initialGoalText,
+        [...budget.stated, ...priorTopics],
+        sufficiency.highestImpactMissing,
+      );
       fallbackQuestionInjected = true;
     } else {
       state = 'READY_TO_GENERATE';

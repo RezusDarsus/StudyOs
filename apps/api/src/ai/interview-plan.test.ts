@@ -123,7 +123,7 @@ describe('how much interview a request has earned', () => {
     const budget = questionBudget('I want read more');
     expect(budget.stated).toEqual([]);
     expect(budget.min).toBe(1);
-    expect(budget.max).toBe(3);
+    expect(budget.max).toBe(2);
   });
 
   it('stops interviewing someone who already said what they want', () => {
@@ -191,7 +191,7 @@ describe('deterministic minimum interview',()=>{
     const second=essentialFallbackQuestion('I want to get fitter',['TARGET']);
     expect(second.id).toBe('essential_frequency');
     expect(questionTopic(second.prompt,second.type,second.options)).toBe('FREQUENCY');
-    expect(questionBudget('I want to get fitter')).toMatchObject({ min: 1, max: 3 });
+    expect(questionBudget('I want to get fitter')).toMatchObject({ min: 1, max: 2 });
     expect(questionBudget('Run 30 minutes three days per week')).toMatchObject({ min: 0, max: 1 });
   });
 });

@@ -41,14 +41,16 @@ const rescored=source.results.map((result)=>{
     prompt:result.prompt,
     today:'2026-08-25',
   });
-  return{...result,legacyScore:result.score,semanticScore:semantic.score,semanticFailures:semantic.failures,semanticCritical:semantic.critical,constraintPass:semantic.constraintPass};
+  return{...result,legacyScore:result.score,semanticScore:semantic.score,structuralScore:semantic.structuralScore,usefulnessScore:semantic.usefulnessScore,usefulnessBreakdown:semantic.usefulness,semanticFailures:semantic.failures,semanticCritical:semantic.critical,constraintPass:semantic.constraintPass,finalPass:semantic.finalPass};
 });
-const base=buildRunSummary(fixture.cases.length,rescored.map((result)=>({transportSuccess:result.transportSuccess,schemaValid:result.transportSuccess,semanticScore:result.semanticScore,constraintPass:result.constraintPass})));
+const base=buildRunSummary(fixture.cases.length,rescored.map((result)=>({transportSuccess:result.transportSuccess,schemaValid:result.transportSuccess,semanticScore:result.semanticScore,structuralScore:result.structuralScore,usefulnessScore:result.usefulnessScore,constraintPass:result.constraintPass,finalPass:result.finalPass})));
 const average=(items:any[],field:string)=>items.length?Number((items.reduce((sum,item)=>sum+item[field],0)/items.length).toFixed(2)):null;
 const summary={
   ...base,
   legacyAverage:average(rescored,'legacyScore'),
   semanticAverage:average(rescored,'semanticScore'),
+  structuralAverage:average(rescored,'structuralScore'),
+  usefulnessAverage:average(rescored,'usefulnessScore'),
   criticalFailures:rescored.reduce((sum,result)=>sum+result.semanticCritical.length,0),
   normalAverage:average(rescored.filter((result)=>result.difficulty==='NORMAL'),'semanticScore'),
   hardAverage:average(rescored.filter((result)=>result.difficulty==='HARD'),'semanticScore'),
@@ -65,12 +67,15 @@ const report=[
   `Transport success rate: ${(summary.transportSuccessRate*100).toFixed(2)}%`,
   `Legacy automatic average: ${summary.legacyAverage}`,
   `Semantic average: ${summary.semanticAverage}`,
+  `Structural average: ${summary.structuralAverage}`,
+  `Usefulness average: ${summary.usefulnessAverage}`,
   `Constraint pass: ${summary.constraintPass}/${summary.executedCases}`,
+  `Final hard-gate pass: ${summary.finalPass}/${summary.executedCases}`,
   `Semantic critical failures: ${summary.criticalFailures}`,'',
   '## Cases','',
 ];
 for(const result of rescored){
-  report.push(`### ${result.id}. ${result.title} — legacy ${result.legacyScore}, semantic ${result.semanticScore}`,'');
+  report.push(`### ${result.id}. ${result.title} — structural ${result.structuralScore}, usefulness ${result.usefulnessScore}, ${result.finalPass?'PASS':'FAIL'}`,'');
   report.push(result.semanticFailures.length
     ? result.semanticFailures.map((failure:any)=>`- ${failure.code}${failure.critical?' (critical)':''}: ${failure.detail}`).join('\n')
     : '- Semantic failures: none','');
