@@ -62,6 +62,22 @@ export default function DraftReview() {
     }
   }
 
+  async function setVisibility(visibility: 'PRIVATE' | 'PUBLIC') {
+    if (!draft || draft.visibility === visibility) return;
+    setBusy('edit');
+    try {
+      const result = await api.patch<{ draft: GoalDraft }>(`/copilot/goal-drafts/${id}`, {
+        visibility,
+      });
+      setData(result);
+      push(visibility === 'PUBLIC' ? 'Anyone can now discover this goal' : 'Goal set to private');
+    } catch (err) {
+      push(err instanceof ApiError ? err.message : 'Could not change visibility', 'error');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function regenerate() {
     if (!draft?.sessionId) return;
     setBusy('regenerate');
@@ -161,7 +177,25 @@ export default function DraftReview() {
             </h2>
             <div className="flex items-center gap-2 mt-2 flex-wrap">
               <Badge tone="neutral">{CATEGORY_LABEL[draft.category]}</Badge>
-              <Badge tone="neutral">🔒 Private</Badge>
+              {(['PRIVATE', 'PUBLIC'] as const).map((visibility) => (
+                <button
+                  key={visibility}
+                  type="button"
+                  aria-pressed={draft.visibility === visibility}
+                  disabled={busy !== null}
+                  onClick={() => void setVisibility(visibility)}
+                  className="px-2.5 py-1 rounded-lg"
+                  style={{
+                    border: `1px solid ${draft.visibility === visibility ? '#7c3aed' : '#e8e6f5'}`,
+                    background: draft.visibility === visibility ? '#f0ebff' : '#fff',
+                    color: draft.visibility === visibility ? '#7c3aed' : '#8b88b0',
+                    fontSize: '0.72rem',
+                    fontWeight: 700,
+                  }}
+                >
+                  {visibility === 'PRIVATE' ? '🔒 Private' : '🌍 Public'}
+                </button>
+              ))}
               {draft.deadline && <Badge tone="warning">by {draft.deadline}</Badge>}
             </div>
           </div>

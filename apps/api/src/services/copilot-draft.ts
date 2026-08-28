@@ -36,8 +36,41 @@ import {
   parseContext,
 } from '../ai/context.js';
 import { memoryGateCategory } from '../ai/category.js';
+import { AiProviderError } from '../ai/provider.js';
 
 const TRANSCRIPT_WINDOW = 20;
+
+/**
+ * A malformed or truncated model response must not dead-end a completed
+ * interview. This conservative draft uses only the user's original words and
+ * can be edited on the review screen before anything is created.
+ */
+function fallbackDraft(
+  initialGoal: string,
+  category: GoalDraftInput['category'] | null,
+): GoalDraftInput {
+  const goal = initialGoal.replace(/\s+/g, ' ').trim();
+  return {
+    title: goal.length <= 120 ? goal : `${goal.slice(0, 117)}...`,
+    description: goal.slice(0, 1000),
+    category: category ?? 'PERSONAL',
+    targetType: 'HABIT',
+    targetValue: null,
+    deadline: null,
+    rationale: 'A simple starting plan based on your goal. You can adjust it before creating it.',
+    tasks: [
+      {
+        title: 'Take the first concrete step',
+        description: goal.slice(0, 400),
+        recurrence: { type: 'ONCE' },
+        estimatedMinutes: 20,
+        preferredTime: null,
+        reason: 'Starting small makes the goal easier to begin and refine.',
+        progression: null,
+      },
+    ],
+  };
+}
 
 async function userTimezone(userId: string) {
   const profile = await prisma.profile.findUnique({ where: { userId } });
@@ -147,23 +180,32 @@ export async function generateDraft(sessionId: string, userId: string, regenerat
     },
   ];
 
-  const raw: GoalDraftInput = await chatJson(
-    {
-      purpose: 'DRAFT_GENERATION',
-      promptVersion: PROMPT_VERSIONS.draft,
-      userId,
-      sessionId,
-      // Reasoning was truncating the JSON before it closed. Correct structured
-      // output matters far more here than internal deliberation, so thinking is
-      // off and the budget is generous.
-      thinking: false,
-      temperature: regenerate ? 0.6 : 0.35,
-      maxTokens: 4000,
-      timeoutMs: 35_000,
-      messages,
-    },
-    goalDraftSchema,
-  );
+  let raw: GoalDraftInput;
+  try {
+    raw = await chatJson(
+      {
+        purpose: 'DRAFT_GENERATION',
+        promptVersion: PROMPT_VERSIONS.draft,
+        userId,
+        sessionId,
+        // Reasoning was truncating the JSON before it closed. Correct structured
+        // output matters far more here than internal deliberation, so thinking is
+        // off and the budget is generous.
+        thinking: false,
+        temperature: regenerate ? 0.6 : 0.35,
+        maxTokens: 4000,
+        timeoutMs: 35_000,
+        messages,
+      },
+      goalDraftSchema,
+    );
+  } catch (err) {
+    if (!(err instanceof AiProviderError) || err.kind !== 'BAD_RESPONSE') throw err;
+    raw = fallbackDraft(
+      session.initialGoalText,
+      session.category as GoalDraftInput['category'] | null,
+    );
+  }
 
   // A plan can be perfectly well-formed and still be unusable — 60 hours a week,
   // or a frequency that is not a real schedule. Give it the same single corrective
