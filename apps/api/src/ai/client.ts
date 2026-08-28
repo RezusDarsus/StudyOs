@@ -103,7 +103,14 @@ export async function chatJson<S extends z.ZodTypeAny>(
         retryCount: attempt,
       });
       // Retry once on a transient failure; otherwise give up immediately.
-      if (err instanceof AiProviderError && err.retryable && attempt === 0) continue;
+      if (
+        err instanceof AiProviderError &&
+        err.retryable &&
+        request.retryTransient !== false &&
+        attempt === 0
+      ) {
+        continue;
+      }
       throw err;
     }
 

@@ -26,6 +26,8 @@ export interface ChatRequest {
    */
   thinking?: boolean;
   timeoutMs?: number;
+  /** Disable the automatic second provider attempt for latency-sensitive UI calls. */
+  retryTransient?: boolean;
   userId?: string;
   sessionId?: string;
 }

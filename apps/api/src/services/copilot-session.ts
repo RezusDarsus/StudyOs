@@ -30,6 +30,7 @@ import {
   toPlainObject,
 } from '../ai/context.js';
 import { memoryGateCategory } from '../ai/category.js';
+import { AiProviderError } from '../ai/provider.js';
 import { badRequest, forbidden, notFound } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
 import { getPreferencesForPrompt } from './preferences.js';
@@ -175,9 +176,11 @@ async function runInterviewTurn(
       // Measured: median 2.9s, p90 7.6s, p99 18.5s. A 20s cap sat exactly on p99
       // and killed calls that were about to succeed; 25s still catches a genuine
       // hang (the observed outlier was 44s) without clipping the tail.
-      // NVIDIA can take longer than 25s under normal load. Keep this bounded,
-      // but leave enough room for a complete structured interview response.
-      timeoutMs: 60_000,
+      // This is an interactive button, so never leave it spinning through two
+      // minute-long attempts. Normal responses finish well inside this budget;
+      // a provider outage falls back to a plan the user can edit.
+      timeoutMs: 15_000,
+      retryTransient: false,
       messages: [
         {
           role: 'system',
@@ -328,8 +331,13 @@ export async function startSession(userId: string, goalText: string): Promise<In
 
   await recordEvent({ userId, type: 'SESSION_STARTED', sessionId: session.id });
 
-  const { result, preferences } = await runInterviewTurn(session);
-  return applyTurn(session, result, preferences);
+  try {
+    const { result, preferences } = await runInterviewTurn(session);
+    return applyTurn(session, result, preferences);
+  } catch (err) {
+    if (!(err instanceof AiProviderError) || err.kind === 'AUTH') throw err;
+    return applyTurn(session, unavailableFallback());
+  }
 }
 
 export async function answerQuestion(
@@ -383,8 +391,25 @@ export async function answerQuestion(
 
   await recordEvent({ userId, type: 'QUESTION_ANSWERED', sessionId: session.id });
 
-  const { result, preferences } = await runInterviewTurn(refreshed);
-  return applyTurn(refreshed, result, preferences);
+  try {
+    const { result, preferences } = await runInterviewTurn(refreshed);
+    return applyTurn(refreshed, result, preferences);
+  } catch (err) {
+    if (!(err instanceof AiProviderError) || err.kind === 'AUTH') throw err;
+    return applyTurn(refreshed, unavailableFallback());
+  }
+}
+
+function unavailableFallback(): InterviewResponse {
+  return {
+    state: 'READY_TO_GENERATE',
+    assistantMessage:
+      'I have enough to create a simple starting plan. You can edit every detail before creating it.',
+    question: null,
+    extractedContext: {},
+    corrections: {},
+    category: null,
+  };
 }
 
 /** Human-readable rendering of a structured answer, for the transcript. */

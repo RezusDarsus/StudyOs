@@ -194,7 +194,10 @@ export async function generateDraft(sessionId: string, userId: string, regenerat
         thinking: false,
         temperature: regenerate ? 0.6 : 0.35,
         maxTokens: 4000,
-        timeoutMs: 60_000,
+        // A provider outage should reach the editable fallback quickly instead
+        // of holding the review flow for two full timeout windows.
+        timeoutMs: 20_000,
+        retryTransient: false,
         messages,
       },
       goalDraftSchema,
@@ -232,7 +235,8 @@ export async function generateDraft(sessionId: string, userId: string, regenerat
         thinking: false,
         temperature: 0.3,
         maxTokens: 4000,
-        timeoutMs: 60_000,
+        timeoutMs: 20_000,
+        retryTransient: false,
         messages: [
           ...messages,
           { role: 'assistant', content: JSON.stringify(raw).slice(0, 4000) },
