@@ -1,4 +1,4 @@
-# Goalify
+# One Up
 
 Turn your goals into fun social challenges.
 

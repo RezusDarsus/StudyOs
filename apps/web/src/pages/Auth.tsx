@@ -100,7 +100,7 @@ export default function Auth({ mode }: { mode: 'login' | 'register' }) {
               <Zap size={18} fill="white" color="white" />
             </div>
             <span style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 800, fontSize: '1.1rem', color: '#1a1635' }}>
-              Goalify
+              One Up
             </span>
           </div>
 

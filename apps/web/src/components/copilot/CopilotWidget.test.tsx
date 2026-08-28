@@ -83,7 +83,7 @@ function renderWidget(path = '/app') {
   return userEvent.setup();
 }
 
-const fab = () => screen.findByRole('button', { name: 'Open Goalify Copilot' });
+const fab = () => screen.findByRole('button', { name: 'Open One Up Copilot' });
 
 /** Opens the widget and types a message into its input. */
 async function send(user: ReturnType<typeof userEvent.setup>, message: string) {
@@ -100,13 +100,13 @@ describe('the collapsed button', () => {
     renderWidget();
     const button = await fab();
     expect(button).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByRole('dialog', { name: 'Goalify Copilot' })).toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'One Up Copilot' })).toBeNull();
   });
 
   it('opens the panel when clicked', async () => {
     const user = renderWidget();
     await user.click(await fab());
-    expect(screen.getByRole('dialog', { name: 'Goalify Copilot' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'One Up Copilot' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Create a goal with AI/ })).toBeInTheDocument();
   });
 
@@ -114,21 +114,21 @@ describe('the collapsed button', () => {
     const user = renderWidget();
     await user.click(await fab());
     await user.keyboard('{Escape}');
-    expect(screen.queryByRole('dialog', { name: 'Goalify Copilot' })).toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'One Up Copilot' })).toBeNull();
   });
 
   it('stays away from the full-page Copilot, which is already a Copilot surface', async () => {
     renderWidget('/app/goals/new/ai');
     // Give the status request a chance to resolve before asserting absence.
     await screen.findByText('page content');
-    expect(screen.queryByRole('button', { name: 'Open Goalify Copilot' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open One Up Copilot' })).toBeNull();
   });
 
   it('does not appear when the server has no AI provider configured', async () => {
     statusEnabled = false;
     renderWidget();
     await screen.findByText('page content');
-    expect(screen.queryByRole('button', { name: 'Open Goalify Copilot' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open One Up Copilot' })).toBeNull();
   });
 });
 

@@ -45,7 +45,7 @@ export default function Landing() {
               <Zap size={18} fill="white" color="white" />
             </div>
             <span style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 800, fontSize: '1.1rem', color: '#1a1635' }}>
-              Goalify
+              One Up
             </span>
           </div>
           <div className="flex items-center gap-2.5">
@@ -376,7 +376,7 @@ export default function Landing() {
               <Zap size={13} fill="white" color="white" />
             </div>
             <span style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '0.85rem', color: '#1a1635' }}>
-              Goalify
+              One Up
             </span>
           </div>
           <span style={{ fontSize: '0.78rem', color: '#b8b5d5' }}>

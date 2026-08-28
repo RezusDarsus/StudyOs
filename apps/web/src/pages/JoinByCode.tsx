@@ -102,7 +102,7 @@ export default function JoinByCode() {
           <span
             style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 800, fontSize: '1.1rem', color: '#1a1635' }}
           >
-            Goalify
+            One Up
           </span>
         </Link>
 
@@ -117,7 +117,7 @@ export default function JoinByCode() {
             <ErrorState message={error} />
             <div className="text-center mt-4">
               <Link to="/" className="btn-ghost inline-block px-5 py-2.5 text-sm">
-                Go to Goalify
+                Go to One Up
               </Link>
             </div>
           </>

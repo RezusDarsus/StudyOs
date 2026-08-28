@@ -67,7 +67,7 @@ function Sidebar() {
               color: '#1a1635',
             }}
           >
-            Goalify
+            One Up
           </span>
         </NavLink>
 
@@ -258,7 +258,7 @@ function MobileHeader() {
           <Zap size={15} fill="white" color="white" />
         </div>
         <span style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 800, color: '#1a1635' }}>
-          Goalify
+          One Up
         </span>
       </NavLink>
       <div className="flex items-center gap-2">

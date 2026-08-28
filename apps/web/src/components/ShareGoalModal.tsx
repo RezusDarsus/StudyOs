@@ -90,7 +90,7 @@ export default function ShareGoalModal({
         <>
           <p style={{ fontSize: '0.9rem', color: '#4b4870', lineHeight: 1.6 }}>
             Create a link you can send to anyone — on Messenger, WhatsApp, anywhere. They
-            don't need to be your friend on Goalify to join.
+            don't need to be your friend on One Up to join.
           </p>
           <button
             className="btn-primary w-full mt-5 py-3 text-sm flex items-center justify-center gap-2"

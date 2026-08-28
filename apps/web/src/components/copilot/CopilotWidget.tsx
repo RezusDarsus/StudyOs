@@ -452,7 +452,7 @@ export default function CopilotWidget({
     return (
       <button
         onClick={onOpen}
-        aria-label="Open Goalify Copilot"
+        aria-label="Open One Up Copilot"
         aria-expanded={false}
         className="copilot-fab fixed rounded-full flex items-center justify-center z-[90] animate-bounce-in"
         style={{
@@ -484,7 +484,7 @@ export default function CopilotWidget({
       ref={panelRef}
       tabIndex={-1}
       role="dialog"
-      aria-label="Goalify Copilot"
+      aria-label="One Up Copilot"
       className="copilot-panel fixed z-[90] flex flex-col animate-slide-up"
       style={{
         background: '#fff',
