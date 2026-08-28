@@ -8,6 +8,7 @@ import { isDayString } from '../domain/dates.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
 import { describeProvenance, parseContext, toPlainObject } from '../ai/context.js';
+import { questionBudget } from '../ai/interview-plan.js';
 import {
   answerQuestion,
   cancelSession,
@@ -106,7 +107,7 @@ export default async function copilotRoutes(app: FastifyInstance) {
 
   app.post('/copilot/goal-sessions', { preHandler: app.requireAuth }, async (req) => {
     const { goal } = z
-      .object({ goal: z.string().trim().min(3, 'Tell me a little more').max(500) })
+      .object({ goal: z.string().trim().min(3, 'Tell me a little more').max(2000) })
       .parse(req.body);
     try {
       return await startSession(req.user!.id, goal);
@@ -130,6 +131,9 @@ export default async function copilotRoutes(app: FastifyInstance) {
       status: session.status,
       initialGoalText: session.initialGoalText,
       questionCount: session.questionCount,
+      estimatedTotal: session.status === 'INTERVIEWING'
+        ? questionBudget(session.initialGoalText).max
+        : session.questionCount,
       context: toPlainObject(parseContext(session.structuredContext, session.initialGoalText)),
       provenance: describeProvenance(parseContext(session.structuredContext, session.initialGoalText)),
       canGenerate: session.status === 'READY_TO_GENERATE',

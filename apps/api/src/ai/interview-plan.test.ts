@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   promoteMultiSelect,
   questionBudget,
+  questionDomainMismatch,
+  essentialFallbackQuestion,
   questionTopic,
   redundancyReason,
 } from './interview-plan.js';
@@ -120,8 +122,8 @@ describe('how much interview a request has earned', () => {
   it('gives a vague goal room to ask', () => {
     const budget = questionBudget('I want read more');
     expect(budget.stated).toEqual([]);
-    expect(budget.min).toBe(2);
-    expect(budget.max).toBe(5);
+    expect(budget.min).toBe(1);
+    expect(budget.max).toBe(3);
   });
 
   it('stops interviewing someone who already said what they want', () => {
@@ -138,8 +140,8 @@ describe('how much interview a request has earned', () => {
   it('asks a little of someone who gave one detail', () => {
     const budget = questionBudget('I want to go to the gym 3 times a week');
     expect(budget.stated).toEqual(['FREQUENCY']);
-    expect(budget.min).toBe(2);
-    expect(budget.max).toBe(4);
+    expect(budget.min).toBe(1);
+    expect(budget.max).toBe(2);
   });
 
   it('never asks for more questions than it allows', () => {
@@ -152,6 +154,45 @@ describe('how much interview a request has earned', () => {
       const budget = questionBudget(goal);
       expect(budget.min).toBeLessThanOrEqual(budget.max);
     }
+  });
+
+  it('requires clarification for an impossible day count', () => {
+    const budget = questionBudget(
+      'I need exactly three different days per week, but I can exercise only on Monday and Wednesday.',
+    );
+    expect(budget.requiresClarification).toBe(true);
+    expect(budget.min).toBeGreaterThan(0);
+  });
+
+  it('recognizes every-week wording and days named before "only days"', () => {
+    const budget = questionBudget(
+      'I need three different days every week. Monday and Wednesday are the only days possible.',
+    );
+    expect(budget.requiresClarification).toBe(true);
+  });
+
+  it('recognizes a qualified expert goal as undefined', () => {
+    const budget = questionBudget('Help me become a world-class expert in distributed systems.');
+    expect(budget.requiresClarification).toBe(true);
+  });
+
+  it('requires a measurable definition instead of accepting fake precision', () => {
+    const budget = questionBudget('Make me 95% more productive in 30 days.');
+    expect(budget.requiresClarification).toBe(true);
+    expect(budget.min).toBeGreaterThan(0);
+  });
+});
+
+describe('deterministic minimum interview',()=>{
+  it('asks success then realistic frequency for a vague goal',()=>{
+    const first=essentialFallbackQuestion('I want to get fitter',[]);
+    expect(first.id).toBe('essential_success');
+    expect(questionTopic(first.prompt,first.type,first.options)).toBe('TARGET');
+    const second=essentialFallbackQuestion('I want to get fitter',['TARGET']);
+    expect(second.id).toBe('essential_frequency');
+    expect(questionTopic(second.prompt,second.type,second.options)).toBe('FREQUENCY');
+    expect(questionBudget('I want to get fitter')).toMatchObject({ min: 1, max: 3 });
+    expect(questionBudget('Run 30 minutes three days per week')).toMatchObject({ min: 0, max: 1 });
   });
 });
 
@@ -201,5 +242,50 @@ describe('which questions never reach the user', () => {
       askedTopics: ['OTHER'],
     });
     expect(reason).toBeNull();
+  });
+
+  it('rejects weekday scheduling for a monthly savings transfer', () => {
+    expect(questionDomainMismatch(
+      question({ prompt:'Which days of the week should you make the transfer?' }),
+      'Set aside 700 GEL monthly for a laptop.',
+    )).toBe(true);
+  });
+
+  it('rejects malformed mixed calendar units', () => {
+    expect(questionDomainMismatch(
+      question({ prompt:'How many months per week will you save?' }),
+      'Save for a laptop.',
+    )).toBe(true);
+  });
+
+  it('rejects weekly frequency questions for monthly finance', () => {
+    expect(questionDomainMismatch(
+      question({ prompt:'How many days per week should you make the contribution?' }),
+      'Contribute 700 GEL monthly.',
+    )).toBe(true);
+  });
+
+  it('rejects per-month questions when every named weekday is already explicit',()=>{
+    expect(questionDomainMismatch(
+      question({prompt:'How many Sundays per month would you like to call?'}),
+      'Call my parents every Sunday afternoon.',
+    )).toBe(true);
+    expect(questionBudget('Water plants every Saturday morning.').stated).toContain('FREQUENCY');
+  });
+
+  it('rejects resume scheduling questions when the user reserves that decision',()=>{
+    expect(questionDomainMismatch(
+      question({prompt:'Which day should the first session back be?'}),
+      'Recommend PAUSE and let me decide when to resume.',
+    )).toBe(true);
+    expect(questionDomainMismatch(
+      question({prompt:'How many minutes per session after the pause?'}),
+      'Recommend PAUSE and let me decide when to resume.',
+    )).toBe(true);
+  });
+  it('rejects finance schedule questions already answered by named cap periods',()=>{
+    const goal='Contribute €650 per month from September through November and €300 in December and January.';
+    expect(questionDomainMismatch(question({prompt:'What is the first contribution date?'}),goal)).toBe(true);
+    expect(questionDomainMismatch(question({prompt:'Which months have the €300 cap?'}),goal)).toBe(true);
   });
 });

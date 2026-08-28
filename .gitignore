@@ -6,4 +6,17 @@ dist/
 !.env.example
 *.db
 *.db-journal
+# A full dump of every table, password hashes included. Produced by db:export for the
+# SQLite -> Postgres move and never something to commit.
+apps/api/prisma/data-export.json
 .figma-src/
+*.tsbuildinfo
+
+# editors
+.idea/
+.vscode/
+.claude/
+
+# Local deployment worktrees and generated benchmark reports are not application source.
+.codex-deploy-fix/
+benchmark-results/

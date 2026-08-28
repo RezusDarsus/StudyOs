@@ -35,7 +35,11 @@ import {
   literalAnswers,
   parseContext,
 } from '../ai/context.js';
-import { memoryGateCategory } from '../ai/category.js';
+import {
+  classifyGoalText,
+  MEMORY_GATE_CONFIDENCE,
+  memoryGateCategory,
+} from '../ai/category.js';
 import { AiProviderError } from '../ai/provider.js';
 
 const TRANSCRIPT_WINDOW = 20;
@@ -159,6 +163,10 @@ export async function generateDraft(sessionId: string, userId: string, regenerat
     return acc;
   }, {});
   const inferred = { ...currentSessionFacts(context), ...inferredValues(context) };
+  const validationSource = [
+    session.initialGoalText,
+    JSON.stringify(answers),
+  ].join('\n');
 
   // Memory is gated on the user's own words, not the model's category guess.
   const gate = memoryGateCategory(session.initialGoalText, session.category);
@@ -217,16 +225,24 @@ export async function generateDraft(sessionId: string, userId: string, regenerat
     );
   }
 
+  // A clear category in the user's own words outranks an occasional model miss.
+  // This prevents “get fitter” from appearing as Personal Growth while leaving
+  // genuinely mixed or ambiguous requests to the model.
+  const categoryGuess = classifyGoalText(session.initialGoalText);
+  if (categoryGuess.category && categoryGuess.confidence >= MEMORY_GATE_CONFIDENCE) {
+    raw = { ...raw, category: categoryGuess.category };
+  }
+
   // A plan can be perfectly well-formed and still be unusable — 60 hours a week,
   // or a frequency that is not a real schedule. Give it the same single corrective
   // retry the JSON parser gets, rather than handing the user a dead end.
   let normalized: NormalizedDraft;
   try {
-    normalized = validateAndNormalizeDraft(raw, timezone);
+    normalized = validateAndNormalizeDraft(raw, timezone, new Date(), validationSource);
   } catch (err) {
     if (!(err instanceof DraftValidationError)) throw err;
 
-    const repaired: GoalDraftInput = await chatJson(
+    let repaired: GoalDraftInput = await chatJson(
       {
         purpose: 'DRAFT_GENERATION',
         promptVersion: PROMPT_VERSIONS.draft,
@@ -253,7 +269,10 @@ export async function generateDraft(sessionId: string, userId: string, regenerat
       },
       goalDraftSchema,
     );
-    normalized = validateAndNormalizeDraft(repaired, timezone);
+    if (categoryGuess.category && categoryGuess.confidence >= MEMORY_GATE_CONFIDENCE) {
+      repaired = { ...repaired, category: categoryGuess.category };
+    }
+    normalized = validateAndNormalizeDraft(repaired, timezone, new Date(), validationSource);
   }
   const draft = await persistDraft({ userId, sessionId, draft: normalized });
 
@@ -470,7 +489,11 @@ export async function applyPatch(draftId: string, userId: string, patch: DraftPa
           const config = {
             weekdays: recurrence.weekdays,
             timesPerWeek: recurrence.timesPerWeek,
+            allowedWeekdays: recurrence.allowedWeekdays,
+            excludedWeekdays: recurrence.excludedWeekdays,
             intervalDays: recurrence.intervalDays,
+            dayOfMonth: recurrence.dayOfMonth,
+            intervalMonths: recurrence.intervalMonths,
           };
           validateRecurrence(recurrence.type, config);
         }
@@ -490,7 +513,11 @@ export async function applyPatch(draftId: string, userId: string, patch: DraftPa
                   recurrenceConfig: JSON.stringify({
                     weekdays: recurrence.weekdays,
                     timesPerWeek: recurrence.timesPerWeek,
+                    allowedWeekdays: recurrence.allowedWeekdays,
+                    excludedWeekdays: recurrence.excludedWeekdays,
                     intervalDays: recurrence.intervalDays,
+                    dayOfMonth: recurrence.dayOfMonth,
+                    intervalMonths: recurrence.intervalMonths,
                   }),
                 }
               : {}),
@@ -514,7 +541,11 @@ export async function applyPatch(draftId: string, userId: string, patch: DraftPa
         const config = {
           weekdays: op.task.recurrence.weekdays,
           timesPerWeek: op.task.recurrence.timesPerWeek,
+          allowedWeekdays: op.task.recurrence.allowedWeekdays,
+          excludedWeekdays: op.task.recurrence.excludedWeekdays,
           intervalDays: op.task.recurrence.intervalDays,
+          dayOfMonth: op.task.recurrence.dayOfMonth,
+          intervalMonths: op.task.recurrence.intervalMonths,
         };
         validateRecurrence(op.task.recurrence.type, config);
         const created = await prisma.goalDraftTask.create({

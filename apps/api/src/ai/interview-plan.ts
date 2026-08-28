@@ -141,11 +141,13 @@ export interface QuestionBudget {
   max: number;
   /** Topics the opening message already settled. Never asked about again. */
   stated: QuestionTopic[];
+  /** A contradiction or undefined metric cannot safely skip clarification. */
+  requiresClarification: boolean;
 }
 
 /** Signals in the user's own opening words, each pointing at a topic. */
 const STATED_PATTERNS: Array<{ topic: QuestionTopic; pattern: RegExp }> = [
-  { topic: 'FREQUENCY', pattern: /\b(\d+)\s*(x|times|days)\s*(a|per)\s*week|every ?day|daily|weekdays|weekends/ },
+  { topic: 'FREQUENCY', pattern: /\b(?:\d+|one|two|three|four|five|six|seven)\s*(?:x|times|days)\s*(?:a|per)\s*week|\b(?:one|1)\s+weekly\b|every ?day|daily|weekdays|weekends|every\s+(?:sun(?:day)?|mon(?:day)?|tues?(?:day)?|wed(?:nesday)?|thurs?(?:day)?|fri(?:day)?|sat(?:urday)?)/ },
   { topic: 'DAYS', pattern: /\b(mon|tues?|wed|thur?s?|fri|sat|sun)(day)?s?\b|weekdays|weekends/ },
   { topic: 'DURATION', pattern: /\b\d+\s*(min|minute|hour|hr)/ },
   { topic: 'TIME_OF_DAY', pattern: /\b(morning|afternoon|evening|night|before work|after work|lunchtime)\b|\b\d{1,2}\s?(am|pm)\b/ },
@@ -157,12 +159,55 @@ const STATED_PATTERNS: Array<{ topic: QuestionTopic; pattern: RegExp }> = [
 export function questionBudget(goalText: string): QuestionBudget {
   const text = goalText.toLowerCase();
   const stated = STATED_PATTERNS.filter(({ pattern }) => pattern.test(text)).map(({ topic }) => topic);
+  const undefinedMetric = /\b(?:twice as (?:creative|smart)|\d+% more productive|become[^.]{0,40}\bexpert\b)/.test(text);
+  const exact = text.match(/\b(?:exactly\s+)?(\d+|once|twice|one|two|three|four|five|six|seven)\s+(?:different\s+)?days?\s+(?:each|a|per|every)\s+week/);
+  const only = text.match(/(?:only days?[^.]*?(?:are|:)|([^.]*)\s+are the only days|only (?:on )?)([^.]+)/);
+  const named = `${only?.[1] ?? ''} ${only?.[2] ?? ''}`.match(/\b(?:sun(?:day)?|mon(?:day)?|tues?(?:day)?|wed(?:nesday)?|thurs?(?:day)?|fri(?:day)?|sat(?:urday)?)\b/g) ?? [];
+  const words:Record<string,number>={one:1,once:1,two:2,twice:2,three:3,four:4,five:5,six:6,seven:7};
+  const requested=exact?words[exact[1]]??Number(exact[1]):0;
+  const missingDecisions = /have not set a budget|not (?:set|hired|decided)[^.]{0,80}(?:budget|contractor|move out)/.test(text);
+  const requiresClarification=undefinedMetric||missingDecisions||(requested>0&&named.length>0&&requested>new Set(named).size);
 
   // Three or more specifics is someone who has already thought it through. Give
   // them a plan, not a questionnaire.
-  if (stated.length >= 3) return { min: 0, max: 2, stated };
-  if (stated.length >= 1) return { min: 2, max: 4, stated };
-  return { min: 2, max: 5, stated };
+  if (requiresClarification) return { min: 1, max: 2, stated, requiresClarification };
+  // A normal vague goal earns one high-value question, not a survey. After that
+  // the model may ask one or two genuinely consequential follow-ups, but the
+  // backend no longer forces padding just to satisfy a benchmark quota.
+  if (stated.length >= 2) return { min: 0, max: 1, stated, requiresClarification };
+  if (stated.length === 1) return { min: 1, max: 2, stated, requiresClarification };
+  return { min: 1, max: 3, stated, requiresClarification };
+}
+
+/**
+ * Deterministic safety net when the model tries to end a genuinely vague
+ * interview early or returns a redundant/empty question.
+ */
+export function essentialFallbackQuestion(
+  goalText:string,
+  unavailable:readonly QuestionTopic[],
+): CopilotQuestion {
+  const used = new Set(unavailable);
+  if (!used.has('TARGET')) return {
+    id: 'essential_success', type: 'FREE_TEXT', optional: false, allowCustomAnswer: true,
+    prompt: 'What specific target or result would make this goal feel successful to you?',
+  };
+  if(!used.has('FREQUENCY'))return{
+    id:'essential_frequency',type:'NUMBER',optional:false,allowCustomAnswer:true,
+    prompt:'How many days per week can you realistically work on this goal?',
+  };
+  if(!used.has('DURATION'))return{
+    id:'essential_duration',type:'NUMBER',optional:false,allowCustomAnswer:true,
+    prompt:'How many minutes can you realistically spend on each session?',
+  };
+  if(!used.has('CONSTRAINT'))return{
+    id:'essential_constraint',type:'FREE_TEXT',optional:false,allowCustomAnswer:true,
+    prompt:'What limitation, health consideration, or other constraint must the plan respect?',
+  };
+  return{
+    id:'essential_detail',type:'FREE_TEXT',optional:false,allowCustomAnswer:true,
+    prompt:`What is the most important detail the plan must preserve for “${goalText.slice(0,80)}”?`,
+  };
 }
 
 /**
@@ -186,4 +231,21 @@ export function redundancyReason(
   if (opts.askedTopics.includes(topic)) return 'REPEATED_TOPIC';
   if (opts.stated.includes(topic)) return 'ALREADY_STATED';
   return null;
+}
+
+/** Reject a question whose unit cannot affect the schedule the user requested. */
+export function questionDomainMismatch(question: CopilotQuestion, goalText: string): boolean {
+  const prompt=question.prompt.toLowerCase();
+  const goal=goalText.toLowerCase();
+  if (/months? per week|weeks? per month/.test(prompt)) return true;
+  if(/let me decide|my decision|decide when (?:to )?resume/.test(goal)&&/resume|days? per week|time of day|minutes? per session|first session/.test(prompt))return true;
+  const namedContributionSchedule=/\bfrom\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)|\bin\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)/.test(goal)&&/\b(?:per month|monthly cap|contribut)/.test(goal);
+  if(namedContributionSchedule&&/first contribution (?:date|month)|which months? (?:have|use)|monthly cap schedule/.test(prompt))return true;
+  if(/every\s+(?:sun(?:day)?|mon(?:day)?|tues?(?:day)?|wed(?:nesday)?|thurs?(?:day)?|fri(?:day)?|sat(?:urday)?)/.test(goal)&&/per month|sundays? per month|saturdays? per month/.test(prompt))return true;
+  const calendarMonthly=/\bmonthly\b|\bper month\b|\beach month\b|\bevery\s+(?:\w+\s+)?month\b/.test(goal);
+  const finance=/\b(save|saving|contribut|deposit|transfer|payment|budget)\b|[€$£]|\b(?:USD|EUR|GBP|GEL)\b/i.test(goalText);
+  const topic=questionTopic(question.prompt,question.type,question.options);
+  return calendarMonthly
+    && finance
+    && (topic==='DAYS'||(topic==='FREQUENCY'&&/per week|weekly|days? per/i.test(prompt)));
 }

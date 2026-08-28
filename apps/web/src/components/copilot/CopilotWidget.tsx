@@ -17,6 +17,7 @@ import DraftPreview from './DraftPreview';
 import { useAsync, useToast } from '../ui';
 import { api } from '../../lib/api';
 import { SLASH_COMMANDS, canSubmit, parseInput, type SlashCommand } from '../../lib/slash';
+import { isProductHelpRequest } from '../../lib/copilot-intent';
 import { useCopilotInterview } from '../../lib/useCopilotInterview';
 import { GOAL_QUICK_ASKS, useGoalCopilot } from '../../lib/useGoalCopilot';
 import type { CopilotStatus } from '../../lib/types';
@@ -247,6 +248,14 @@ function HelpView() {
         </ul>
       </div>
       <div>
+        <strong style={{ color: '#1a1635' }}>Account & support</strong>
+        <ul className="mt-1.5 flex flex-col gap-1" style={{ paddingLeft: 18, listStyle: 'disc' }}>
+          <li>Log out from the exit icon in the header (mobile) or the sidebar (desktop)</li>
+          <li>Profile contains your personal settings and Copilot memory controls</li>
+          <li>For data export, account deletion, or support, email support@goalify.app</li>
+        </ul>
+      </div>
+      <div>
         <strong style={{ color: '#1a1635' }}>Shortcuts</strong>
         <ul className="mt-1.5 flex flex-col gap-1" style={{ paddingLeft: 18, listStyle: 'disc' }}>
           {SLASH_COMMANDS.map((command) => (
@@ -417,6 +426,10 @@ export default function CopilotWidget({
   };
 
   function startInterview(text: string) {
+    if (isProductHelpRequest(text)) {
+      onChangeTarget({ view: 'help' });
+      return;
+    }
     onChangeTarget({ view: 'create' });
     void interview.begin(text);
   }
@@ -602,7 +615,9 @@ export default function CopilotWidget({
                     <div className="progress-bar-fill" style={{ width: `${interview.progress}%` }} />
                   </div>
                   <span style={{ fontSize: '0.68rem', color: '#8b88b0', fontWeight: 600 }}>
-                    {interview.turn?.questionCount ?? 0} of ~{interview.turn?.estimatedTotal ?? 5}
+                    {interview.phase === 'READY'
+                      ? 'Ready'
+                      : `${interview.turn?.questionCount ?? 0} of ~${interview.turn?.estimatedTotal ?? 3}`}
                   </span>
                 </div>
                 <Transcript

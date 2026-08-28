@@ -11,7 +11,7 @@ import { GOAL_CATEGORY, type GoalCategory } from '../domain/enums.js';
 
 const KEYWORDS: Record<GoalCategory, string[]> = {
   FITNESS: [
-    'fit', 'gym', 'workout', 'exercise', 'run', 'jog', 'walk', 'swim', 'cycle',
+    'fitness', 'fitter', 'get fit', 'gym', 'workout', 'exercise', 'run', 'jog', 'walk', 'swim', 'cycle',
     'cycling', 'weight', 'muscle', 'strength', 'cardio', 'yoga', 'pilates', 'steps',
     'marathon', '5k', '10k', 'training', 'lose weight', 'get in shape',
   ],

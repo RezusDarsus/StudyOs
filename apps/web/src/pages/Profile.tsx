@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pencil } from 'lucide-react';
+import { Download, Pencil, Trash2 } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import {
   Avatar,
@@ -53,6 +53,35 @@ export default function Profile() {
     [id],
   );
   const [editing, setEditing] = useState(false);
+  const { logout } = useAuth();
+  const { push } = useToast();
+
+  async function exportData() {
+    try {
+      const data = await api.get<unknown>('/account/export');
+      const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `goalify-export-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      push('Your data export is ready');
+    } catch (err) {
+      push(err instanceof ApiError ? err.message : 'Could not export your data', 'error');
+    }
+  }
+
+  async function deleteAccount() {
+    if (!window.confirm('Permanently delete your account and all of its data? This cannot be undone.')) return;
+    if (!window.confirm('Are you absolutely sure? Your goals and progress will be permanently deleted.')) return;
+    try {
+      await api.del('/account');
+      await logout().catch(() => undefined);
+      window.location.assign('/');
+    } catch (err) {
+      push(err instanceof ApiError ? err.message : 'Could not delete your account', 'error');
+    }
+  }
 
   if (loading) {
     return (
@@ -194,6 +223,22 @@ export default function Profile() {
 
       {/* Only ever shown on your own profile — this is your data, not public. */}
       {isSelf && <AiMemoryPanel />}
+
+      {isSelf && (
+        <Section title="Your data">
+          <div className="flex flex-col sm:flex-row gap-2">
+            <button className="btn-ghost flex items-center justify-center gap-2 px-4 py-2.5 text-sm" onClick={exportData}>
+              <Download size={15} /> Export my data
+            </button>
+            <button className="btn-ghost flex items-center justify-center gap-2 px-4 py-2.5 text-sm" style={{ color: '#c8253c' }} onClick={deleteAccount}>
+              <Trash2 size={15} /> Delete account
+            </button>
+            <a className="btn-ghost flex items-center justify-center px-4 py-2.5 text-sm" href="mailto:support@goalify.app">
+              Contact support
+            </a>
+          </div>
+        </Section>
+      )}
 
       {isSelf && <EditProfileModal open={editing} onClose={() => setEditing(false)} />}
     </div>

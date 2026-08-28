@@ -21,7 +21,7 @@
  *   node scripts/copilot-batch.mjs 3          # three rounds
  *   node scripts/copilot-batch.mjs 1 house    # scenarios matching a name
  */
-const API = 'http://127.0.0.1:4000/api';
+const API = process.env.COPILOT_BATCH_API ?? 'http://127.0.0.1:4000/api';
 const EMAIL = process.env.TEST_EMAIL ?? 'kitty@goalify.app';
 const PASSWORD = process.env.TEST_PASSWORD ?? 'goalify123';
 

@@ -418,6 +418,309 @@ describe('draft validation', () => {
     expect(result.tasks).toHaveLength(1);
   });
 
+  it('aligns a named Saturday task with weekday 6', () => {
+    const result = validateAndNormalizeDraft(
+      {
+        ...baseDraft,
+        tasks: [{
+          ...baseDraft.tasks[0],
+          title: 'Saturday study',
+          recurrence: { type: 'SPECIFIC_WEEKDAYS', weekdays: [5] },
+        }],
+      },
+      'UTC',
+      new Date('2026-08-25T10:00:00Z'),
+      'Study every Saturday.',
+    );
+    expect(result.tasks[0].recurrenceConfig.weekdays).toEqual([6]);
+  });
+
+  it('makes a one-off task recur when its named weekday is mandatory', () => {
+    const result = validateAndNormalizeDraft(
+      {
+        ...baseDraft,
+        tasks: [{
+          ...baseDraft.tasks[0],
+          title: 'Long run on Sunday',
+          recurrence: { type: 'ONCE' },
+        }],
+      },
+      'UTC',
+      new Date('2026-08-25T10:00:00Z'),
+      'Sunday must be the long run, with at most three training days per week.',
+    );
+    expect(result.tasks[0].recurrenceType).toBe('SPECIFIC_WEEKDAYS');
+    expect(result.tasks[0].recurrenceConfig.weekdays).toEqual([0]);
+  });
+
+  it('preserves a mandatory Saturday while filling an exact three-day schedule', () => {
+    const result = validateAndNormalizeDraft(
+      {
+        ...baseDraft,
+        tasks: [
+          { ...baseDraft.tasks[0], title: 'Trail practice (Saturday)', recurrence: { type: 'SPECIFIC_WEEKDAYS', weekdays: [1, 2, 4] } },
+          { ...baseDraft.tasks[0], title: 'Strength session', recurrence: { type: 'ONCE' } },
+          { ...baseDraft.tasks[0], title: 'Trail run (Monday or Tuesday)', recurrence: { type: 'ONCE' } },
+        ],
+      },
+      'UTC',
+      new Date('2026-08-25T10:00:00Z'),
+      'I may train Monday, Tuesday, Thursday, or Saturday, but need exactly three total sessions weekly, including Saturday trail practice.',
+    );
+    expect(result.tasks.map((task) => task.recurrenceConfig.weekdays)).toEqual([[6], [1], [2]]);
+  });
+
+  it('reconciles aggregate frequency without dropping weekly strength or Saturday trail roles', () => {
+    const result = validateAndNormalizeDraft(
+      {
+        ...baseDraft,
+        tasks: [
+          { ...baseDraft.tasks[0], title: 'Trail practice', recurrence: { type: 'SPECIFIC_WEEKDAYS', weekdays: [1, 2, 4] } },
+          { ...baseDraft.tasks[0], title: 'Ankle strength', recurrence: { type: 'ONCE' } },
+          { ...baseDraft.tasks[0], title: 'Recovery walk', recurrence: { type: 'ONCE' } },
+        ],
+      },
+      'UTC',
+      new Date('2026-08-25T10:00:00Z'),
+      'Train Monday, Tuesday, Thursday, or Saturday with exactly three total sessions weekly, including Saturday trail practice and one strength session.',
+    );
+    const trail=result.tasks.find((task)=>task.title==='Trail practice')!;
+    const strength=result.tasks.find((task)=>task.title==='Ankle strength')!;
+    const weekly=result.tasks.reduce((sum,task)=>sum+(task.recurrenceType==='SPECIFIC_WEEKDAYS'?(task.recurrenceConfig.weekdays?.length??0):task.recurrenceType==='TIMES_PER_WEEK'?(task.recurrenceConfig.timesPerWeek??0):0),0);
+    expect(weekly).toBe(3);
+    expect(trail.recurrenceConfig.weekdays).toContain(6);
+    expect(strength.recurrenceType).toBe('SPECIFIC_WEEKDAYS');
+  });
+
+  it('normalizes aggregate frequency across separately scheduled tasks', () => {
+    const result = validateAndNormalizeDraft(
+      {
+        ...baseDraft,
+        tasks: [
+          { ...baseDraft.tasks[0], title: 'Practice', recurrence: { type: 'TIMES_PER_WEEK', timesPerWeek: 3 } },
+          { ...baseDraft.tasks[0], title: 'Review', recurrence: { type: 'TIMES_PER_WEEK', timesPerWeek: 3 } },
+        ],
+      },
+      'UTC',
+      new Date('2026-08-25T10:00:00Z'),
+      'Practice exactly three times per week.',
+    );
+    expect(result.tasks.map((task) => task.recurrenceType)).toEqual(['TIMES_PER_WEEK', 'ONCE']);
+    expect(result.tasks[0].recurrenceConfig.timesPerWeek).toBe(3);
+  });
+
+  it('preserves monthly savings instead of converting a weekday answer into weekly recurrence', () => {
+    const result=validateAndNormalizeDraft(
+      {
+        ...baseDraft,
+        category:'FINANCE',
+        title:'Laptop fund',
+        deadline:'2027-01-15',
+        rationale:'Use 2.75 GEL per USD as a planning assumption.',
+        tasks:[{...baseDraft.tasks[0],title:'Set aside 700 GEL savings',description:'Transfer 700 GEL to the laptop fund.',recurrence:{type:'SPECIFIC_WEEKDAYS',weekdays:[6]}}],
+      },
+      'UTC',
+      new Date('2026-08-25T10:00:00Z'),
+      'I need $1,800 by January 15, 2027 and can set aside 700 GEL monthly.\n{"days_per_week":{"question":"Which day?","answer":["Sat"]}}',
+    );
+    expect(result.tasks[0].recurrenceType).toBe('MONTHLY');
+    expect(result.rationale).toMatch(/4,?950 GEL/i);
+    expect(result.rationale).toMatch(/8 monthly contributions/i);
+    expect(result.rationale).toMatch(/shortfall/i);
+  });
+
+  it('keeps explicitly weekly savings weekly', () => {
+    const result=validateAndNormalizeDraft(
+      {...baseDraft,category:'FINANCE',tasks:[{...baseDraft.tasks[0],title:'Weekly savings transfer',recurrence:{type:'TIMES_PER_WEEK',timesPerWeek:1}}]},
+      'UTC',new Date('2026-08-25T10:00:00Z'),'Transfer €50 once per week.',
+    );
+    expect(result.tasks[0].recurrenceType).toBe('TIMES_PER_WEEK');
+  });
+
+  it('keeps period-specific finance caps distinct and reports the combined shortfall',()=>{
+    const result=validateAndNormalizeDraft(
+      {...baseDraft,category:'FINANCE',deadline:'2027-08-31',tasks:[
+        {...baseDraft.tasks[0],title:'February onward payment',description:'Transfer €650 from February onward.',reason:'Use €650 from February.',recurrence:{type:'MONTHLY'}},
+      ]},
+      'UTC',new Date('2026-08-25T10:00:00Z'),
+      'By August 31, 2027 eliminate a €3,600 balance and build a €5,000 fund. We have €900 available now and can contribute €650 per month from September through November, €300 in December and January, and €700 per month from February onward. Calculate whether the combined €8,600 objective fits.',
+    );
+    expect(result.tasks.map((task)=>({description:task.description,config:task.recurrenceConfig}))).toEqual([
+      {description:'Contribute €650 per month from 2026-09-01 through 2026-11-30.',config:{dayOfMonth:1,activeFrom:'2026-09-01',activeUntil:'2026-11-30'}},
+      {description:'Contribute €300 per month from 2026-12-01 through 2027-01-31.',config:{dayOfMonth:1,activeFrom:'2026-12-01',activeUntil:'2027-01-31'}},
+      {description:'Contribute €700 per month from 2027-02-01 through 2027-08-31.',config:{dayOfMonth:1,activeFrom:'2027-02-01',activeUntil:'2027-08-31'}},
+    ]);
+    expect(result.rationale).toMatch(/7450 EUR/);
+    expect(result.rationale).toMatch(/250 EUR shortfall/);
+  });
+
+  it('encodes skipped finance months in the executable recurrence',()=>{
+    const result=validateAndNormalizeDraft(
+      {...baseDraft,category:'FINANCE',deadline:'2027-09-30',tasks:[{...baseDraft.tasks[0],title:'Tuition transfer €350',recurrence:{type:'MONTHLY'}}]},
+      'UTC',new Date('2026-08-25T10:00:00Z'),
+      'I need €4,800 by September 30, 2027. I can save €350 per month, except nothing in December 2026 and January 2027.',
+    );
+    expect(result.tasks[0].recurrenceConfig.excludedMonths).toEqual(['2026-12','2027-01']);
+    expect(result.tasks[0].description).toMatch(/350 EUR once per month/i);
+    expect(result.tasks[0].description).not.toMatch(/1st and 15th/i);
+  });
+
+  it('adds flexible weekday bounds to TIMES_PER_WEEK tasks', () => {
+    const result=validateAndNormalizeDraft(
+      {...baseDraft,tasks:[{...baseDraft.tasks[0],title:'Strength workout',recurrence:{type:'TIMES_PER_WEEK',timesPerWeek:1}}]},
+      'UTC',new Date('2026-08-25T10:00:00Z'),
+      'Train at most three days per week. Monday, Tuesday, Thursday, and Saturday are available. Wednesday is unavailable. One weekly session must be strength.',
+    );
+    expect(result.tasks[0].recurrenceConfig.allowedWeekdays).toEqual([1,2,4,6]);
+    expect(result.tasks[0].recurrenceConfig.excludedWeekdays).toEqual([3]);
+  });
+
+  it('represents conditional recovery policy without applying progression', () => {
+    const result=validateAndNormalizeDraft(
+      {...baseDraft,tasks:[{...baseDraft.tasks[0],title:'Ankle strength',progression:{metricType:'MINUTES',unitLabel:'min',stages:[{target:20,minDays:7},{target:30,minDays:7}]}}]},
+      'UTC',new Date('2026-08-25T10:00:00Z'),
+      'Progress only after two pain-free weeks, reduce after repeated pain, pause for sharp pain, and wait for my approval.',
+    );
+    expect(result.tasks[0].progression).toBeNull();
+    expect(result.rationale).toMatch(/PROGRESS only after 2 pain-free weeks/i);
+    expect(result.rationale).toMatch(/REDUCE after repeated pain/i);
+    expect(result.rationale).toMatch(/PAUSE for sharp pain/i);
+  });
+
+  it('does not apply a progression while approval is reserved', () => {
+    const result = validateAndNormalizeDraft(
+      {
+        ...baseDraft,
+        tasks: [{
+          ...baseDraft.tasks[0],
+          estimatedMinutes: 15,
+          progression: {
+            metricType: 'MINUTES',
+            unitLabel: 'min',
+            stages: [
+              { target: 15, minDays: 7 },
+              { target: 25, minDays: 7 },
+            ],
+          },
+        }],
+      },
+      'UTC',
+      new Date('2026-08-25T10:00:00Z'),
+      'Recommend changes, but do not apply them until I explicitly approve.',
+    );
+    expect(result.tasks[0].progression).toBeNull();
+  });
+
+  it('does not schedule or progress a deferred user-controlled resume',()=>{
+    const result=validateAndNormalizeDraft(
+      {...baseDraft,tasks:[{...baseDraft.tasks[0],title:'Resume training Monday',description:'Resume Monday after two weeks.',recurrence:{type:'SPECIFIC_WEEKDAYS',weekdays:[1]},progression:{metricType:'MINUTES',unitLabel:'min',stages:[{target:30,minDays:14},{target:40,minDays:14}]}}]},
+      'UTC',new Date('2026-08-25T10:00:00Z'),
+      'Recommend PAUSE, preserve the current stage, and let me decide when to resume after two weeks.',
+    );
+    expect(result.tasks[0]).toMatchObject({title:'Review whether to resume',recurrenceType:'ONCE',progression:null});
+    expect(result.tasks[0].description).toMatch(/no training session is scheduled automatically/i);
+    expect(result.rationale).toMatch(/no automatic resume/i);
+  });
+
+  it('keeps an accepted one-session delta distinct from contradictory interview answers',()=>{
+    const result=validateAndNormalizeDraft(
+      {...baseDraft,description:'Four sessions every week.',tasks:[{...baseDraft.tasks[0],title:'Practice',recurrence:{type:'SPECIFIC_WEEKDAYS',weekdays:[1,3,5,0]},reason:'You answered four days.'}]},
+      'UTC',new Date('2026-08-25T10:00:00Z'),
+      'I explicitly accept adding one weekly practice session and no other change.\n{"frequency":{"question":"How many days?","answer":"4 days"}}',
+    );
+    expect(result.tasks[0].recurrenceConfig).toEqual({timesPerWeek:1,allowedWeekdays:undefined,excludedWeekdays:undefined});
+    expect(result.description).toMatch(/single weekly activity/i);
+    expect(result.tasks[0].reason).toMatch(/one weekly addition/i);
+  });
+
+  it('turns user-defined outcome evidence into executable deliverables',()=>{
+    const result=validateAndNormalizeDraft(
+      {...baseDraft,tasks:[{...baseDraft.tasks[0],title:'Take the first concrete step',description:'Generic fallback.',reason:'This conservative fallback preserves the goal.',recurrence:{type:'ONCE'}}]},
+      'UTC',new Date('2026-08-25T10:00:00Z'),
+      'The outcome must be demonstrated by a batch pipeline, one streaming prototype, tested transformations, and architecture notes.',
+    );
+    expect(result.tasks.map((task)=>task.title)).toEqual([
+      'Deliver: batch pipeline','Deliver: streaming prototype','Deliver: tested transformations','Deliver: architecture notes',
+    ]);
+    expect(result.tasks.every((task)=>task.recurrenceType==='ONCE')).toBe(true);
+  });
+
+  it('rejects a generic placeholder presented as a successful plan', () => {
+    expect(() => validateAndNormalizeDraft(
+      {
+        ...baseDraft,
+        tasks: [{
+          ...baseDraft.tasks[0],
+          title: 'Take the first concrete step',
+          recurrence: { type: 'ONCE' },
+        }],
+      },
+      'UTC',
+      new Date('2026-08-25T10:00:00Z'),
+      'I want to get fitter.',
+    )).toThrow(/generic placeholder/i);
+  });
+
+  it('does not increase workload when approval is required first', () => {
+    const result = validateAndNormalizeDraft(
+      {
+        ...baseDraft,
+        tasks: [{
+          ...baseDraft.tasks[0],
+          estimatedMinutes: 15,
+          progression: {
+            metricType: 'MINUTES', unitLabel: 'min',
+            stages: [{ target: 15, minDays: 7 }, { target: 25, minDays: 7 }],
+          },
+        }],
+      },
+      'UTC',
+      new Date('2026-08-25T10:00:00Z'),
+      'Require my approval before increasing weekly workload.',
+    );
+    expect(result.tasks[0].progression).toBeNull();
+  });
+
+  it('moves model weekdays into an explicit weekday-only domain', () => {
+    const result = validateAndNormalizeDraft(
+      {
+        ...baseDraft,
+        tasks: [{
+          ...baseDraft.tasks[0],
+          recurrence: { type: 'SPECIFIC_WEEKDAYS', weekdays: [0, 2, 4] },
+        }],
+      },
+      'UTC',
+      new Date('2026-08-25T10:00:00Z'),
+      'Schedule three blocks on weekday mornings, but never on Friday.',
+    );
+    expect(result.tasks[0].recurrenceConfig.weekdays).toEqual([1, 2, 3]);
+  });
+
+  it('removes invented precision for an undefined success metric', () => {
+    const result = validateAndNormalizeDraft(
+      { ...baseDraft, targetType: 'QUANTITY', targetValue: 95 },
+      'UTC',
+      new Date('2026-08-25T10:00:00Z'),
+      'Make me 95% more productive without a defined baseline.',
+    );
+    expect(result.targetType).toBe('HABIT');
+    expect(result.targetValue).toBeNull();
+  });
+
+  it('clamps invented monthly contributions to the user cap', () => {
+    const result = validateAndNormalizeDraft(
+      {
+        ...baseDraft,
+        tasks: [{ ...baseDraft.tasks[0], title: 'Add €1,000 bonus in month 1' }],
+      },
+      'UTC',
+      new Date('2026-08-25T10:00:00Z'),
+      'Contribute at most €450 per month.',
+    );
+    expect(result.tasks[0].title).toContain('€450');
+  });
+
   it('rejects a plan nobody could sustain', () => {
     expect(() =>
       validateAndNormalizeDraft(

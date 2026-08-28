@@ -70,7 +70,13 @@ export class NvidiaAiChatProvider implements AiChatProvider {
         throw new AiProviderError('AI provider rejected the credentials', 'AUTH', response.status);
       }
       if (response.status === 429) {
-        throw new AiProviderError('AI provider is rate limiting', 'RATE_LIMIT', response.status);
+        const retryAfter = Number(response.headers.get('retry-after'));
+        throw new AiProviderError(
+          'AI provider is rate limiting',
+          'RATE_LIMIT',
+          response.status,
+          Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : undefined,
+        );
       }
       throw new AiProviderError(
         `AI provider returned ${response.status}${body ? ` (${body.slice(0, 120)})` : ''}`,

@@ -66,7 +66,7 @@ async function logCall(entry: {
  * Call the model and parse its reply into a validated shape.
  *
  * If the model returns something that is not valid against the schema, it gets
- * exactly one corrective retry with the parse error fed back. Anything still
+ * up to two corrective retries with the parse error fed back. Anything still
  * broken surfaces as an error rather than being half-saved.
  */
 export async function chatJson<S extends z.ZodTypeAny>(
@@ -83,7 +83,8 @@ export async function chatJson<S extends z.ZodTypeAny>(
   // two — they need completely different fixes.
   const startedAt = Date.now();
 
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const maxAttempts = 3;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     let response;
     try {
       response = await provider.chat({ ...request, messages, json: true });
@@ -102,13 +103,17 @@ export async function chatJson<S extends z.ZodTypeAny>(
         errorType: kind,
         retryCount: attempt,
       });
-      // Retry once on a transient failure; otherwise give up immediately.
+      // Retry transient failures within the bounded attempt budget.
       if (
         err instanceof AiProviderError &&
         err.retryable &&
         request.retryTransient !== false &&
-        attempt === 0
+        attempt < maxAttempts - 1
       ) {
+        if (err.kind === 'RATE_LIMIT') {
+          const delayMs = Math.min(err.retryAfterMs ?? 5_000 * (attempt + 1), 30_000);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
         continue;
       }
       throw err;
@@ -164,7 +169,7 @@ export async function chatJson<S extends z.ZodTypeAny>(
       retryCount: attempt,
     });
 
-    if (attempt === 0) {
+    if (attempt < maxAttempts - 1) {
       messages.push({ role: 'assistant', content: response.content.slice(0, 4000) });
       messages.push({
         role: 'user',

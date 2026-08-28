@@ -46,7 +46,8 @@ describe('Copilot acceptance', () => {
   it('PART 48 — a goal built in the widget is an ordinary goal', async () => {
     const user = await h.createUser({ timezone: TZ });
 
-    // "I want to become fitter" states nothing concrete, so the budget is 2-5 questions.
+    // A vague everyday goal gets one useful question. A follow-up is allowed only
+    // when it would materially change the plan; the backend does not pad the flow.
     h.ai.queue(
       'INTERVIEW',
       asks({
@@ -57,12 +58,6 @@ describe('Copilot acceptance', () => {
         prompt: 'Which activities do you enjoy?',
         options: ['Walking', 'Swimming', 'Dancing', 'Cycling'],
       }),
-      asks({
-        id: 'days_per_week',
-        type: 'NUMBER',
-        prompt: 'How many days a week can you train?',
-        unit: 'days',
-      }),
       ready(),
     );
 
@@ -72,25 +67,17 @@ describe('Copilot acceptance', () => {
 
     expect(first.question.type).toBe('MULTI_SELECT');
     expect(first.questionCount).toBe(1);
-    expect(first.estimatedTotal).toBe(5);
+    expect(first.estimatedTotal).toBe(3);
     expect(first.canGenerate).toBe(false);
 
     const second = await h.ok(user, 'POST', `/api/copilot/goal-sessions/${first.sessionId}/answers`, {
       questionId: 'liked_activities',
       answer: ['Walking', 'Swimming'],
     });
-    expect(second.questionCount).toBe(2);
-    expect(second.canGenerate).toBe(false);
-
-    const third = await h.ok(user, 'POST', `/api/copilot/goal-sessions/${first.sessionId}/answers`, {
-      questionId: 'days_per_week',
-      answer: 4,
-    });
-    // Two questions asked, floor met — the interview stops rather than continuing to
-    // the ceiling. Three model turns, three questions' worth of budget, no survey.
-    expect(third.canGenerate).toBe(true);
-    expect(third.questionCount).toBe(2);
-    expect(h.ai.countOf('INTERVIEW')).toBe(3);
+    expect(second.questionCount).toBe(1);
+    expect(second.canGenerate).toBe(true);
+    expect(second.estimatedTotal).toBe(1);
+    expect(h.ai.countOf('INTERVIEW')).toBe(2);
 
     // Both chosen activities survived into the model's view of the conversation.
     const asked = h.ai.promptsFor('INTERVIEW', 'user');
@@ -101,12 +88,12 @@ describe('Copilot acceptance', () => {
       description: 'A gentle return to regular movement.',
       category: 'FITNESS',
       targetType: 'HABIT',
-      rationale: 'You said walking and swimming suit you, and that four days a week is realistic.',
+      rationale: 'You said walking and swimming suit you, so this starts with three manageable sessions.',
       tasks: [
         {
           title: 'Brisk walk',
           description: 'A steady walk at a pace you can still talk at.',
-          recurrence: { type: 'TIMES_PER_WEEK', timesPerWeek: 3 },
+          recurrence: { type: 'TIMES_PER_WEEK', timesPerWeek: 2 },
           estimatedMinutes: 30,
           reason: 'You said you enjoy walking.',
         },
@@ -148,7 +135,7 @@ describe('Copilot acceptance', () => {
     expect(editedWalk.estimatedMinutes).toBe(25);
     // Everything else is untouched — the edit was targeted, not a regeneration.
     expect(editedWalk.title).toBe('Brisk walk');
-    expect(editedWalk.recurrenceConfig).toEqual({ timesPerWeek: 3 });
+    expect(editedWalk.recurrenceConfig).toEqual({ timesPerWeek: 2 });
     expect(editedSwim.estimatedMinutes).toBe(45);
     expect(editedSwim.title).toBe('Swim');
     expect(edited.applied.length).toBeGreaterThan(0);

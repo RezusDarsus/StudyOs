@@ -17,7 +17,22 @@ export type RecurrenceType =
   | 'EVERY_DAY'
   | 'SPECIFIC_WEEKDAYS'
   | 'TIMES_PER_WEEK'
-  | 'EVERY_X_DAYS';
+  | 'EVERY_X_DAYS'
+  | 'MONTHLY'
+  | 'EVERY_X_MONTHS';
+
+export interface RecurrenceConfig {
+  weekdays?: number[];
+  timesPerWeek?: number;
+  allowedWeekdays?: number[];
+  excludedWeekdays?: number[];
+  intervalDays?: number;
+  dayOfMonth?: number | 'LAST';
+  intervalMonths?: number;
+  activeFrom?: string;
+  activeUntil?: string;
+  excludedMonths?: string[];
+}
 export type OccurrenceStatus = 'PENDING' | 'COMPLETED' | 'MISSED' | 'SKIPPED';
 export type FriendState = 'NONE' | 'REQUEST_SENT' | 'REQUEST_RECEIVED' | 'FRIENDS' | 'BLOCKED';
 
@@ -83,7 +98,7 @@ export interface TaskDefinition {
   title: string;
   description: string;
   recurrenceType: RecurrenceType;
-  recurrenceConfig: { weekdays?: number[]; timesPerWeek?: number; intervalDays?: number };
+  recurrenceConfig: RecurrenceConfig;
   reward: number;
   startDate: string;
   endDate: string | null;
@@ -292,6 +307,16 @@ export function describeRecurrence(task: Pick<TaskDefinition, 'recurrenceType' |
     case 'EVERY_X_DAYS': {
       const n = task.recurrenceConfig.intervalDays ?? 1;
       return n === 1 ? 'Every day' : `Every ${n} days`;
+    }
+    case 'MONTHLY': {
+      const day = task.recurrenceConfig.dayOfMonth;
+      return day === 'LAST' ? 'Last day of every month' : day ? `Monthly on day ${day}` : 'Monthly';
+    }
+    case 'EVERY_X_MONTHS': {
+      const n = task.recurrenceConfig.intervalMonths ?? 1;
+      const day = task.recurrenceConfig.dayOfMonth;
+      const suffix = day === 'LAST' ? ' on the last day' : day ? ` on day ${day}` : '';
+      return `Every ${n} months${suffix}`;
     }
     default:
       return '';
@@ -534,7 +559,7 @@ export interface DraftTask {
   title: string;
   description: string;
   recurrenceType: RecurrenceType;
-  recurrenceConfig: { weekdays?: number[]; timesPerWeek?: number; intervalDays?: number };
+  recurrenceConfig: RecurrenceConfig;
   estimatedMinutes: number | null;
   preferredTime: string | null;
   /** Why this task suits this person — quoted from the interview. */
@@ -577,7 +602,11 @@ export interface ProgressSuggestion {
     type: RecurrenceType;
     weekdays?: number[];
     timesPerWeek?: number;
+    allowedWeekdays?: number[];
+    excludedWeekdays?: number[];
     intervalDays?: number;
+    dayOfMonth?: number | 'LAST';
+    intervalMonths?: number;
   } | null;
   proposedMinutes?: number | null;
   proposedProgressionAction?: 'ADVANCE' | 'STAY' | 'REDUCE' | null;

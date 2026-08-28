@@ -6,8 +6,8 @@ import { QUESTION_TYPES } from './schemas.js';
 // with every AI call log so a regression can be traced to a specific prompt.
 
 export const PROMPT_VERSIONS = {
-  interview: 'goal-interview-v3',
-  draft: 'goal-draft-v3',
+  interview: 'goal-interview-v5',
+  draft: 'goal-draft-v5',
   edit: 'goal-edit-v1',
   progress: 'progress-analysis-v3',
   preference: 'preference-extraction-v1',
@@ -75,6 +75,9 @@ Interview rules:
   do not ask it. "Which activities do you enjoy?" shapes a fitness goal and is noise
   on a reading goal or "save for a trip" — for those, ask what genuinely shapes the
   work.
+- Calendar-month finance tasks do not need a weekday. Never ask which weekday to
+  make a monthly transfer; ask only for a missing first contribution date, current
+  savings, or exchange-rate assumption when that fact changes feasibility.
 - Do not ask for sensitive personal detail (weight, medical history, income,
   past failures) unless the user raised it first.
 - If the goal is a one-off project rather than a repeating habit, say so plainly
@@ -171,6 +174,12 @@ session length, when in the day they are free, anything they want the plan to av
 and how strict or flexible they want it. Only ask the ones that are still open AND
 that would change what gets scheduled for THIS goal.
 
+Before deciding you have enough information, check for two mandatory clarification
+cases. If the request contains mutually impossible constraints, ask which constraint
+may change. If success is undefined (for example "twice as creative", "95% more
+productive", or "become an expert" without evidence), ask how success will be
+observed. Never convert an undefined phrase into a made-up number.
+
 Conversation so far:
 ${opts.transcript.map((m) => `${m.role}: ${m.content}`).join('\n') || '(just started)'}
 
@@ -190,7 +199,11 @@ Rules:
 - Every task must respect what the user said they enjoy, dislike, and can commit to.
   If they said they hate running, do not include running in any form.
 - Honour stated constraints (days unavailable, session length, plan style).
-- 1-5 tasks is usually right. Never more than 8. Fewer, sustainable tasks win.
+- Use 2-4 complementary tasks when the goal naturally has distinct actions (for
+  example practice plus review, or movement plus recovery). Use one task only when
+  it genuinely represents the complete repeating behavior. Never create a generic
+  placeholder such as "Take the first concrete step" or "Work on your goal".
+  Never more than 8 tasks; fewer sustainable tasks beat decorative busywork.
 - WRITE TO THE USER, NOT ABOUT THEM. "rationale" and every task "reason" address
   them as "you". Never write "the user", "they", or "this person" — the user reads
   these words on their own plan.
@@ -211,6 +224,27 @@ Rules:
 - Respect the numbers they gave. Their stated session length and days per week win
   over anything else, unless the value is unsafe. Do not schedule more sessions of
   the same work than the days they said they can do it.
+- ALL recurring tasks are active together. Add their frequencies and minutes before
+  returning JSON. If the user said exactly two sessions total, two tasks each running
+  twice is FOUR sessions and is wrong. Phase labels in titles do not make recurrences
+  sequential; use one recurring practice task plus one-off deliverables instead.
+- Weekday integers are exact: 0 Sunday, 1 Monday, 2 Tuesday, 3 Wednesday,
+  4 Thursday, 5 Friday, 6 Saturday. Re-read every named weekday before returning.
+- Available days are choices, not required frequency. Three available weekdays with
+  a two-session limit means schedule two total sessions, not three.
+- Deterministic dates must be exact. "Before November 2026" ends on 2026-10-31.
+  For relative dates, calculate from today's date stated in the user prompt.
+- For money goals, show the arithmetic in the rationale. Never exceed a contribution
+  cap, invent a top-up or extra income, mix currencies, or claim feasibility when
+  the stated contributions cannot reach the target. Negotiate scope or deadline.
+- If scope, deadline, quality, and capacity cannot coexist, say so plainly and make
+  the plan pursue a controllable reduced outcome. Never merely repeat an impossible
+  promise in the title.
+- Undefined claims such as "twice as creative", "95% more productive", or "expert"
+  are not numeric targets. Use concrete evidence supplied by the user, or a HABIT
+  plan that establishes a baseline; never copy the fake number into targetValue.
+- A recommendation and a user decision are different. Do not encode a proposed
+  increase as an active recurrence or build-up until the user explicitly accepts it.
 - Each task "reason" explains why THAT task suits THIS person, in one sentence,
   addressed to them.
 - Be realistic: no 3-hour daily commitments, no 7-day-a-week intensity for a beginner.
@@ -230,9 +264,17 @@ Recurrence shape:
 - SPECIFIC_WEEKDAYS    -> { "type": "SPECIFIC_WEEKDAYS", "weekdays": [1,3,5] }  (0=Sunday)
 - TIMES_PER_WEEK       -> { "type": "TIMES_PER_WEEK", "timesPerWeek": 5 }
 - EVERY_X_DAYS         -> { "type": "EVERY_X_DAYS", "intervalDays": 2 }
+- MONTHLY             -> { "type": "MONTHLY", "dayOfMonth": 1 }
+- EVERY_X_MONTHS      -> { "type": "EVERY_X_MONTHS", "intervalMonths": 2, "dayOfMonth": 1 }
+
+Never translate a calendar-month instruction into a weekly recurrence. “Monthly”,
+“on the 1st of each month”, and “every second month” require MONTHLY or
+EVERY_X_MONTHS. Use "dayOfMonth": "LAST" for the final calendar day.
 
 Prefer TIMES_PER_WEEK when the user gave a weekly number but no fixed days —
 it lets them pick the days and is scored fairly.
+When flexible weekly work is restricted to certain days, include allowedWeekdays
+or excludedWeekdays so the scheduler preserves that boundary.
 
 BUILD-UP (optional, and usually absent):
 A task may include "progression" when the *amount* should grow over weeks —

@@ -97,6 +97,7 @@ export default function CopilotInterview() {
           <textarea
             value={goalText}
             onChange={(e) => setGoalText(e.target.value)}
+            maxLength={2000}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) interview.begin(goalText);
             }}
@@ -182,7 +183,9 @@ export default function CopilotInterview() {
           <div className="progress-bar-fill" style={{ width: `${progress}%` }} />
         </div>
         <span style={{ fontSize: '0.72rem', color: '#8b88b0', fontWeight: 600, whiteSpace: 'nowrap' }}>
-          {turn?.questionCount ?? 0} of ~{turn?.estimatedTotal ?? 5}
+          {phase === 'READY'
+            ? 'Ready'
+            : `${turn?.questionCount ?? 0} of ~${turn?.estimatedTotal ?? 3}`}
         </span>
       </div>
 

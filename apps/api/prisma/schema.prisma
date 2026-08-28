@@ -188,12 +188,16 @@ model TaskDefinition {
   title       String
   description String @default("")
 
-  // ONCE | EVERY_DAY | SPECIFIC_WEEKDAYS | TIMES_PER_WEEK | EVERY_X_DAYS
+  // ONCE | EVERY_DAY | SPECIFIC_WEEKDAYS | TIMES_PER_WEEK | EVERY_X_DAYS | MONTHLY | EVERY_X_MONTHS
   recurrenceType String
   // JSON-encoded. Shape depends on recurrenceType:
   //   SPECIFIC_WEEKDAYS -> { "weekdays": [1,3,5] }   (0=Sun … 6=Sat)
   //   TIMES_PER_WEEK    -> { "timesPerWeek": 3 }
+  //     optionally bounded by { "allowedWeekdays": [1,2,4], "excludedWeekdays": [3] }
   //   EVERY_X_DAYS      -> { "intervalDays": 2 }
+  //   MONTHLY           -> { "dayOfMonth": 1 }, optionally with activeFrom,
+  //                        activeUntil, and excludedMonths calendar bounds
+  //   EVERY_X_MONTHS    -> { "intervalMonths": 2, "dayOfMonth": 1 }
   //   ONCE / EVERY_DAY  -> {}
   recurrenceConfig String @default("{}")
 

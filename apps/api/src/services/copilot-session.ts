@@ -1,5 +1,6 @@
 import type { CopilotSession } from '@prisma/client';
 import { chatJson } from '../ai/client.js';
+import { AiProviderError } from '../ai/provider.js';
 import {
   PROMPT_VERSIONS,
   interviewSystemPrompt,
@@ -13,6 +14,8 @@ import {
 import {
   promoteMultiSelect,
   questionBudget,
+  essentialFallbackQuestion,
+  questionDomainMismatch,
   questionTopic,
   redundancyReason,
   type QuestionTopic,
@@ -30,7 +33,6 @@ import {
   toPlainObject,
 } from '../ai/context.js';
 import { memoryGateCategory } from '../ai/category.js';
-import { AiProviderError } from '../ai/provider.js';
 import { badRequest, forbidden, notFound } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
 import { getPreferencesForPrompt } from './preferences.js';
@@ -163,8 +165,10 @@ async function runInterviewTurn(
   // asks a fifth question and a backend that throws it away.
   const budget = questionBudget(session.initialGoalText);
 
-  const result = await chatJson(
-    {
+  let result: InterviewResponse;
+  try {
+    result = await chatJson(
+      {
       purpose: 'INTERVIEW',
       promptVersion: PROMPT_VERSIONS.interview,
       userId: session.userId,
@@ -203,9 +207,29 @@ async function runInterviewTurn(
           }),
         },
       ],
-    },
-    interviewResponseSchema,
-  );
+      },
+      interviewResponseSchema,
+    );
+  } catch (err) {
+    if (!(err instanceof AiProviderError) || !['BAD_RESPONSE', 'TIMEOUT'].includes(err.kind)) throw err;
+    const priorTopics = askedTopics(session.messages);
+    result = session.questionCount >= budget.min
+      ? {
+          state: 'READY_TO_GENERATE',
+          assistantMessage: "That's enough to build a conservative plan.",
+          question: null,
+          category: session.category as InterviewResponse['category'],
+        }
+      : {
+          state: 'NEEDS_MORE_INFORMATION',
+          assistantMessage: 'One useful detail will help me tailor the plan.',
+          question: essentialFallbackQuestion(
+            session.initialGoalText,
+            [...budget.stated, ...priorTopics],
+          ),
+          category: session.category as InterviewResponse['category'],
+        };
+  }
   return { result, preferences };
 }
 
@@ -233,15 +257,58 @@ async function applyTurn(
   // How much interview this request has earned. Someone who opened with "read 20
   // pages every evening on weekdays" gets a plan, not a questionnaire.
   const budget = questionBudget(session.initialGoalText);
+  const priorTopics = askedTopics(session.messages);
+  if (question && questionDomainMismatch(question, session.initialGoalText)) {
+    question = null;
+    state = 'READY_TO_GENERATE';
+  }
+
+  // For a small set of logically blocking ambiguities, the first question must
+  // address the blocker. A generic preference question cannot resolve it.
+  let forcedBlockingQuestion = false;
+  const text = session.initialGoalText.toLowerCase();
+  const currencyTokens=[...new Set([
+    ...[...session.initialGoalText.matchAll(/\b(USD|EUR|GBP|GEL)\b/gi)].map((match)=>match[1].toUpperCase()),
+    ...(session.initialGoalText.includes('$')?['USD']:[]),
+    ...(session.initialGoalText.includes('€')?['EUR']:[]),
+    ...(session.initialGoalText.includes('£')?['GBP']:[]),
+  ])];
+  if (session.questionCount===0 && currencyTokens.length>1) {
+    question={
+      id:'exchange_rate_assumption',type:'FREE_TEXT',optional:false,
+      prompt:`What ${currencyTokens.join('/')} exchange rate should the plan use as a changeable planning assumption?`,
+      allowCustomAnswer:true,
+    };
+    state='NEEDS_MORE_INFORMATION';
+    forcedBlockingQuestion=true;
+  } else if (budget.requiresClarification && session.questionCount === 0) {
+    if (/three different days|three total days/.test(text) && /only days|only .*monday.*wednesday/.test(text)) {
+      question = {
+        id: 'resolve_frequency_conflict', type: 'FREE_TEXT', optional: false,
+        prompt: 'Would you reduce the frequency to two days, allow two sessions on one day, or make another weekday available?',
+        allowCustomAnswer: true,
+      };
+      state = 'NEEDS_MORE_INFORMATION';
+      forcedBlockingQuestion = true;
+    } else if (/budget/.test(text) && /contractor/.test(text) && /move out|occupied/.test(text)) {
+      question = {
+        id: 'resolve_remodel_decisions', type: 'FREE_TEXT', optional: false,
+        prompt: 'What budget, contractor status, and move-out or occupied-home constraints should the remodel plan use?',
+        allowCustomAnswer: true,
+      };
+      state = 'NEEDS_MORE_INFORMATION';
+      forcedBlockingQuestion = true;
+    }
+  }
 
   // The model does not get to ask the same thing twice — and "the same thing" means
   // the same subject, not the same id. Three runs of "which days suit you?" under
   // three fresh ids is what the id check alone let through, and the user answered
   // them differently each time, so the plan was built on a contradiction.
-  const redundant = question
+  const redundant = question && !forcedBlockingQuestion
     ? redundancyReason(question, {
         askedIds: asked,
-        askedTopics: askedTopics(session.messages),
+        askedTopics: priorTopics,
         stated: budget.stated,
       })
     : null;
@@ -257,10 +324,14 @@ async function applyTurn(
     state = 'READY_TO_GENERATE';
     question = null;
   }
+  let fallbackQuestionInjected = false;
   if (!question && state === 'NEEDS_MORE_INFORMATION') {
-    // It wants to continue but produced nothing usable (or repeated itself).
-    // Rather than stall the user, move on and build the plan from what we have.
-    state = 'READY_TO_GENERATE';
+    if (session.questionCount < budget.min) {
+      question = essentialFallbackQuestion(session.initialGoalText, [...budget.stated, ...priorTopics]);
+      fallbackQuestionInjected = true;
+    } else {
+      state = 'READY_TO_GENERATE';
+    }
   }
 
   // Let the user give every answer that is true for them. The model is asked to do
@@ -275,7 +346,9 @@ async function applyTurn(
 
   // A suppressed question must not leave its message behind. Without this the user
   // saw the question text with nothing to answer it with.
-  const assistantMessage = redundant && state === 'READY_TO_GENERATE'
+  const assistantMessage = fallbackQuestionInjected
+    ? 'I need a little more detail before I can make this plan genuinely useful.'
+    : redundant && state === 'READY_TO_GENERATE'
     ? "That's everything I need."
     : result.assistantMessage;
 

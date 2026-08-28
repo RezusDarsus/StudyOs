@@ -31,6 +31,8 @@ export const RECURRENCE_TYPE = [
   'SPECIFIC_WEEKDAYS',
   'TIMES_PER_WEEK',
   'EVERY_X_DAYS',
+  'MONTHLY',
+  'EVERY_X_MONTHS',
 ] as const;
 export type RecurrenceType = (typeof RECURRENCE_TYPE)[number];
 

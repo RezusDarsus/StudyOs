@@ -206,6 +206,46 @@ export default async function authRoutes(app: FastifyInstance) {
     return { user: await publicUser(req.user.id) };
   });
 
+  app.get('/account/export', { preHandler: app.requireAuth }, async (req) => {
+    const user = await prisma.user.findUniqueOrThrow({
+      where: { id: req.user!.id },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        createdAt: true,
+        updatedAt: true,
+        profile: true,
+        ownedGoals: {
+          include: {
+            tasks: true,
+            participants: true,
+            invitations: true,
+          },
+        },
+        achievements: true,
+        preferences: true,
+        notifications: true,
+        rewards: true,
+      },
+    });
+    return { exportedAt: new Date().toISOString(), user };
+  });
+
+  app.delete('/account', { preHandler: app.requireAuth }, async (req, reply) => {
+    const userId = req.user!.id;
+    await prisma.$transaction(async (tx) => {
+      // Friendship rows point to a user more than once and are intentionally
+      // removed explicitly so account deletion works regardless of relation order.
+      await tx.friendship.deleteMany({
+        where: { OR: [{ requestedById: userId }, { userAId: userId }, { userBId: userId }] },
+      });
+      await tx.user.delete({ where: { id: userId } });
+    });
+    reply.clearCookie(SESSION_COOKIE, { path: '/' });
+    return { ok: true };
+  });
+
   /**
    * Password reset, Phase 1 scope: no email provider is wired up, so in
    * development the token is returned to the caller instead of being mailed.

@@ -165,6 +165,8 @@ export function AddTaskModal({
   const [weekdays, setWeekdays] = useState<number[]>([1, 3, 5]);
   const [timesPerWeek, setTimesPerWeek] = useState(3);
   const [intervalDays, setIntervalDays] = useState(2);
+  const [dayOfMonth, setDayOfMonth] = useState(1);
+  const [intervalMonths, setIntervalMonths] = useState(2);
   const [reward, setReward] = useState(10);
   const [reminderTime, setReminderTime] = useState('');
   const [busy, setBusy] = useState(false);
@@ -173,6 +175,8 @@ export function AddTaskModal({
     if (recurrenceType === 'SPECIFIC_WEEKDAYS') return { weekdays };
     if (recurrenceType === 'TIMES_PER_WEEK') return { timesPerWeek };
     if (recurrenceType === 'EVERY_X_DAYS') return { intervalDays };
+    if (recurrenceType === 'MONTHLY') return { dayOfMonth };
+    if (recurrenceType === 'EVERY_X_MONTHS') return { intervalMonths, dayOfMonth };
     return {};
   }
 
@@ -244,6 +248,8 @@ export function AddTaskModal({
         <option value="SPECIFIC_WEEKDAYS">Specific weekdays</option>
         <option value="TIMES_PER_WEEK">X times per week</option>
         <option value="EVERY_X_DAYS">Every X days</option>
+        <option value="MONTHLY">Monthly</option>
+        <option value="EVERY_X_MONTHS">Every X months</option>
         <option value="ONCE">Once</option>
       </select>
 
@@ -312,6 +318,23 @@ export function AddTaskModal({
             onChange={(e) => setIntervalDays(Number(e.target.value))}
             className="w-full px-4 py-3 text-sm"
           />
+        </div>
+      )}
+
+      {(recurrenceType === 'MONTHLY' || recurrenceType === 'EVERY_X_MONTHS') && (
+        <div className="mb-4">
+          {recurrenceType === 'EVERY_X_MONTHS' && (
+            <>
+              <label htmlFor="task-month-interval" style={labelStyle}>Every how many months?</label>
+              <input id="task-month-interval" type="number" min={1} max={120}
+                value={intervalMonths} onChange={(e) => setIntervalMonths(Number(e.target.value))}
+                className="w-full px-4 py-3 text-sm mb-3" />
+            </>
+          )}
+          <label htmlFor="task-month-day" style={labelStyle}>Day of month</label>
+          <input id="task-month-day" type="number" min={1} max={31}
+            value={dayOfMonth} onChange={(e) => setDayOfMonth(Number(e.target.value))}
+            className="w-full px-4 py-3 text-sm" />
         </div>
       )}
 

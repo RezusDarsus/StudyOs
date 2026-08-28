@@ -140,7 +140,13 @@ describe('recurrence', () => {
     expect(() => validateRecurrence('SPECIFIC_WEEKDAYS', { weekdays: [7] })).toThrow();
     expect(() => validateRecurrence('SPECIFIC_WEEKDAYS', { weekdays: [1, 1] })).toThrow();
     expect(() => validateRecurrence('TIMES_PER_WEEK', { timesPerWeek: 0 })).toThrow();
+    expect(() => validateRecurrence('TIMES_PER_WEEK', { timesPerWeek: 3, allowedWeekdays: [1, 2] })).toThrow();
     expect(() => validateRecurrence('EVERY_X_DAYS', { intervalDays: 0 })).toThrow();
+    expect(() => validateRecurrence('MONTHLY', { dayOfMonth: 32 })).toThrow();
+    expect(() => validateRecurrence('EVERY_X_MONTHS', { intervalMonths: 0, dayOfMonth: 1 })).toThrow();
+    expect(() => validateRecurrence('MONTHLY', { dayOfMonth: 'LAST' })).not.toThrow();
+    expect(() => validateRecurrence('MONTHLY', { activeFrom:'2027-02-01',activeUntil:'2027-01-31' })).toThrow();
+    expect(() => validateRecurrence('MONTHLY', { excludedMonths:['2026-13'] })).toThrow();
     expect(() => validateRecurrence('EVERY_DAY', {})).not.toThrow();
   });
 
@@ -174,6 +180,44 @@ describe('recurrence', () => {
   it('places a ONCE task on exactly one day', () => {
     const s = schedule({ recurrenceType: 'ONCE', startDate: '2026-08-20' });
     expect(occurrenceDays(s, '2026-08-19', '2026-08-25')).toEqual(['2026-08-20']);
+  });
+
+  it('bounds monthly phases and omits explicitly skipped months',()=>{
+    const schedule={recurrenceType:'MONTHLY' as const,recurrenceConfig:{dayOfMonth:1,activeFrom:'2026-09-01' as const,activeUntil:'2027-02-28' as const,excludedMonths:['2026-12','2027-01']},startDate:'2026-08-25' as const,endDate:'2027-09-30' as const};
+    expect(occurrenceDays(schedule,'2026-08-25','2027-09-30')).toEqual(['2026-09-01','2026-10-01','2026-11-01','2027-02-01']);
+  });
+
+  it('schedules monthly tasks by calendar day and clamps short months', () => {
+    const s = schedule({
+      recurrenceType: 'MONTHLY',
+      recurrenceConfig: { dayOfMonth: 31 },
+      startDate: '2026-01-31',
+    });
+    expect(occurrenceDays(s, '2026-01-01', '2026-04-30')).toEqual([
+      '2026-01-31',
+      '2026-02-28',
+      '2026-03-31',
+      '2026-04-30',
+    ]);
+  });
+
+  it('supports the last day and every N months', () => {
+    const monthly = schedule({
+      recurrenceType: 'MONTHLY',
+      recurrenceConfig: { dayOfMonth: 'LAST' },
+      startDate: '2026-01-10',
+    });
+    expect(occurrenceDays(monthly, '2026-01-01', '2026-03-31')).toEqual([
+      '2026-01-31', '2026-02-28', '2026-03-31',
+    ]);
+    const everySecond = schedule({
+      recurrenceType: 'EVERY_X_MONTHS',
+      recurrenceConfig: { intervalMonths: 2, dayOfMonth: 5 },
+      startDate: '2026-01-01',
+    });
+    expect(occurrenceDays(everySecond, '2026-01-01', '2026-06-30')).toEqual([
+      '2026-01-05', '2026-03-05', '2026-05-05',
+    ]);
   });
 
   it('honours start and end dates', () => {
@@ -326,6 +370,17 @@ describe('times per week', () => {
     recurrenceType: 'TIMES_PER_WEEK',
     recurrenceConfig: { timesPerWeek: 3 },
     startDate: '2026-08-17', // Monday
+  });
+
+  it('honours allowed and excluded weekdays without removing flexibility', () => {
+    const bounded = schedule({
+      recurrenceType: 'TIMES_PER_WEEK',
+      recurrenceConfig: { timesPerWeek: 2, allowedWeekdays: [1, 2, 4], excludedWeekdays: [3] },
+      startDate: '2026-08-17',
+    });
+    expect(occursOn(bounded, '2026-08-17')).toBe(true);
+    expect(occursOn(bounded, '2026-08-19')).toBe(false);
+    expect(occursOn(bounded, '2026-08-21')).toBe(false);
   });
 
   it('does not demand the task early in the week', () => {

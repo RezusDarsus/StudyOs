@@ -28,6 +28,7 @@ interface SessionSnapshot {
   status: string;
   initialGoalText: string;
   questionCount: number;
+  estimatedTotal: number;
   canGenerate: boolean;
   context: Record<string, unknown>;
   draftId: string | null;
@@ -37,6 +38,12 @@ interface SessionSnapshot {
 
 function messageOf(err: unknown, fallback: string) {
   return err instanceof ApiError ? err.message : err instanceof Error ? err.message : fallback;
+}
+
+export function interviewProgress(turn: InterviewTurn | null): number {
+  if (!turn) return 0;
+  if (turn.estimatedTotal <= 0) return turn.canGenerate ? 100 : 0;
+  return Math.min(100, (turn.questionCount / turn.estimatedTotal) * 100);
 }
 
 /**
@@ -113,7 +120,7 @@ export function useCopilotInterview({
           assistantMessage: '',
           question: data.question,
           questionCount: data.questionCount,
-          estimatedTotal: Math.max(data.questionCount + 1, 5),
+          estimatedTotal: data.estimatedTotal,
           context: data.context,
           canGenerate: data.canGenerate,
         });
@@ -215,7 +222,7 @@ export function useCopilotInterview({
     busy,
     generating,
     canGenerate: Boolean(turn?.canGenerate),
-    progress: turn ? Math.min(100, (turn.questionCount / turn.estimatedTotal) * 100) : 0,
+    progress: interviewProgress(turn),
     begin,
     answer,
     generate,

@@ -21,6 +21,8 @@ interface DraftTask {
   weekdays: number[];
   timesPerWeek: number;
   intervalDays: number;
+  dayOfMonth: number;
+  intervalMonths: number;
   reward: number;
   reminderTime: string;
 }
@@ -50,6 +52,8 @@ const newTask = (): DraftTask => ({
   weekdays: [1, 3, 5],
   timesPerWeek: 3,
   intervalDays: 2,
+  dayOfMonth: 1,
+  intervalMonths: 2,
   reward: 10,
   reminderTime: '',
 });
@@ -70,6 +74,11 @@ export default function CreateGoal() {
   const [deadline, setDeadline] = useState('');
   const [visibility, setVisibility] = useState<GoalVisibility>('PRIVATE');
   const [tasks, setTasks] = useState<DraftTask[]>([newTask()]);
+  const today = (() => {
+    const now = new Date();
+    const offset = now.getTimezoneOffset() * 60_000;
+    return new Date(now.getTime() - offset).toISOString().slice(0, 10);
+  })();
 
   const target = TARGETS.find((t) => t.type === targetType)!;
   const validTasks = tasks.filter((t) => t.title.trim().length > 0);
@@ -93,6 +102,10 @@ export default function CreateGoal() {
         return { timesPerWeek: task.timesPerWeek };
       case 'EVERY_X_DAYS':
         return { intervalDays: task.intervalDays };
+      case 'MONTHLY':
+        return { dayOfMonth: task.dayOfMonth };
+      case 'EVERY_X_MONTHS':
+        return { intervalMonths: task.intervalMonths, dayOfMonth: task.dayOfMonth };
       default:
         return {};
     }
@@ -295,6 +308,7 @@ export default function CreateGoal() {
               <input
                 id="deadline"
                 type="date"
+                min={today}
                 value={deadline}
                 onChange={(e) => setDeadline(e.target.value)}
                 className="w-full px-4 py-3 text-sm"
@@ -377,6 +391,7 @@ export default function CreateGoal() {
               {tasks.map((task, index) => (
                 <TaskEditor
                   key={task.key}
+                  index={index}
                   task={task}
                   canRemove={tasks.length > 1}
                   onRemove={() => setTasks(tasks.filter((t) => t.key !== task.key))}
@@ -501,11 +516,13 @@ export default function CreateGoal() {
 
 function TaskEditor({
   task,
+  index,
   canRemove,
   onRemove,
   onChange,
 }: {
   task: DraftTask;
+  index: number;
   canRemove: boolean;
   onRemove: () => void;
   onChange: (next: Partial<DraftTask>) => void;
@@ -515,23 +532,28 @@ function TaskEditor({
     { value: 'SPECIFIC_WEEKDAYS', label: 'Specific weekdays' },
     { value: 'TIMES_PER_WEEK', label: 'X times per week' },
     { value: 'EVERY_X_DAYS', label: 'Every X days' },
+    { value: 'MONTHLY', label: 'Monthly' },
+    { value: 'EVERY_X_MONTHS', label: 'Every X months' },
     { value: 'ONCE', label: 'Once' },
   ];
 
   return (
-    <div className="rounded-xl p-4" style={{ background: '#fdfcff', border: '1px solid #e8e6f5' }}>
+    <fieldset className="rounded-xl p-4" style={{ background: '#fdfcff', border: '1px solid #e8e6f5' }}>
+      <legend className="sr-only">Task {index + 1}</legend>
       <div className="flex items-center gap-2 mb-3">
+        <label className="sr-only" htmlFor={`task-title-${index}`}>Task {index + 1} name</label>
         <input
+          id={`task-title-${index}`}
           value={task.title}
           onChange={(e) => onChange({ title: e.target.value })}
           placeholder="e.g. Walk 8,000 steps"
           className="flex-1 px-3.5 py-2.5 text-sm"
-          aria-label="Task name"
+          aria-label={`Task ${index + 1} name`}
         />
         {canRemove && (
           <button
             onClick={onRemove}
-            aria-label="Remove task"
+            aria-label={`Remove task ${index + 1}`}
             className="flex items-center justify-center rounded-lg flex-shrink-0"
             style={{ width: 38, height: 38, color: '#b8b5d5', border: '1px solid #e8e6f5', background: '#fff' }}
           >
@@ -542,8 +564,9 @@ function TaskEditor({
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
         <div>
-          <label style={{ ...labelStyle, fontSize: '0.72rem' }}>Repeats</label>
+          <label htmlFor={`task-repeats-${index}`} style={{ ...labelStyle, fontSize: '0.72rem' }}>Repeats</label>
           <select
+            id={`task-repeats-${index}`}
             value={task.recurrenceType}
             onChange={(e) => onChange({ recurrenceType: e.target.value as RecurrenceType })}
             className="w-full px-3 py-2.5 text-sm"
@@ -557,8 +580,9 @@ function TaskEditor({
         </div>
 
         <div>
-          <label style={{ ...labelStyle, fontSize: '0.72rem' }}>Reminder (optional)</label>
+          <label htmlFor={`task-reminder-${index}`} style={{ ...labelStyle, fontSize: '0.72rem' }}>Reminder (optional)</label>
           <input
+            id={`task-reminder-${index}`}
             type="time"
             value={task.reminderTime}
             onChange={(e) => onChange({ reminderTime: e.target.value })}
@@ -634,6 +658,25 @@ function TaskEditor({
         </div>
       )}
 
+      {(task.recurrenceType === 'MONTHLY' || task.recurrenceType === 'EVERY_X_MONTHS') && (
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          {task.recurrenceType === 'EVERY_X_MONTHS' && (
+            <div>
+              <label style={{ ...labelStyle, fontSize: '0.72rem' }}>Every how many months?</label>
+              <input type="number" min={1} max={120} value={task.intervalMonths}
+                onChange={(e) => onChange({ intervalMonths: Number(e.target.value) })}
+                className="w-full px-3 py-2.5 text-sm" />
+            </div>
+          )}
+          <div>
+            <label style={{ ...labelStyle, fontSize: '0.72rem' }}>Day of month</label>
+            <input type="number" min={1} max={31} value={task.dayOfMonth}
+              onChange={(e) => onChange({ dayOfMonth: Number(e.target.value) })}
+              className="w-full px-3 py-2.5 text-sm" />
+          </div>
+        </div>
+      )}
+
       <div className="mt-3">
         <label style={{ ...labelStyle, fontSize: '0.72rem' }}>Reward</label>
         <div className="flex items-center gap-2">
@@ -653,6 +696,6 @@ function TaskEditor({
           </span>
         </div>
       </div>
-    </div>
+    </fieldset>
   );
 }

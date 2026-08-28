@@ -125,7 +125,11 @@ export const draftRecurrenceSchema = z.object({
   type: z.enum(RECURRENCE_TYPE),
   weekdays: z.array(z.number().int().min(0).max(6)).max(7).optional(),
   timesPerWeek: z.number().int().min(1).max(7).optional(),
+  allowedWeekdays: z.array(z.number().int().min(0).max(6)).max(7).optional(),
+  excludedWeekdays: z.array(z.number().int().min(0).max(6)).max(7).optional(),
   intervalDays: z.number().int().min(1).max(90).optional(),
+  dayOfMonth: z.union([z.number().int().min(1).max(31), z.literal('LAST')]).optional(),
+  intervalMonths: z.number().int().min(1).max(120).optional(),
 });
 
 /**

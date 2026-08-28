@@ -31,7 +31,14 @@ const recurrenceConfigSchema = z
   .object({
     weekdays: z.array(z.number().int()).optional(),
     timesPerWeek: z.number().int().optional(),
+    allowedWeekdays: z.array(z.number().int()).optional(),
+    excludedWeekdays: z.array(z.number().int()).optional(),
     intervalDays: z.number().int().optional(),
+    dayOfMonth: z.union([z.number().int(), z.literal('LAST')]).optional(),
+    intervalMonths: z.number().int().optional(),
+    activeFrom: dayString.optional(),
+    activeUntil: dayString.optional(),
+    excludedMonths: z.array(z.string().regex(/^\d{4}-(?:0[1-9]|1[0-2])$/)).optional(),
   })
   .default({});
 

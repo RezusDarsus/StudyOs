@@ -53,6 +53,7 @@ export class AiProviderError extends Error {
     message: string,
     public kind: 'TIMEOUT' | 'RATE_LIMIT' | 'UNAVAILABLE' | 'BAD_RESPONSE' | 'AUTH',
     public status?: number,
+    public retryAfterMs?: number,
   ) {
     super(message);
   }

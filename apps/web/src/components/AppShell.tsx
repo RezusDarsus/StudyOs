@@ -239,6 +239,8 @@ function MobileNav() {
 /** Mobile-only top bar, so the logo and notifications stay reachable. */
 function MobileHeader() {
   const { unread } = useNotifications();
+  const { logout } = useAuth();
+  const navigate = useNavigate();
   return (
     <header
       className="lg:hidden sticky top-0 z-40 flex items-center justify-between px-4 py-3"
@@ -259,6 +261,7 @@ function MobileHeader() {
           Goalify
         </span>
       </NavLink>
+      <div className="flex items-center gap-2">
       <NavLink
         to="/app/notifications"
         className="relative flex items-center justify-center rounded-xl"
@@ -275,6 +278,18 @@ function MobileHeader() {
           </span>
         )}
       </NavLink>
+      <button
+        className="flex items-center justify-center rounded-xl"
+        style={{ width: 38, height: 38, background: '#f5f4ff', border: '1px solid #e8e6f5' }}
+        aria-label="Log out"
+        onClick={async () => {
+          await logout();
+          navigate('/');
+        }}
+      >
+        <LogOut size={18} style={{ color: '#6b688f' }} />
+      </button>
+      </div>
     </header>
   );
 }
