@@ -196,7 +196,7 @@ export async function generateDraft(sessionId: string, userId: string, regenerat
         maxTokens: 4000,
         // A provider outage should reach the editable fallback quickly instead
         // of holding the review flow for two full timeout windows.
-        timeoutMs: 20_000,
+        timeoutMs: 8_000,
         retryTransient: false,
         messages,
       },
@@ -235,7 +235,7 @@ export async function generateDraft(sessionId: string, userId: string, regenerat
         thinking: false,
         temperature: 0.3,
         maxTokens: 4000,
-        timeoutMs: 20_000,
+        timeoutMs: 8_000,
         retryTransient: false,
         messages: [
           ...messages,

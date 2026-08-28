@@ -179,7 +179,7 @@ async function runInterviewTurn(
       // This is an interactive button, so never leave it spinning through two
       // minute-long attempts. Normal responses finish well inside this budget;
       // a provider outage falls back to a plan the user can edit.
-      timeoutMs: 15_000,
+      timeoutMs: 6_000,
       retryTransient: false,
       messages: [
         {
