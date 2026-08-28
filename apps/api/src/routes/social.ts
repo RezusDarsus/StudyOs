@@ -76,7 +76,13 @@ export default async function socialRoutes(app: FastifyInstance) {
     const users = await prisma.user.findMany({
       where: {
         id: { not: userId },
-        OR: [{ name: { contains: q } }, { email: { equals: q.toLowerCase() } }],
+        // PostgreSQL string filters are case-sensitive unless Prisma is explicitly
+        // told otherwise. A person registered as "Jane Doe" should still be found
+        // when their friend types "jane", just as an email search already implies.
+        OR: [
+          { name: { contains: q, mode: 'insensitive' } },
+          { email: { equals: q, mode: 'insensitive' } },
+        ],
       },
       include: { profile: true },
       take: 20,
