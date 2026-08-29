@@ -13,6 +13,7 @@ import {
   type ConstraintContract, type ContractViolation,
 } from './constraint-contract.js';
 import { computeFinancialFeasibility, monthlyCapPeriods, parseFinancialPlan, planningAssumptionRate } from './financial-plan.js';
+import { assessFeasibility } from './feasibility.js';
 import { GENERIC_TASK_TITLES, meaningfulTokens } from './plan-quality.js';
 
 // The deterministic safety net between the model and the database.
@@ -1046,6 +1047,14 @@ export function validateAndNormalizeDraft(
       }
     }
     assertMedicalRiskHandled(sourceText, normalizedTasks);
+    // The feasibility gate runs once, on the user's own words plus the draft's
+    // (already normalized) target and deadline, before the final contract gate:
+    // a schedule can be internally consistent and still chase something no
+    // schedule can deliver.
+    const feasibility = assessFeasibility({ goalText: sourceText, deadline, targetType, targetValue });
+    if (feasibility.verdict !== 'OK' && feasibility.reason) {
+      throw new DraftValidationError(feasibility.reason);
+    }
     const errors = [
       ...explicitConstraintErrors(explicit, {
         targetType,
