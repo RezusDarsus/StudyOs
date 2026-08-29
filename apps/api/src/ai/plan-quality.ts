@@ -119,7 +119,12 @@ export function meaningfulTokens(text: string): Set<string> {
   return meaningful(text);
 }
 
-function familyFor(text: string): Set<string> | null {
+/**
+ * The goal-topic family the text belongs to (stemmed member tokens), or null
+ * when none of its tokens names a known goal family. Shared so the coverage
+ * gate can recognize a near-synonym draft of a one-word request.
+ */
+export function familyFor(text: string): Set<string> | null {
   const found = new Set(tokens(text));
   const family = FAMILIES.find((words) => words.some((word) => found.has(stem(word))));
   return family ? new Set(family.map(stem)) : null;

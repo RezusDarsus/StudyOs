@@ -1,6 +1,6 @@
 import { addDays, type DayString } from '../domain/dates.js';
 import type { NormalizedTask } from './draft-validator.js';
-import { meaningfulTokens } from './plan-quality.js';
+import { familyFor, meaningfulTokens } from './plan-quality.js';
 
 export interface ExplicitGoalConstraints {
   exactWeekly?: number;
@@ -66,6 +66,11 @@ const STOPWORDS_EXTRA = new Set([
   // Request framing and authority language — who decides, not what is done.
   // "Productive"/"defined" are undefined-metric quality talk, never a subject.
   'need','help','improve','improv','improvement','build','create','creat','mak','make','prepare','prepar','preparation','practice','practic','train','study','eat','meet','read','run','walk','learn','try','like','love','enjoy','prefer','keep','stay','stop','quit','avoid','maintain','complete','complet','finish','reach','master','develop','grow','gain','lose','spend','take','give','become','becom','achieve','achiev','apply','accept','add','change','approve','approval','recommend','recommendation','decide','decision','override','pause','resume','preserve','increase','reduce','decrease','outcome','evidence','deliverable','objective','target','habit','routine','metric','baseline','demonstrate','demonstrat','prove','show','shown','please','hello','hey','thank','thanks','productive','productivity','defin','define','clarify','clarification',
+  // Outcome/quality comparatives — how the user wants to feel, not work to
+  // schedule ("get fitter", "study more consistently", "spend less money").
+  // Stemmed forms: "less" stems to "les", so only the stem entry ever matches.
+  // They may still serve as matching evidence but are never demanded as gaps.
+  'fitter','stronger','consistently','consistent','healthier','happier','confident','calmer','easier','smarter','greater','faster','further','more','les',
 ]);
 /** Digit-led tokens ("800", "5k", "2027") are quantities, never subjects. */
 const NUMERIC_TOKEN = /^\d/;
@@ -73,10 +78,15 @@ const NUMERIC_TOKEN = /^\d/;
 const NUMERIC_WORD = /(?:teen|teenth|tieth)$/;
 
 /** The request itself: the goal's first sentence (or the whole single sentence). */
-function centralGoalStems(goalText: string): string[] {
+function firstSentenceStems(goalText: string): string[] {
   const opening = goalText.split('\n', 1)[0].split(/[.!?]/, 1)[0];
   return [...meaningfulTokens(opening)]
-    .filter((token) => !STOPWORDS_EXTRA.has(token) && !NUMERIC_TOKEN.test(token) && !NUMERIC_WORD.test(token));
+    .filter((token) => !NUMERIC_TOKEN.test(token) && !NUMERIC_WORD.test(token));
+}
+
+/** First-sentence stems minus the planning boilerplate: the demandable subject. */
+function centralGoalStems(goalText: string): string[] {
+  return firstSentenceStems(goalText).filter((token) => !STOPWORDS_EXTRA.has(token));
 }
 
 /**
@@ -96,19 +106,32 @@ function stemCovered(stem: string, taskTokens: Set<string>): boolean {
 }
 
 /**
- * The goal's central stems that no task title/description/reason pursues.
+ * The goal's central stems no task pursues, or [] when the plan is about the
+ * goal.
  *
- * "Central" means stems from the goal's first sentence — the main request —
- * after planning boilerplate is dropped, so incidental constraint words ("three
- * sessions per week") and request framing ("improve", "prepare") never count.
- * Returns the missing stems in order of appearance, or [] when the request
- * carries no usable central tokens.
+ * ANY-match: multiple central stems are multiple chances for the draft to
+ * match, not multiple requirements — the draft is rejected only when NO task
+ * shares ANY stem of the request's first sentence. Matching runs on every
+ * first-sentence stem, the stoplisted framing words included, because a
+ * near-synonym draft ("Read 20 pages daily" for a books request) may share
+ * only the goal's own verb; the stoplist still governs what is DEMANDED, so
+ * "fitter" or "consistently" can never be reported as a gap. A one-stem
+ * request ("sleep better") also accepts a goal-family sibling — "wind-down
+ * routine" pursues sleep without the word — while several stems keep the gate
+ * strict (an unrelated budget task still fails a multi-stem saving goal). On a
+ * full miss the central stems are reported in order of appearance.
  */
 export function goalCoverageGaps(goalText: string, tasks: Array<Pick<NormalizedTask, 'title' | 'description' | 'reason'>>): string[] {
   const central = centralGoalStems(goalText);
   if (!central.length) return [];
+  const matchable = firstSentenceStems(goalText);
   const taskTokens = tasks.map((task) => meaningfulTokens(`${task.title} ${task.description} ${task.reason}`));
-  return central.filter((stem) => !taskTokens.some((tokens) => stemCovered(stem, tokens)));
+  const stemMatch = taskTokens.some((tokens) => matchable.some((stem) => stemCovered(stem, tokens)));
+  // A one-stem request leaves a near-synonym draft nothing lexical to share,
+  // so there — and only there — a goal-family sibling counts as pursuit.
+  const family = central.length === 1 ? familyFor(central[0]) : null;
+  const familyMatch = !!family && taskTokens.some((tokens) => [...tokens].some((token) => family.has(token)));
+  return stemMatch || familyMatch ? [] : central;
 }
 
 const DAYS: Record<string, number> = {
@@ -187,11 +210,20 @@ export function parseExplicitGoalConstraints(text: string, today: DayString): Ex
     excludedDays: [], requiredWeeklyRoles: [], requiredRoleDays: [], forbiddenActivities: [],
     undefinedMetric:false, requiresClarification:false, prohibitConsecutiveEvenings:false,
   };
-  const weekly = lower.match(/\b(exactly\s+|at most\s+|no more than\s+|maximum (?:of )?)?(\d+|once|twice|thrice|one|two|three|four|five|six|seven)(?:\s+(?:different\s+)?(?:total\s+)?[^.!?]{0,28}?(?:sessions?|times?|blocks?|training days?|days?))?\s*(?:(?:each|a|per|every)\s+week|weekly)\b/);
-  if (weekly) {
-    const value=numberOf(weekly[2]);
-    if (/at most|no more|maximum/.test(weekly[1]??'')) result.maxWeekly=value;
+  const weeklyPattern=/\b(exactly\s+|at most\s+|no more than\s+|maximum (?:of )?)?(\d+|once|twice|thrice|one|two|three|four|five|six|seven)(?:\s+(?:different\s+)?(?:total\s+)?[^.!?]{0,28}?(?:sessions?|times?|blocks?|training days?|days?))?\s*(?:(?:each|a|per|every)\s+week|weekly)\b/g;
+  const weeklyMatches=[...lower.matchAll(weeklyPattern)];
+  if(weeklyMatches.length===1){
+    const value=numberOf(weeklyMatches[0][2]);
+    if(/at most|no more|maximum/.test(weeklyMatches[0][1]??'')) result.maxWeekly=value;
     else result.exactWeekly=value;
+  } else if(weeklyMatches.length>1) {
+    // Coordinated per-activity clauses ("speaking twice per week and vocabulary
+    // three times per week") are separate commitments that sum to one plan
+    // total; first-match-wins used to read the whole week as the first number.
+    // A ceiling clause anywhere in the mix makes the combined total a ceiling.
+    const total=weeklyMatches.reduce((sum,match)=>sum+numberOf(match[2]),0);
+    if(weeklyMatches.some((match)=>/at most|no more|maximum/.test(match[1]??''))) result.maxWeekly=total;
+    else result.exactWeekly=total;
   }
   const scheduledBlocks = lower.match(/\bschedule\s+(\d+|one|two|three|four|five|six|seven)\s+[^.!?]{0,30}\bblocks?\b/);
   if (result.exactWeekly === undefined && scheduledBlocks) result.exactWeekly=numberOf(scheduledBlocks[1]);
@@ -242,15 +274,26 @@ export function parseExplicitGoalConstraints(text: string, today: DayString): Ex
   // it as "exactly 1" used to clobber the whole schedule. Only plan-total
   // wording ("three sessions total", "N times per week", "split across N
   // blocks") sets exactWeekly — those regexes live above.
-  const addNamedDays=(text:string)=>{
-    const days=mentionedDays(text);
+  const addDaySet=(days:number[])=>{
     if(days.length)result.allowedDays=[...new Set([...(result.allowedDays??[]),...days])];
   };
+  const addNamedDays=(text:string)=>addDaySet(mentionedDays(text));
   for(const match of lower.matchAll(new RegExp(`\\bevery\\s+((?:${DAY_ALT})(?:(?:\\s*,\\s*|\\s+(?:and|or)\\s+)(?:${DAY_ALT}))*)`,'g'))) addNamedDays(match[1]);
+  // "each <weekday>" works like "every <weekday>": "working three hours each
+  // Saturday" says which day the plan may use, nothing about the plan total.
+  for(const match of lower.matchAll(new RegExp(`\\beach\\s+((?:${DAY_ALT})(?:(?:\\s*,\\s*|\\s+(?:and|or)\\s+)(?:${DAY_ALT}))*)`,'g'))) addNamedDays(match[1]);
   // A bare "on <day>" only widens the allowed set when several days are listed
   // together ("Run on Tuesday and Thursday"), which reads as the available set
   // rather than a note about one activity.
   for(const match of lower.matchAll(new RegExp(`\\bon\\s+((?:${DAY_ALT})(?:\\s*(?:,|and|or)\\s*(?:${DAY_ALT}))+)`,'g'))) addNamedDays(match[1]);
+  // "Monday through Thursday" (also "Monday-Thursday", "Monday to Thursday")
+  // states an inclusive weekday range: every day between the endpoints is
+  // allowed, wrapping through Sunday when the range crosses the week boundary.
+  for(const match of lower.matchAll(new RegExp(`\\b(${DAY_ALT})\\s*(?:through|to|[-\\u2013\\u2014])\\s*(${DAY_ALT})\\b`,'g'))){
+    const range:number[]=[];
+    for(let day=DAYS[match[1]]; !range.includes(DAYS[match[2]]); day=(day+1)%7) range.push(day);
+    addDaySet(range);
+  }
   // "every weekday" states the whole plan: all five weekdays.
   if(/\bevery\s+weekday\b/.test(lower)&&result.exactWeekly===undefined&&result.maxWeekly===undefined) result.exactWeekly=5;
   // "N different days" is a plan-total statement about the week ("I need three

@@ -271,6 +271,42 @@ describe('explicit goal constraints',()=>{
     expect(c.exactWeekly).toBe(2);
     expect(c.requiresClarification).toBe(false);
   });
+
+  it('sums coordinated per-activity frequencies into one plan total',()=>{
+    // Two activity-frequency clauses are separate commitments summing to the
+    // week's total; first-match-wins used to read this whole week as 2.
+    const c=parseExplicitGoalConstraints(
+      'Improve my English for a job interview in three months. I can practice speaking twice per week and vocabulary three times per week, but total work must stay under four hours.',
+      '2026-08-25',
+    );
+    expect(c.exactWeekly).toBe(5);
+    // A single clause keeps its single reading, exact or ceiling.
+    expect(parseExplicitGoalConstraints('I practice vocabulary three times per week.','2026-08-25').exactWeekly).toBe(3);
+    expect(parseExplicitGoalConstraints('I can practice speaking at most twice per week and vocabulary twice per week.','2026-08-25').maxWeekly).toBe(4);
+  });
+
+  it('expands a weekday range into every day it spans',()=>{
+    const c=parseExplicitGoalConstraints(
+      'Practice guitar for 25 minutes Monday through Thursday, focusing on chord changes and one complete song.',
+      '2026-08-25',
+    );
+    expect(c.allowedDays).toEqual([1,2,3,4]);
+    expect(c.exactWeekly).toBeUndefined();
+    expect(parseExplicitGoalConstraints('Train Monday-Thursday.','2026-08-25').allowedDays).toEqual([1,2,3,4]);
+    expect(parseExplicitGoalConstraints('Train Monday to Thursday.','2026-08-25').allowedDays).toEqual([1,2,3,4]);
+    expect(parseExplicitGoalConstraints('Run Tuesday through Friday.','2026-08-25').allowedDays).toEqual([2,3,4,5]);
+  });
+
+  it('reads "each <weekday>" like "every <weekday>"',()=>{
+    // A named weekday bounds the schedule without inventing a plan total.
+    const c=parseExplicitGoalConstraints(
+      'Build a production-ready social network alone in four weeks while working three hours each Saturday.',
+      '2026-08-25',
+    );
+    expect(c.allowedDays).toEqual([6]);
+    expect(c.exactWeekly).toBeUndefined();
+    expect(parseExplicitGoalConstraints('I review my notes each Saturday and each Sunday.','2026-08-25').allowedDays).toEqual([6,0]);
+  });
 });
 
 describe('goal coverage gaps',()=>{
@@ -303,7 +339,33 @@ describe('goal coverage gaps',()=>{
   });
 
   it('matches inflections with the benchmark tolerance',()=>{
-    expect(goalCoverageGaps('save money for a house',textTask('Weekly savings transfer'))).toEqual(['money','house']);
+    // "savings" covers "save", so the plan pursues the goal: the stems are
+    // chances to match under ANY-match, not a checklist — demanding "money"
+    // here rejected honest transfer plans ("save money" -> gap "money").
+    expect(goalCoverageGaps('save money for a house',textTask('Weekly savings transfer'))).toEqual([]);
+  });
+
+  it('accepts natural near-synonym drafts that pursue any central stem',()=>{
+    // Each pair was a live false-reject: the draft shares an inflection, the
+    // goal's own verb, or — for a one-stem request — a goal-family sibling.
+    expect(goalCoverageGaps('save money',textTask('Weekly savings transfer'))).toEqual([]);
+    expect(goalCoverageGaps('read more books',textTask('Read 20 pages daily'))).toEqual([]);
+    expect(goalCoverageGaps('sleep better',textTask('Wind-down routine'))).toEqual([]);
+    expect(goalCoverageGaps('I want to get fitter',textTask('5k interval runs'))).toEqual([]);
+    expect(goalCoverageGaps('prepare for an exam',textTask('Do 20 practice questions'))).toEqual([]);
+    expect(goalCoverageGaps('get stronger',textTask('Push-ups and squats at home'))).toEqual([]);
+    expect(goalCoverageGaps('study more consistently',textTask('Pomodoro sessions at a fixed desk time'))).toEqual([]);
+    expect(goalCoverageGaps('improve my public speaking',textTask('Speaking drills: introduce myself aloud'))).toEqual([]);
+  });
+
+  it('still rejects a draft that shares nothing with the request',()=>{
+    // The true corruption shape: a "backend interview preparation" request
+    // answered only by unrelated subject matter.
+    expect(goalCoverageGaps('backend interview preparation',textTask('Review core Java concepts'))).toEqual(['backend','interview']);
+    // Family tolerance is scoped to one-stem requests: with several stems the
+    // domain overlap of an unrelated task is not pursuit.
+    expect(goalCoverageGaps('sleep better',textTask('Grocery budget review'))).toEqual(['sleep']);
+    expect(goalCoverageGaps('save money for a house',textTask('Grocery budget review'))).toEqual(['save','money','house']);
   });
 
   it('returns no gaps when the request has no usable central tokens',()=>{
