@@ -272,6 +272,31 @@ describe('explicit goal constraints',()=>{
     expect(c.requiresClarification).toBe(false);
   });
 
+  it('lets a correction-signal answer restate the weekly plan total',()=>{
+    // A correction-signal answer is the user re-speaking the schedule, so it
+    // becomes the plan total — including the recorded clarification question
+    // that names both numbers alongside it.
+    expect(parseExplicitGoalConstraints(
+      'Read 20 pages every weekday evening.\n{"frequency":{"question":"How many days per week can you realistically work on this goal?","answer":"Actually, make it 3 days per week"}}',
+      '2026-08-25',
+    ).exactWeekly).toBe(3);
+    expect(parseExplicitGoalConstraints(
+      'Exercise three days per week.\n{"resolve_frequency_conflict":{"question":"Which schedule should I use?","answer":"Make it every weekday"}}',
+      '2026-08-25',
+    ).exactWeekly).toBe(5);
+    expect(parseExplicitGoalConstraints(
+      'Exercise three days per week. Monday and Wednesday are the only days.\n{"resolve_frequency_conflict":{"question":"Which schedule should I use?","answer":"Make it Monday, Wednesday and Friday"}}',
+      '2026-08-25',
+    ).exactWeekly).toBe(3);
+    // A corrected total supersedes any ceiling the goal also stated.
+    const corrected=parseExplicitGoalConstraints(
+      'At most four sessions per week.\n{"resolve_frequency_conflict":{"question":"Which schedule should I use?","answer":"Make it 6 sessions per week"}}',
+      '2026-08-25',
+    );
+    expect(corrected.exactWeekly).toBe(6);
+    expect(corrected.maxWeekly).toBeUndefined();
+  });
+
   it('sums coordinated per-activity frequencies into one plan total',()=>{
     // Two activity-frequency clauses are separate commitments summing to the
     // week's total; first-match-wins used to read this whole week as 2.

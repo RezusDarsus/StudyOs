@@ -41,6 +41,7 @@ import { prisma } from '../lib/prisma.js';
 import { getPreferencesForPrompt } from './preferences.js';
 import { recordEvent } from './copilot-analytics.js';
 import { parseExplicitGoalConstraints } from '../ai/goal-constraints.js';
+import { RESOLVE_FREQUENCY_CONFLICT_ID, withCorrectionSignal } from '../ai/frequency-conflict.js';
 import { todayIn } from '../domain/dates.js';
 
 // Interview limits are enforced by the backend, not by trusting the model to
@@ -524,11 +525,18 @@ export async function answerQuestion(
       .map((m) => (m.structuredPayload ? safeParse(m.structuredPayload) : null))
       .find((p) => p?.id === input.questionId);
 
+    // A frequency-conflict resolution is stored with the correction signal its
+    // words imply ("3" → "Make it 3 days per week"): the transcript keeps the
+    // raw answer, but the recorded value must read as the deliberate
+    // re-schedule it is, so the contradiction detector accepts it and
+    // parseExplicitGoalConstraints applies it answer-last as the plan total.
     recordAnswer(context, {
       key: input.questionId,
       questionId: input.questionId,
       question: askedQuestion?.prompt,
-      value: input.answer,
+      value: input.questionId === RESOLVE_FREQUENCY_CONFLICT_ID
+        ? withCorrectionSignal(input.answer)
+        : input.answer,
     });
     await prisma.copilotSession.update({
       where: { id: session.id },

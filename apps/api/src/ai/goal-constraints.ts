@@ -156,7 +156,8 @@ const WORD_ORDINALS: Record<string, number> = {
 };
 const DAY_ALT = 'sun(?:day)?|mon(?:day)?|tues?(?:day)?|wed(?:nesday)?|thurs?(?:day)?|fri(?:day)?|sat(?:urday)?';
 
-function mentionedDays(text: string): number[] {
+/** Weekday names (full and abbreviated) mentioned in free text, deduplicated. */
+export function mentionedDays(text: string): number[] {
   return [...new Set([...text.toLowerCase().matchAll(new RegExp(`\\b(${DAY_ALT})\\b`, 'g'))].map((m) => DAYS[m[1]]))];
 }
 
@@ -366,6 +367,19 @@ export function parseExplicitGoalConstraints(text: string, today: DayString): Ex
   if (addedDayAnswer) {
     result.allowedDays=canonicalWeekdayOrder([...(result.allowedDays??[]),DAYS[addedDayAnswer[1]]]);
   }
+  // A correction-signal answer ("Actually, make it 3 days per week", "change to
+  // five sessions weekly", "Make it every weekday") is the user re-speaking the
+  // plan total: like the reduce/allow answers above it applies LAST and becomes
+  // authoritative, so a contradiction resolved through resolve_frequency_conflict
+  // lands here too. The signal words mirror CORRECTION_SIGNAL in
+  // frequency-conflict.ts — keep the two lists identical. A corrected total is
+  // exact, so any ceiling the goal stated is superseded with it.
+  const correctionSignal='actually|make it|change to|switch to|let\'s do|lets do|only do|reduce to|instead';
+  const correctedTotal=lower.match(new RegExp(`"answer":"[^"]*(?:${correctionSignal})[^"]{0,80}?\\b(\\d+|once|twice|thrice|one|two|three|four|five|six|seven)\\s+(?:different\\s+|total\\s+)?(?:days?|sessions?|times?)\\b`));
+  if(correctedTotal){ result.exactWeekly=numberOf(correctedTotal[1]); result.maxWeekly=undefined; }
+  if(new RegExp(`"answer":"[^"]*(?:${correctionSignal})[^"]{0,80}?\\bevery\\s+weekday\\b`).test(lower)){ result.exactWeekly=5; result.maxWeekly=undefined; }
+  const correctedDays=lower.match(new RegExp(`"answer":"[^"]*(?:${correctionSignal})[^"]{0,80}?\\b((?:${DAY_ALT})(?:\\s*(?:,|and|or)\\s*(?:${DAY_ALT}))+)\\b`));
+  if(correctedDays){ result.exactWeekly=mentionedDays(correctedDays[1]).length; result.maxWeekly=undefined; }
   const minutes=lower.match(/(?:must be|no longer than|at most|maximum (?:of )?|may not exceed)\s+(\d+)\s*minutes?/);
   if(minutes) result.maxMinutes=Number(minutes[1]);
   const hours=lower.match(/(?:at most|only|maximum (?:of )?|can reliably (?:study|work|train)?|have|with|for)?\s*(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten)\s*hours?(?:\s+available)?\s*(?:each|a|per)?\s*(?:week|weekly)/);

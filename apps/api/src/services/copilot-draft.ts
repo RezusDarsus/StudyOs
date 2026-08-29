@@ -33,9 +33,13 @@ import { loadSession, sessionReadiness } from './copilot-session.js';
 import {
   currentSessionFacts,
   inferredValues,
-  literalAnswers,
   parseContext,
 } from '../ai/context.js';
+import {
+  frequencyConflictClarification,
+  spokenUserStatements,
+  RESOLVE_FREQUENCY_CONFLICT_ID,
+} from '../ai/frequency-conflict.js';
 import {
   classifyGoalText,
   MEMORY_GATE_CONFIDENCE,
@@ -48,6 +52,15 @@ const TRANSCRIPT_WINDOW = 20;
 async function userTimezone(userId: string) {
   const profile = await prisma.profile.findUnique({ where: { userId } });
   return profile?.timezone ?? 'UTC';
+}
+
+/** The question id stored on an assistant message, defensively. */
+function safeQuestionId(payload: string): string | null {
+  try {
+    return (JSON.parse(payload) as { id?: string }).id ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -215,9 +228,12 @@ async function buildDraft(
   const timezone = await userTimezone(userId);
   const context = parseContext(session.structuredContext, session.initialGoalText);
 
-  // Ground truth (what they literally answered) is kept apart from everything
-  // inferred, so the prompt can rank them rather than seeing one flat blob.
-  const answers = literalAnswers(context).reduce<Record<string, unknown>>((acc, entry) => {
+  // Ground truth (what they literally answered or typed) is kept apart from
+  // everything inferred, so the prompt can rank them rather than seeing one
+  // flat blob. A direct message correction is the user speaking too, so it
+  // joins the answers — and the validation source — at the same authority.
+  const spoken = spokenUserStatements(context.entries);
+  const answers = spoken.reduce<Record<string, unknown>>((acc, entry) => {
     acc[entry.key] = { question: entry.question ?? entry.key, answer: entry.value };
     return acc;
   }, {});
@@ -226,6 +242,31 @@ async function buildDraft(
     session.initialGoalText,
     JSON.stringify(answers),
   ].join('\n');
+
+  // The original request and the interview can state two different weekly
+  // schedules ("every weekday" here, "3" there). The plan must not silently
+  // deviate from one of them, and nothing here gets to pick a side: a
+  // contradiction blocks generation with a clarification the user answers
+  // through the recorded resolve_frequency_conflict question (or a correction
+  // message), which parseExplicitGoalConstraints applies answer-last, so the
+  // resolved total becomes the contract on the next generate.
+  const frequencyConflict = frequencyConflictClarification(session.initialGoalText, spoken, todayIn(timezone));
+  if (frequencyConflict) {
+    const lastAssistant = [...session.messages].reverse().find((m) => m.role === 'assistant' && m.structuredPayload);
+    const alreadyAsked = !!lastAssistant?.structuredPayload && safeQuestionId(lastAssistant.structuredPayload) === RESOLVE_FREQUENCY_CONFLICT_ID;
+    if (!alreadyAsked) {
+      await prisma.copilotMessage.create({
+        data: {
+          sessionId,
+          role: 'assistant',
+          content: frequencyConflict.message,
+          structuredPayload: JSON.stringify(frequencyConflict.question),
+        },
+      });
+    }
+    // 409 with a distinct code — exactly how NOT_READY reaches the UI.
+    throw conflict(frequencyConflict.message, 'FREQUENCY_CONFLICT');
+  }
 
   // Memory is gated on the user's own words, not the model's category guess.
   const gate = memoryGateCategory(session.initialGoalText, session.category);
