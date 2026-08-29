@@ -33,6 +33,7 @@ import {
   hardGatePass,
   rawTokens,
   termMatches,
+  SCORER_VERSION,
 } from './benchmark-scorer-100.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -320,7 +321,7 @@ async function runCase(testCase) {
       if (gen.status === 409 && code === 'NOT_READY') {
         throw Object.assign(new Error(`generate HTTP ${gen.status} NOT_READY`), { kind: 'NOT_READY' });
       }
-      throw Object.assign(new Error(`generate HTTP ${gen.status}: ${code} ${JSON.stringify(gen.body ?? {}).slice(0, 400)}`), { kind: 'GENERATE' });
+      throw Object.assign(new Error(`generate HTTP ${gen.status}: ${code} ${JSON.stringify(gen.body ?? {}).slice(0, 400)}`), { kind: 'GENERATE', providerCode: code });
     }
     result.draft = gen.body.draft;
     result.adjustments = gen.body.adjustments ?? [];
@@ -362,7 +363,11 @@ async function runCase(testCase) {
     result.criticals = result.structural.criticals;
     result.failures = result.structural.issues;
   } else {
-    const kind = result.errorKind === 'NOT_READY' ? 'NO_EXECUTABLE_PLAN' : result.errorKind === 'GENERATE' ? 'SCHEMA_INVALID' : 'TRANSPORT';
+    // An honest provider failure (timeout, outage, rate limit; state preserved)
+    // is transport-class, not a Copilot integrity failure - only a rejected or
+    // malformed draft is SCHEMA_INVALID (HARNESS FIX, not a product change).
+    const PROVIDER_CODES = new Set(['AI_TIMEOUT', 'AI_PROVIDER', 'AI_RATE_LIMIT', 'AI_UNAVAILABLE']);
+    const kind = result.errorKind === 'NOT_READY' ? 'NO_EXECUTABLE_PLAN' : result.errorKind === 'GENERATE' ? (PROVIDER_CODES.has(result.providerCode) ? 'PROVIDER' : 'SCHEMA_INVALID') : 'TRANSPORT';
     result.structural = { score: 0, issues: [{ code: kind, detail: result.error ?? 'no draft' }], criticals: [kind], critical: true };
     result.usefulness = { goalRelevance: 0, taskSpecificity: 0, planCompleteness: 0, scheduleRealism: 0, taskDiversity: 0, personalization: 0, interviewEfficiency: 0, planScore: 0, usefulnessScore: 0, issues: [] };
     result.criticals = [kind];
@@ -487,12 +492,14 @@ const passCount = results.filter((r) => r.pass).length;
 const summary = {
   benchmark: 'GOALIFY_COPILOT_REAL_WORLD_QUALITY_BASELINE_100',
   fixtureSha256,
+  scorerVersion: SCORER_VERSION,
   api: API,
   startedAt: stamp,
   finishedAt: new Date().toISOString(),
   executedCases: results.length,
   executedFully: executed,
-  transportFailureCases: results.filter((r) => !r.transportSuccess).map((r) => ({ id: r.id, kind: r.errorKind, error: r.error })),
+  transportFailureCases: results.filter((r) => !r.transportSuccess).map((r) => ({ id: r.id, kind: r.criticals?.[0] ?? r.errorKind, error: r.error })),
+  providerFailureCases: results.filter((r) => r.criticals.includes('PROVIDER')).map((r) => r.id),
   structuralAverage: average(results.map((r) => r.structural), 'score'),
   usefulnessAverage: average(results.map((r) => r.usefulness), 'usefulnessScore'),
   criticalFailureCount: criticalTotal,
@@ -551,6 +558,7 @@ report.push(`| Cases with a critical failure | ${casesWithCritical}/100 |`);
 report.push(`| Hard-gate pass | ${passCount}/100 (${(summary.hardGatePassRate * 100).toFixed(1)}%) |`);
 report.push(`| Average questions per case | ${summary.averageQuestionsPerCase} |`);
 report.push(`| Recorded transport retries | ${retryLog.length} |`);
+report.push(`| Provider-class failures (honest AI_TIMEOUT/AI_PROVIDER) | ${results.filter((r) => r.criticals.includes('PROVIDER')).length} |`);
 report.push(`| Over-asked cases (question cap hit) | ${summary.overAskedCases.length} |`, '');
 report.push('## Pass rate by difficulty', '', '| Difficulty | Pass | Total | Rate |', '|---|---:|---:|---:|');
 for (const [k, v] of Object.entries(summary.passRateByDifficulty)) report.push(`| ${k} | ${v.pass} | ${v.total} | ${(v.rate * 100).toFixed(1)}% |`);
