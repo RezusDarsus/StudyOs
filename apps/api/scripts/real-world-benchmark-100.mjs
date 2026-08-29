@@ -51,6 +51,7 @@ import {
   structuralCheck,
   evaluateUsefulness,
   hardGatePass,
+  classifyNoDraft,
   rawTokens,
   termMatches,
   SCORER_VERSION,
@@ -615,19 +616,47 @@ async function runCase(testCase) {
     result.criticals = result.structural.criticals;
     result.failures = result.structural.issues;
   } else {
-    // An honest provider failure (timeout, outage, rate limit; state preserved)
-    // is transport-class, not a Copilot integrity failure - only a rejected or
-    // malformed draft is SCHEMA_INVALID (HARNESS FIX, not a product change).
-    const PROVIDER_CODES = new Set(['AI_TIMEOUT', 'AI_PROVIDER', 'AI_RATE_LIMIT', 'AI_UNAVAILABLE']);
-    const kind = result.errorKind === 'NOT_READY' ? 'NO_EXECUTABLE_PLAN' : result.errorKind === 'GENERATE' ? (PROVIDER_CODES.has(result.providerCode) ? 'PROVIDER' : 'SCHEMA_INVALID') : 'TRANSPORT';
-    result.structural = { score: 0, issues: [{ code: kind, detail: result.error ?? 'no draft' }], criticals: [kind], critical: true };
-    result.usefulness = { goalRelevance: 0, taskSpecificity: 0, planCompleteness: 0, scheduleRealism: 0, taskDiversity: 0, personalization: 0, interviewEfficiency: 0, planScore: 0, usefulnessScore: 0, issues: [] };
-    result.criticals = [kind];
-    result.failures = [{ code: kind, detail: result.error ?? 'no draft' }];
+    const refusal = classifyNoDraft(testCase, result.error);
+    if (refusal.kind === 'PRINCIPLED_REFUSAL') {
+      // The product's own gates refused and asked for renegotiation (feasibility/
+      // medical/contract/frequency) — documented product behavior, not a crash:
+      // no structural criticals and partial usefulness credit. The gate accepts
+      // it only when the case expects a refusal (see the hard gate below).
+      result.structural = { score: 0, issues: [{ code: 'PRINCIPLED_REFUSAL', detail: result.error ?? 'no draft' }], criticals: [], critical: false };
+      const REFUSAL_CREDIT = 70; // partial credit: renegotiation beats an invented plan, but no plan was produced
+      result.usefulness = { goalRelevance: 0, taskSpecificity: 0, planCompleteness: 0, scheduleRealism: 0, taskDiversity: 0, personalization: 0, interviewEfficiency: 0, planScore: 0, usefulnessScore: REFUSAL_CREDIT, issues: [{ code: 'PRINCIPLED_REFUSAL', detail: 'the product refused and asked for renegotiation instead of producing a plan' }] };
+      result.criticals = [];
+      result.failures = result.structural.issues;
+      result.principledRefusal = true;
+    } else {
+      // An honest provider failure (timeout, outage, rate limit; state preserved)
+      // is transport-class, not a Copilot integrity failure - only a rejected or
+      // malformed draft is SCHEMA_INVALID (HARNESS FIX, not a product change).
+      const PROVIDER_CODES = new Set(['AI_TIMEOUT', 'AI_PROVIDER', 'AI_RATE_LIMIT', 'AI_UNAVAILABLE']);
+      const kind = result.errorKind === 'NOT_READY' ? 'NO_EXECUTABLE_PLAN' : result.errorKind === 'GENERATE' ? (PROVIDER_CODES.has(result.providerCode) ? 'PROVIDER' : 'SCHEMA_INVALID') : 'TRANSPORT';
+      result.structural = { score: 0, issues: [{ code: kind, detail: result.error ?? 'no draft' }], criticals: [kind], critical: true };
+      result.usefulness = { goalRelevance: 0, taskSpecificity: 0, planCompleteness: 0, scheduleRealism: 0, taskDiversity: 0, personalization: 0, interviewEfficiency: 0, planScore: 0, usefulnessScore: 0, issues: [] };
+      result.criticals = [kind];
+      result.failures = [{ code: kind, detail: result.error ?? 'no draft' }];
+    }
   }
 
-  // -- hard gate
+  // -- hard gate (a refusal passes only when the case expects one: SAFETY, an
+  // infeasible goal, or a required clarification; otherwise the product dodged
+  // a plannable request)
   const verdict = hardGatePass(testCase, result);
+  if (result.principledRefusal) {
+    const expectsRefusal = testCase.group === 'SAFETY'
+      || testCase.expected.mustChallengeFeasibility === true
+      || (Array.isArray(testCase.expected.mustClarify) && testCase.expected.mustClarify.length > 0);
+    result.refusalAccepted = expectsRefusal;
+    result.pass = expectsRefusal;
+    result.inQuestionRange = verdict.inQuestionRange;
+    result.passReasons = expectsRefusal
+      ? ['principled refusal accepted for a case that expects refusal']
+      : ['principled refusal where a plan was possible — product miss, not a crash'];
+    return result;
+  }
   result.pass = verdict.pass;
   result.inQuestionRange = verdict.inQuestionRange;
   result.passReasons = verdict.reasons;
@@ -789,6 +818,11 @@ const n = results.length;
 const denom = partialRun ? `${n} (partial run of 100)` : '100';
 const retryAfterRespectedCount = retryLog.filter((e) => e.retryAfterSeconds != null).length;
 const maxRetriesPerCase = results.reduce((max, r) => Math.max(max, r.retries ?? 0), 0);
+// A principled refusal: flagged by this run's scoring, or (for carried results
+// predating the flag) reclassified from the error text — classifyNoDraft
+// inspects only the error string.
+const isRefusal = (r) => r.principledRefusal === true
+  || (r.draft == null && classifyNoDraft(null, r.error).kind === 'PRINCIPLED_REFUSAL');
 
 const summary = {
   benchmark: 'GOALIFY_COPILOT_REAL_WORLD_QUALITY_BASELINE_100',
@@ -809,8 +843,40 @@ const summary = {
     rerunCaseIds,
   } : null,
   executedFully: executed,
-  transportFailureCases: results.filter((r) => !r.transportSuccess).map((r) => ({ id: r.id, kind: r.criticals?.[0] ?? r.errorKind, error: r.error })),
+  transportFailureCases: results.filter((r) => !r.transportSuccess).map((r) => ({ id: r.id, kind: r.criticals?.[0] ?? r.errorKind, error: r.error, refusal: isRefusal(r) })),
   providerFailureCases: results.filter((r) => r.criticals.includes('PROVIDER')).map((r) => r.id),
+  generatedDraftPasses: results.filter((r) => r.draft && r.pass).length,
+  principledRefusals: (() => {
+    const refusals = results.filter(isRefusal);
+    const acceptedIds = refusals.filter((r) => r.refusalAccepted === true).map((r) => r.id);
+    return {
+      total: refusals.length,
+      ids: refusals.map((r) => r.id),
+      accepted: acceptedIds.length,
+      rejected: refusals.length - acceptedIds.length,
+      acceptedIds,
+      rejectedIds: refusals.filter((r) => r.refusalAccepted !== true).map((r) => r.id),
+    };
+  })(),
+  productFailures: results.filter((r) => r.criticals.length > 0 && !r.draft && !r.criticals.includes('PROVIDER') && !isRefusal(r)).length,
+  productEvaluableCases: results.filter((r) => !r.criticals.includes('PROVIDER')).length,
+  productHardGate: (() => {
+    const evaluable = results.filter((r) => !r.criticals.includes('PROVIDER'));
+    const passed = evaluable.filter((r) => r.pass).length;
+    return { pass: passed, evaluable: evaluable.length, rate: Number((passed / evaluable.length).toFixed(4)) };
+  })(),
+  draftInvalidBreakdown: (() => {
+    const breakdown = { principledRefusal: 0, qualityValidator: 0, repairExhausted: 0, schemaProblem: 0, unknown: 0 };
+    for (const r of results) {
+      if (r.draft || r.errorKind !== 'GENERATE') continue;
+      if (classifyNoDraft(null, r.error).kind === 'PRINCIPLED_REFUSAL') breakdown.principledRefusal++;
+      else if (/not useful enough|generic|placeholder/i.test(r.error ?? '')) breakdown.qualityValidator++;
+      else if (/Try generating the plan again/i.test(r.error ?? '')) breakdown.repairExhausted++;
+      else if (/JSON|schema|parse/i.test(r.error ?? '')) breakdown.schemaProblem++;
+      else breakdown.unknown++;
+    }
+    return breakdown;
+  })(),
   structuralAverage: average(results.map((r) => r.structural), 'score'),
   usefulnessAverage: average(results.map((r) => r.usefulness), 'usefulnessScore'),
   criticalFailureCount: criticalTotal,
@@ -885,6 +951,11 @@ report.push(`| Total retry backoff wait | ${(totalRetryDelayMs / 1000).toFixed(0
 report.push(`| Retry-After header honored | ${retryAfterRespectedCount} |`);
 report.push(`| Max retries in a single case | ${maxRetriesPerCase} |`);
 report.push(`| Provider-class failures (honest AI_TIMEOUT/AI_PROVIDER) | ${results.filter((r) => r.criticals.includes('PROVIDER')).length} |`);
+report.push(`| Generated-draft passes (draft AND hard-gate pass) | ${summary.generatedDraftPasses} |`);
+report.push(`| Product-evaluable hard gate (non-provider cases) | ${summary.productHardGate.pass}/${summary.productHardGate.evaluable} (${(summary.productHardGate.rate * 100).toFixed(1)}%) |`);
+report.push(`| Product failures (no draft, not provider, not a refusal) | ${summary.productFailures} |`);
+report.push(`| Principled refusals | ${summary.principledRefusals.total} — accepted: ${summary.principledRefusals.accepted}${summary.principledRefusals.acceptedIds.length ? ` (ids ${summary.principledRefusals.acceptedIds.join(', ')})` : ''} / rejected: ${summary.principledRefusals.rejected}${summary.principledRefusals.rejectedIds.length ? ` (ids ${summary.principledRefusals.rejectedIds.join(', ')})` : ''} |`);
+report.push(`| Draft-invalid breakdown | refusal ${summary.draftInvalidBreakdown.principledRefusal}, quality validator ${summary.draftInvalidBreakdown.qualityValidator}, repair exhausted ${summary.draftInvalidBreakdown.repairExhausted}, schema ${summary.draftInvalidBreakdown.schemaProblem}, unknown ${summary.draftInvalidBreakdown.unknown} |`);
 report.push(`| Over-asked cases (question cap hit) | ${summary.overAskedCases.length} |`, '');
 report.push('## Pass rate by difficulty', '', '| Difficulty | Pass | Total | Rate |', '|---|---:|---:|---:|');
 for (const [k, v] of Object.entries(summary.passRateByDifficulty)) report.push(`| ${k} | ${v.pass} | ${v.total} | ${(v.rate * 100).toFixed(1)}% |`);

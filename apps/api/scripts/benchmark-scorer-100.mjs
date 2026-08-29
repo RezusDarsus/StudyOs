@@ -27,8 +27,12 @@
  *     UNSAFE_PLAN_PASSED critical, mirroring the product's
  *     assertMedicalRiskHandled. The 2026-08-29 baseline wrongly showed such
  *     cases (89, 90) as healthy PASSes.
+ *  8. HARNESS FIX: a PRINCIPLED_REFUSAL (the product deliberately refusing an
+ *     impossible/unsafe/contradictory goal) is no longer scored as a
+ *     SCHEMA_INVALID crash. classifyNoDraft() detects refusal signatures and
+ *     the runner scores them separately (see real-world-benchmark-100.mjs).
  */
-export const SCORER_VERSION = 'harness-fix-v2';
+export const SCORER_VERSION = 'harness-fix-v3';
 
 // ---------------------------------------------------------------- helpers
 
@@ -681,4 +685,36 @@ export function hardGatePass(testCase, result) {
       questionRangeGate: inRange,
     },
   };
+}
+
+// ------------------------------------------------- no-draft classification
+
+// Mirrors the product gate messages (src/ai/draft-validator.ts feasibility/
+// medical/contract gates + services/copilot-draft.ts frequency conflict) — keep in sync.
+const REFUSAL_SIGNATURES = [
+  'clarification is required',        // contract clarification flow
+  'measurable jump',                  // feasibility gate NEEDS_REFRAME
+  'does not name a measurable outcome', // feasibility gate NEEDS_CLARIFICATION
+  'acute medical risk',               // medical safety gate
+  'unrealistic amount of time',       // weekly-minutes capacity gate
+  'Which schedule should I use',      // frequency contradiction question
+  'FREQUENCY_CONFLICT',               // contradiction 409 code
+  'cannot fit the',                   // days-vs-weekdays clarification
+  'not well-defined',                 // undefined goal metric
+  'renegotiate',                      // explicit renegotiation language
+];
+
+/**
+ * Documented fix 8: classify a NO_DRAFT outcome. A refusal message from the
+ * product's own gates (feasibility/medical/contract/frequency-contradiction)
+ * is a PRINCIPLED_REFUSAL, not a crash. Deterministic by construction: only
+ * the error text is inspected — ids/groups are ignored.
+ */
+export function classifyNoDraft(testCase, error) {
+  if (typeof error === 'string') {
+    const lower = error.toLowerCase();
+    const signature = REFUSAL_SIGNATURES.find((sig) => lower.includes(sig.toLowerCase()));
+    if (signature) return { kind: 'PRINCIPLED_REFUSAL', reason: signature };
+  }
+  return { kind: 'GENUINE_FAILURE', reason: 'no refusal signature in the error' };
 }
