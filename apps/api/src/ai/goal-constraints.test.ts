@@ -307,6 +307,26 @@ describe('explicit goal constraints',()=>{
     expect(c.exactWeekly).toBeUndefined();
     expect(parseExplicitGoalConstraints('I review my notes each Saturday and each Sunday.','2026-08-25').allowedDays).toEqual([6,0]);
   });
+
+  it('parses availability sets stated without the word "days"',()=>{
+    expect(parseExplicitGoalConstraints('I am available Monday and Wednesday.','2026-08-25').allowedDays).toEqual([1,3]);
+    expect(parseExplicitGoalConstraints("I'm available Tuesday, Thursday and Saturday.",'2026-08-25').allowedDays).toEqual([2,4,6]);
+    expect(parseExplicitGoalConstraints('Available Mon/Wed/Fri.','2026-08-25').allowedDays).toEqual([1,3,5]);
+    expect(parseExplicitGoalConstraints('I can train Monday, Tuesday and Sunday.','2026-08-25').allowedDays).toEqual([1,2,0]);
+    // "only available" is restrictive: it lands in the only-days path, so the
+    // set stays exactly the named day rather than widening anything else.
+    expect(parseExplicitGoalConstraints('I am only available Saturday.','2026-08-25').allowedDays).toEqual([6]);
+  });
+
+  it('combines an availability set with a weekly total and role-day demands',()=>{
+    const c=parseExplicitGoalConstraints(
+      'I want exactly three workout days per week. I am available Monday, Tuesday, Thursday and Saturday. Saturday must be trail practice, and one session must be strength training.',
+      '2026-08-25',
+    );
+    expect(c.allowedDays).toEqual([1,2,4,6]);
+    expect(c.exactWeekly).toBe(3);
+    expect(c.requiresClarification).toBe(false);
+  });
 });
 
 describe('goal coverage gaps',()=>{

@@ -286,6 +286,12 @@ export function parseExplicitGoalConstraints(text: string, today: DayString): Ex
   // together ("Run on Tuesday and Thursday"), which reads as the available set
   // rather than a note about one activity.
   for(const match of lower.matchAll(new RegExp(`\\bon\\s+((?:${DAY_ALT})(?:\\s*(?:,|and|or)\\s*(?:${DAY_ALT}))+)`,'g'))) addNamedDays(match[1]);
+  // Availability sets stated without the word "days" ("I am available Monday
+  // and Wednesday", "I'm available Tue/Thu", "Available Mon/Wed/Fri", "I can
+  // train Monday, Tuesday and Sunday", "I am free Saturday") say which days
+  // the plan may use; like every/each clauses they widen the allowed set, and
+  // an "only available" phrasing still lands in the only-days path above first.
+  for(const match of lower.matchAll(new RegExp(`\\b(?:available|i\\s+am\\s+free|i\\s+can\\s+(?:train|work|practice))\\s+((?:${DAY_ALT})(?:(?:\\s*,\\s*|\\s*\\/\\s*|\\s+(?:and|or)\\s+)(?:${DAY_ALT}))*)`,'g'))) addNamedDays(match[1]);
   // "Monday through Thursday" (also "Monday-Thursday", "Monday to Thursday")
   // states an inclusive weekday range: every day between the endpoints is
   // allowed, wrapping through Sunday when the range crosses the week boundary.
