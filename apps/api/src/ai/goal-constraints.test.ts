@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { explicitConstraintErrors, extractEvidenceRequirements, parseExplicitGoalConstraints, statedDayOfMonth } from './goal-constraints.js';
+import { explicitConstraintErrors, extractEvidenceRequirements, goalCoverageGaps, parseExplicitGoalConstraints, statedDayOfMonth } from './goal-constraints.js';
 import type { NormalizedTask } from './draft-validator.js';
 
 const task = (title:string, weekdays:number[], minutes=45):NormalizedTask => ({
@@ -7,6 +7,7 @@ const task = (title:string, weekdays:number[], minutes=45):NormalizedTask => ({
   estimatedMinutes:minutes, preferredTime:null, reason:'', reward:20, progression:null,
 });
 const draft = (tasks:NormalizedTask[], deadline:string|null=null) => ({ targetType:'HABIT',targetValue:null,deadline,tasks });
+const textTask = (title:string, description='', reason=''):Array<Pick<NormalizedTask,'title'|'description'|'reason'>> => [{ title, description, reason }];
 
 describe('explicit goal constraints',()=>{
   it('extracts reusable evidence clauses from proof and outcome language',()=>{
@@ -269,5 +270,44 @@ describe('explicit goal constraints',()=>{
     );
     expect(c.exactWeekly).toBe(2);
     expect(c.requiresClarification).toBe(false);
+  });
+});
+
+describe('goal coverage gaps',()=>{
+  it('reports nothing when every first-sentence stem is covered',()=>{
+    expect(goalCoverageGaps('Prepare for backend interviews',textTask('Backend interview drill'))).toEqual([]);
+    expect(goalCoverageGaps('Prepare for backend interviews',textTask('Mock interview practice for backend roles'))).toEqual([]);
+  });
+
+  it('reports the goal stems no task pursues, in order of appearance',()=>{
+    // The baseline miss: a plan whose only task shares nothing with the request.
+    expect(goalCoverageGaps('Prepare for backend interviews',textTask('Review core Java concepts'))).toEqual(['backend','interview']);
+    expect(goalCoverageGaps('Prepare for backend interviews',textTask('Review core Java concepts','Read one chapter.','You want steady review.'))).toEqual(['backend','interview']);
+  });
+
+  it('keeps a saving goal honest against an unrelated budget task',()=>{
+    const gaps=goalCoverageGaps('save money for a house',textTask('Grocery budget review'));
+    expect(gaps).toContain('save');
+    expect(gaps).toContain('house');
+  });
+
+  it('never reports incidental scheduling or framing words as gaps',()=>{
+    expect(goalCoverageGaps('Prepare for backend interviews, three sessions per week',textTask('Review core Java concepts'))).toEqual(['backend','interview']);
+    expect(goalCoverageGaps('Improve my Spanish by studying every day',textTask('Spanish vocabulary drill'))).toEqual([]);
+  });
+
+  it('counts only the first sentence as the goal',()=>{
+    // Later sentences carry context and constraints, not the request.
+    expect(goalCoverageGaps('Save money for a house. My partner says I waste money.',textTask('Save money for the house fund'))).toEqual([]);
+    expect(goalCoverageGaps('Prepare for backend interviews. I own two laptops.',textTask('Backend interview drill'))).toEqual([]);
+  });
+
+  it('matches inflections with the benchmark tolerance',()=>{
+    expect(goalCoverageGaps('save money for a house',textTask('Weekly savings transfer'))).toEqual(['money','house']);
+  });
+
+  it('returns no gaps when the request has no usable central tokens',()=>{
+    expect(goalCoverageGaps('Three sessions per week',textTask('Anything at all'))).toEqual([]);
+    expect(goalCoverageGaps('',textTask('Anything at all'))).toEqual([]);
   });
 });

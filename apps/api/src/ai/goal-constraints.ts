@@ -1,5 +1,6 @@
 import { addDays, type DayString } from '../domain/dates.js';
 import type { NormalizedTask } from './draft-validator.js';
+import { meaningfulTokens } from './plan-quality.js';
 
 export interface ExplicitGoalConstraints {
   exactWeekly?: number;
@@ -45,6 +46,69 @@ export function extractEvidenceRequirements(text:string):string[]{
     .split(',')
     .map((item)=>item.trim().replace(/^(?:a|an|the|one)\s+/i,''))
     .filter((item)=>item.length>=3);
+}
+
+/**
+ * Planning boilerplate stripped before a goal stem counts as central: request
+ * framing, schedule mechanics, quantity words, and closed-class filler. Entries
+ * are stemmed forms — meaningfulTokens stems first — so "weeks"/"weekly" and
+ * "sessions" collapse onto "week"/"session", and a stem that only frames the
+ * request ("improve", "three sessions per week") can never be reported as a gap.
+ * Weekday and month names are scheduling constraints, not the goal's subject.
+ */
+const STOPWORDS_EXTRA = new Set([
+  // Closed-class filler that survives the shared tokenizer's length filter.
+  'about','after','again','all','also','another','any','always','before','because','been','being','better','best','but','can','could','does','during','each','every','find','feel','from','good','had','has','have','her','here','him','how','instead','its','just','least','less','let','lot','lots','many','may','might','most','much','must','never','new','not','now','old','other','our','over','own','per','really','same','say','shall','she','should','since','some','than','that','then','these','they','them','their','there','thing','things','this','those','too','under','until','very','via','was','well','were','what','when','while','which','who','why','will','without','would','anything','everything','nothing','something',
+  // Schedule mechanics: cadence, time-of-day, weekday and month names.
+  'week','day','month','year','weekday','weekend','daily','weekly','monthly','annually','session','block','time','minute','hour','schedule','schedul','cadence','frequency','date','deadline','morning','afternoon','evening','night','consecutive','fix','total','split','available','allow','non','level','amount','number','monday','tuesday','wednesday','thursday','friday','saturday','sunday','mon','tue','tues','wed','thu','thur','thurs','fri','sat','sun','jan','feb','mar','apr','jun','jul','aug','sep','sept','oct','nov','dec','january','february','march','april','june','july','august','september','october','november','december',
+  // Quantity words; digit tokens are dropped separately, teens via a suffix regex.
+  'once','twice','one','two','three','four','five','six','seven','eight','nine','ten','eleven','twelve','second','third',
+  // Request framing and authority language — who decides, not what is done.
+  // "Productive"/"defined" are undefined-metric quality talk, never a subject.
+  'need','help','improve','improv','improvement','build','create','creat','mak','make','prepare','prepar','preparation','practice','practic','train','study','eat','meet','read','run','walk','learn','try','like','love','enjoy','prefer','keep','stay','stop','quit','avoid','maintain','complete','complet','finish','reach','master','develop','grow','gain','lose','spend','take','give','become','becom','achieve','achiev','apply','accept','add','change','approve','approval','recommend','recommendation','decide','decision','override','pause','resume','preserve','increase','reduce','decrease','outcome','evidence','deliverable','objective','target','habit','routine','metric','baseline','demonstrate','demonstrat','prove','show','shown','please','hello','hey','thank','thanks','productive','productivity','defin','define','clarify','clarification',
+]);
+/** Digit-led tokens ("800", "5k", "2027") are quantities, never subjects. */
+const NUMERIC_TOKEN = /^\d/;
+/** Number words past twelve ("fifteenth", "twenty") are quantities too. */
+const NUMERIC_WORD = /(?:teen|teenth|tieth)$/;
+
+/** The request itself: the goal's first sentence (or the whole single sentence). */
+function centralGoalStems(goalText: string): string[] {
+  const opening = goalText.split('\n', 1)[0].split(/[.!?]/, 1)[0];
+  return [...meaningfulTokens(opening)]
+    .filter((token) => !STOPWORDS_EXTRA.has(token) && !NUMERIC_TOKEN.test(token) && !NUMERIC_WORD.test(token));
+}
+
+/**
+ * The benchmark's inflection tolerance: both sides stemmed, a silent trailing
+ * "e" dropped, then token equality or a prefix match in either direction — a
+ * long task token may absorb a short goal stem ("saving" covers "save"), while
+ * a short task token never re-matches a longer stem ("fast" never covers
+ * "fasting").
+ */
+const coverageNorm = (token: string) => (token.length > 3 ? token.replace(/e$/, '') : token);
+function stemCovered(stem: string, taskTokens: Set<string>): boolean {
+  const term = coverageNorm(stem);
+  return [...taskTokens].some((token) => {
+    const other = coverageNorm(token);
+    return other === term || other.startsWith(term) || (term.startsWith(other) && other.length >= 6);
+  });
+}
+
+/**
+ * The goal's central stems that no task title/description/reason pursues.
+ *
+ * "Central" means stems from the goal's first sentence — the main request —
+ * after planning boilerplate is dropped, so incidental constraint words ("three
+ * sessions per week") and request framing ("improve", "prepare") never count.
+ * Returns the missing stems in order of appearance, or [] when the request
+ * carries no usable central tokens.
+ */
+export function goalCoverageGaps(goalText: string, tasks: Array<Pick<NormalizedTask, 'title' | 'description' | 'reason'>>): string[] {
+  const central = centralGoalStems(goalText);
+  if (!central.length) return [];
+  const taskTokens = tasks.map((task) => meaningfulTokens(`${task.title} ${task.description} ${task.reason}`));
+  return central.filter((stem) => !taskTokens.some((tokens) => stemCovered(stem, tokens)));
 }
 
 const DAYS: Record<string, number> = {

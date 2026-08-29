@@ -6,7 +6,8 @@ import type { DraftTaskInput, GoalDraftInput } from './schemas.js';
 import { toSecondPerson } from './voice.js';
 import {
   canonicalWeekdayOrder, explicitConstraintErrors, extractEvidenceRequirements,
-  parseExplicitGoalConstraints, semanticTaskRoles, statedDayOfMonth,
+  goalCoverageGaps, parseExplicitGoalConstraints, semanticTaskRoles, statedDayOfMonth,
+  taskWeeklyFrequency,
 } from './goal-constraints.js';
 import {
   buildConstraintContract, checkContract, describeContractViolations,
@@ -30,6 +31,8 @@ export interface NormalizedProgression {
   metricType: ProgressionMetric;
   unitLabel: string;
   stages: Array<{ target: number; minDays: number }>;
+  /** True when the final rung may only start after the user approves it. */
+  requiresApproval: boolean;
 }
 
 export interface NormalizedTask {
@@ -349,7 +352,7 @@ function normalizeProgression(
   const errors = validateStages(rungs.map((r, i) => ({ stageIndex: i, ...r })));
   if (errors.length > 0) return drop(errors.join(' '));
 
-  return { metricType, unitLabel: proposed.unitLabel.trim(), stages: rungs };
+  return { metricType, unitLabel: proposed.unitLabel.trim(), stages: rungs, requiresApproval: false };
 }
 
 /**
@@ -397,6 +400,24 @@ function assertMedicalRiskHandled(sourceText: string, tasks: NormalizedTask[]): 
 }
 
 export { assertMedicalRiskHandled };
+
+/**
+ * An opening sentence that is scheduling mechanics or authority talk ("at most
+ * three sessions per week", "wait for my approval") states constraints and who
+ * decides, not the goal's subject; goal-coverage matching against it would
+ * false-reject honest plans, so the coverage gate skips such requests. Only the
+ * FIRST sentence is tested — the same sentence goalCoverageGaps reads.
+ */
+const CONSTRAINT_OPENING = new RegExp(
+  '\\b(?:per|a|each|every|this|one)\\s+(?:day|week|month|year)s?\\b'
+  + '|\\b(?:daily|weekly|monthly|annually|weekdays?|weekends?)\\b|\\bevery\\b'
+  + '|\\bat\\s+(?:most|least)\\b|\\bno\\s+more\\s+than\\b|\\bexactly\\b|\\btimes?\\s+(?:per|a)\\b'
+  + '|\\btwice\\b|\\bonce\\b|\\bsessions?\\b|\\bblocks?\\b|\\bhours?\\b|\\bminutes?\\b|\\b(?:day|week|month|year)s?\\b'
+  + '|\\b(?:sun|mon|tues?|wed(?:nes)?|thur?s?|fri|sat(?:ur)?)(?:day)?s?\\b'
+  + '|\\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\\b'
+  + '|\\bapprov|\\bdecid|\\boverride\\b|\\brecommend\\b',
+  'i',
+);
 
 export function validateAndNormalizeDraft(
   input: GoalDraftInput,
@@ -1046,6 +1067,29 @@ export function validateAndNormalizeDraft(
         ));
       }
     }
+    // AUTHORITY: a build-up ladder is a future workload increase, and the contract
+    // only sees current totals. Deterministic rule: when the user capped the
+    // weekly volume (exactly or at most) and the plan's total already fills that
+    // cap, a surviving ladder whose final stage exceeds the task's own current
+    // weekly frequency may not start on its own — it is flagged as requiring
+    // explicit approval and the task's reason says so. Nothing is rejected here
+    // (progression is future work; checkContract still rejects current totals
+    // above the cap), but nothing auto-executes beyond the cap either.
+    const statedWeeklyCap = explicit.exactWeekly ?? explicit.maxWeekly;
+    if (statedWeeklyCap !== undefined) {
+      const planTotal = normalizedTasks.reduce((sum, task) => sum + taskWeeklyFrequency(task), 0);
+      if (Math.abs(planTotal - statedWeeklyCap) <= 0.01) {
+        for (const task of normalizedTasks) {
+          if (!task.progression) continue;
+          const finalStage = task.progression.stages[task.progression.stages.length - 1];
+          if (finalStage.target > taskWeeklyFrequency(task)) {
+            task.progression.requiresApproval = true;
+            task.reason = `${task.reason ? `${task.reason} ` : ''}This step-up starts only after you approve it.`;
+            adjustments.push(`Marked the build-up on "${task.title}" as requiring approval`);
+          }
+        }
+      }
+    }
     assertMedicalRiskHandled(sourceText, normalizedTasks);
     // The feasibility gate runs once, on the user's own words plus the draft's
     // (already normalized) target and deadline, before the final contract gate:
@@ -1054,6 +1098,20 @@ export function validateAndNormalizeDraft(
     const feasibility = assessFeasibility({ goalText: sourceText, deadline, targetType, targetValue });
     if (feasibility.verdict !== 'OK' && feasibility.reason) {
       throw new DraftValidationError(feasibility.reason);
+    }
+    // A plan can be internally consistent and still not be about this goal ("backend
+    // interview preparation" answered with "review core Java concepts"). After the
+    // generic-title and feasibility gates, the request's central stems must appear
+    // in the tasks; the check is narrow by design — only the opening sentence
+    // counts, and a request that is scheduling/authority talk is skipped entirely.
+    const opening = sourceText.split('\n', 1)[0].split(/[.!?]/, 1)[0];
+    if (!CONSTRAINT_OPENING.test(opening)) {
+      const gaps = goalCoverageGaps(sourceText, normalizedTasks);
+      if (gaps.length) {
+        throw new DraftValidationError(
+          `The plan does not pursue the stated goal: no task covers ${gaps.map((stem) => `"${stem}"`).join(', ')}. Keep the goal's core activities in the plan.`,
+        );
+      }
     }
     const errors = [
       ...explicitConstraintErrors(explicit, {
