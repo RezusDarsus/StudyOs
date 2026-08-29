@@ -43,6 +43,9 @@ const SHA_PATH = path.join(here, 'benchmark-fixtures', 'frozen-100.sha256');
 const RESULTS_ROOT = path.resolve(here, '../../../benchmark-results');
 
 const REQUEST_TIMEOUT_MS = 150_000;
+// A 5xx retry with no delay just burns its second attempt inside the same
+// provider rate-limit window, doubling the damage an outage does to the run.
+const RETRY_DELAY_MS = 20_000;
 const HARD_QUESTION_CEILING = 10;
 
 // ---------------------------------------------------------------- fixture
@@ -156,6 +159,7 @@ async function call(route, init = {}, meta = {}) {
       if (status >= 500 && attempt === 1) {
         retryLog.push({ caseId: meta.caseId, route, attempt, reason: `HTTP ${status}`, status, code: body?.code ?? null });
         console.log(`    · transport retry ${meta.caseId} ${route} -> HTTP ${status} (${body?.code ?? 'no code'})`);
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
         continue;
       }
       return { status, body, attempts };
@@ -331,6 +335,10 @@ async function runCase(testCase) {
   } catch (err) {
     result.error = err.message;
     result.errorKind = err.kind ?? 'TRANSPORT';
+    // Classification needs the provider code that rode on the thrown error
+    // (AI_TIMEOUT etc.); without it every GENERATE failure degrades to
+    // SCHEMA_INVALID and an honest provider outage counts as an integrity zero.
+    result.providerCode = err.providerCode;
   } finally {
     // -- always discard the draft and cancel/delete the session, even on failure
     if (draftId) {
