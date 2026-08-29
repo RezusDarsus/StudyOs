@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { explicitConstraintErrors, extractEvidenceRequirements, parseExplicitGoalConstraints } from './goal-constraints.js';
+import { explicitConstraintErrors, extractEvidenceRequirements, parseExplicitGoalConstraints, statedDayOfMonth } from './goal-constraints.js';
 import type { NormalizedTask } from './draft-validator.js';
 
 const task = (title:string, weekdays:number[], minutes=45):NormalizedTask => ({
@@ -171,6 +171,53 @@ describe('explicit goal constraints',()=>{
     );
     expect(c.allowedDays).toEqual([2,4,6]);
     expect(c.exactWeekly).toBeUndefined();
+  });
+
+  it('orders allowed days canonically regardless of clause order',()=>{
+    // The same days named in the opposite order must produce the same set:
+    // clause processing order never leaks into the result.
+    const reversed=parseExplicitGoalConstraints(
+      'Do strength training every Saturday and run on Tuesday and Thursday for 30 minutes.',
+      '2026-08-25',
+    );
+    expect(reversed.allowedDays).toEqual([2,4,6]);
+    // Canonical order is Monday-first with Sunday last, per the application
+    // convention — a plain 0-6 sort would wrongly put Sunday first.
+    expect(parseExplicitGoalConstraints('Run on Sunday and Monday.','2026-08-25').allowedDays).toEqual([1,0]);
+  });
+
+  it('applies a recorded conflict-resolution answer after every other clause',()=>{
+    // The answer is user authority recorded last, so it must widen an
+    // already-extracted "only days" set rather than be clobbered by it.
+    const added=parseExplicitGoalConstraints(
+      'Monday and Wednesday are the only days.\n{"resolve_frequency_conflict":{"question":"...or make another weekday available?","answer":"Add Saturday as an available day"}}',
+      '2026-08-25',
+    );
+    expect(added.allowedDays).toEqual([1,3,6]);
+    // The answer keeps widening even when the opening statement names its own days.
+    const widened=parseExplicitGoalConstraints(
+      'Exercise three days per week. Monday and Wednesday are the only days.\n{"resolve_frequency_conflict":{"question":"...or make another weekday available?","answer":"Make Friday available"}}',
+      '2026-08-25',
+    );
+    expect(widened.allowedDays).toEqual([1,3,5]);
+    expect(widened.exactWeekly).toBe(3);
+  });
+
+  it('extracts explicitly forbidden activities',()=>{
+    const c=parseExplicitGoalConstraints('No alcohol and never run. Train on Tuesday and Thursday without a defined baseline.','2026-08-25');
+    expect(c.forbiddenActivities).toEqual(['alcohol','run']);
+    expect(parseExplicitGoalConstraints('Walk daily without a defined baseline.','2026-08-25').forbiddenActivities).toEqual([]);
+  });
+
+  it('reports the stated day of month through the shared helper',()=>{
+    expect(statedDayOfMonth('Pay rent on the 1st')).toBe(1);
+    expect(statedDayOfMonth('Save on the first day of every month')).toBe(1);
+    expect(statedDayOfMonth('Review on the fifteenth of each month')).toBe(15);
+    expect(statedDayOfMonth('Transfer on day 10 of each month')).toBe(10);
+    expect(statedDayOfMonth('Pay at the end of each month')).toBe('LAST');
+    // An ordinal followed by a month name is a date, not a monthly day.
+    expect(statedDayOfMonth('Start on the 3rd of March')).toBeUndefined();
+    expect(statedDayOfMonth('Walk daily')).toBeUndefined();
   });
 
   it('reads "every weekday" as the five weekday plan total',()=>{

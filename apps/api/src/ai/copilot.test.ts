@@ -1027,3 +1027,139 @@ describe('draft patches', () => {
     );
   });
 });
+
+describe('constraint contract repair', () => {
+  const financeDraft = {
+    ...baseDraft,
+    category: 'FINANCE' as const,
+    title: 'Rent fund',
+    tasks: [{ ...baseDraft.tasks[0], title: 'Transfer 500 GEL', recurrence: { type: 'MONTHLY' as const } }],
+  };
+
+  it('preserves the user-stated day of month on a finance monthly task', () => {
+    const result = validateAndNormalizeDraft(
+      financeDraft,
+      'UTC',
+      new Date('2026-08-25T10:00:00Z'),
+      'Transfer 500 GEL monthly on the 1st, starting September 2026.',
+    );
+    expect(result.tasks[0].recurrenceType).toBe('MONTHLY');
+    expect(result.tasks[0].recurrenceConfig.dayOfMonth).toBe(1);
+  });
+
+  it('preserves every-N-months cadence with its stated day', () => {
+    const result = validateAndNormalizeDraft(
+      {
+        ...baseDraft,
+        category: 'FINANCE',
+        tasks: [{ ...baseDraft.tasks[0], title: 'Transfer 500 GEL', recurrence: { type: 'MONTHLY' } }],
+      },
+      'UTC',
+      new Date('2026-08-25T10:00:00Z'),
+      'Transfer 500 GEL every three months on the fifteenth of each month.',
+    );
+    expect(result.tasks[0].recurrenceType).toBe('EVERY_X_MONTHS');
+    expect(result.tasks[0].recurrenceConfig.intervalMonths).toBe(3);
+    expect(result.tasks[0].recurrenceConfig.dayOfMonth).toBe(15);
+  });
+
+  it('carries a task-stated day of month into an empty monthly recurrence', () => {
+    const result = validateAndNormalizeDraft(
+      {
+        ...baseDraft,
+        category: 'FINANCE',
+        tasks: [{ ...baseDraft.tasks[0], title: 'Pay rent on the 1st', recurrence: { type: 'MONTHLY' } }],
+      },
+      'UTC',
+    );
+    expect(result.tasks[0].recurrenceConfig.dayOfMonth).toBe(1);
+    expect(result.adjustments).toContain('Carried the stated day of month into "Pay rent on the 1st"');
+  });
+
+  it('leaves a non-finance monthly cadence alone', () => {
+    const result = validateAndNormalizeDraft(
+      { ...baseDraft, tasks: [{ ...baseDraft.tasks[0], title: 'Read a book', recurrence: { type: 'SPECIFIC_WEEKDAYS', weekdays: [1] } }] },
+      'UTC',
+      new Date('2026-08-25T10:00:00Z'),
+      'Read one book a month.',
+    );
+    expect(result.tasks[0].recurrenceType).toBe('SPECIFIC_WEEKDAYS');
+  });
+
+  it('merges identical weekly dinners instead of dropping their occurrences', () => {
+    const result = validateAndNormalizeDraft(
+      {
+        ...baseDraft,
+        tasks: [
+          { ...baseDraft.tasks[0], title: 'Family dinner', recurrence: { type: 'SPECIFIC_WEEKDAYS', weekdays: [1] } },
+          { ...baseDraft.tasks[0], title: 'Family dinner', recurrence: { type: 'SPECIFIC_WEEKDAYS', weekdays: [3] } },
+          { ...baseDraft.tasks[0], title: 'Family dinner', recurrence: { type: 'SPECIFIC_WEEKDAYS', weekdays: [5] } },
+        ],
+      },
+      'UTC',
+      new Date('2026-08-25T10:00:00Z'),
+      'We eat dinner together three times per week.',
+    );
+    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks[0].recurrenceConfig.weekdays).toEqual([1, 3, 5]);
+    const weekly = result.tasks.reduce(
+      (sum, task) => sum + (task.recurrenceConfig.weekdays?.length ?? 0), 0,
+    );
+    expect(weekly).toBe(3);
+    expect(result.adjustments.join(' ')).toMatch(/Merged duplicate task/);
+  });
+
+  it('merges weekday-labelled duplicates so the schedule keeps every day', () => {
+    const result = validateAndNormalizeDraft(
+      {
+        ...baseDraft,
+        tasks: [
+          { ...baseDraft.tasks[0], title: 'Calculus (Tuesday)', recurrence: { type: 'SPECIFIC_WEEKDAYS', weekdays: [2] } },
+          { ...baseDraft.tasks[0], title: 'Calculus (Saturday)', recurrence: { type: 'SPECIFIC_WEEKDAYS', weekdays: [6] } },
+        ],
+      },
+      'UTC',
+      new Date('2026-08-25T10:00:00Z'),
+      'My calculus course meets twice per week.',
+    );
+    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks[0].recurrenceConfig.weekdays).toEqual([2, 6]);
+  });
+
+  it('rejects a duplicate merge that cannot preserve the stated total', () => {
+    // Three identical Monday dinners cannot become one dinner without losing
+    // two-thirds of the week's schedule, so the draft is rejected with the
+    // violation instead of the total being silently rewritten.
+    expect(() =>
+      validateAndNormalizeDraft(
+        {
+          ...baseDraft,
+          tasks: [
+            { ...baseDraft.tasks[0], title: 'Family dinner', recurrence: { type: 'SPECIFIC_WEEKDAYS', weekdays: [1] } },
+            { ...baseDraft.tasks[0], title: 'Family dinner', recurrence: { type: 'SPECIFIC_WEEKDAYS', weekdays: [1] } },
+            { ...baseDraft.tasks[0], title: 'Family dinner', recurrence: { type: 'SPECIFIC_WEEKDAYS', weekdays: [1] } },
+          ],
+        },
+        'UTC',
+        new Date('2026-08-25T10:00:00Z'),
+        'We eat dinner together three times per week.',
+      ),
+    ).toThrow(/exactly 3 total sessions per week/);
+  });
+
+  it('rejects a variable-cap schedule that lost its bounded monthly phases', () => {
+    // The user stated bounded monthly contributions; a draft with no finance
+    // task at all cannot represent them, so it is rejected rather than kept.
+    expect(() =>
+      validateAndNormalizeDraft(
+        {
+          ...baseDraft,
+          tasks: [{ ...baseDraft.tasks[0], title: 'Evening walk', recurrence: { type: 'TIMES_PER_WEEK', timesPerWeek: 5 } }],
+        },
+        'UTC',
+        new Date('2026-08-25T10:00:00Z'),
+        'By August 31, 2027 eliminate a €3,600 balance and build a €5,000 fund. We have €900 available now and can contribute €650 per month from September through November, €300 in December and January, and €700 per month from February onward.',
+      ),
+    ).toThrow(/bounded monthly contribution/);
+  });
+});

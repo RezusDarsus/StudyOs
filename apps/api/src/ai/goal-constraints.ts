@@ -6,6 +6,8 @@ export interface ExplicitGoalConstraints {
   maxWeekly?: number;
   allowedDays?: number[];
   excludedDays: number[];
+  /** Activities the user explicitly forbade ("no alcohol", "never run"). */
+  forbiddenActivities: string[];
   maxMinutes?: number;
   maxWeeklyMinutes?: number;
   deadline?: DayString;
@@ -71,6 +73,46 @@ function mentionedDays(text: string): number[] {
   return [...new Set([...text.toLowerCase().matchAll(new RegExp(`\\b(${DAY_ALT})\\b`, 'g'))].map((m) => DAYS[m[1]]))];
 }
 
+/**
+ * Canonical weekday order: Monday-first, Sunday last (ISO convention).
+ *
+ * Sets are built by several independent clauses whose code order must never
+ * leak into the result, so every weekday set is sorted through this before it
+ * leaves the parser. (Plain 0-6 sort would put Sunday first, which contradicts
+ * the application convention the suite encodes.)
+ */
+export function canonicalWeekdayOrder(days: Iterable<number>): number[] {
+  return [...new Set(days)].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7));
+}
+
+/**
+ * A day of the month stated in free text — "on the 1st", "the first day of
+ * every month", "on the fifteenth of each month", "day 10 of each month", "last
+ * day of the month" — or undefined when no day is stated. An ordinal followed
+ * by a month name is a date, not a monthly day ("start on the 3rd of March").
+ */
+export function statedDayOfMonth(text: string): number | 'LAST' | undefined {
+  const lower = text.toLowerCase();
+  const months = Object.keys(MONTHS).join('|');
+  const dayOfMonthPattern = /\bday\s+(\d{1,2})\s+of\s+(?:each|every|the)\s+month\b/;
+  const ordinalPattern = /\b(?:on\s+)?the\s+(\d{1,2})(?:st|nd|rd|th)?\s+(?:day\s+)?of\s+(?:each|every|the)\s+month\b/;
+  const wordOrdinalPattern = new RegExp(`\\b(?:on\\s+)?the\\s+(${Object.keys(WORD_ORDINALS).join('|')})(?:\\s+day)?\\s+of\\s+(?:each|every|the)\\s+month\\b`);
+  const bareOrdinalPattern = new RegExp(`\\b(?:on|by|for|starting)?\\s*the\\s+(\\d{1,2})(?:st|nd|rd|th)\\b(?!\\s*(?:of\\s+|,?\\s*)(?:${months})\\b)`);
+  let stated: number | undefined;
+  const dayOfMonth = lower.match(dayOfMonthPattern);
+  if (dayOfMonth) stated = Number(dayOfMonth[1]);
+  const ordinal = lower.match(ordinalPattern);
+  if (ordinal) stated = Number(ordinal[1]);
+  const wordOrdinal = lower.match(wordOrdinalPattern);
+  if (wordOrdinal) stated = WORD_ORDINALS[wordOrdinal[1]];
+  if (stated === undefined) {
+    const bareOrdinal = lower.match(bareOrdinalPattern);
+    if (bareOrdinal) stated = Number(bareOrdinal[1]);
+  }
+  if (/\blast day of (?:each|every|the) month\b|\bend of (?:each|every|the) month\b/.test(lower)) return 'LAST';
+  return stated;
+}
+
 function endOfPreviousMonth(month: number, year: number): DayString {
   return new Date(Date.UTC(year, month - 1, 0)).toISOString().slice(0, 10) as DayString;
 }
@@ -78,7 +120,7 @@ function endOfPreviousMonth(month: number, year: number): DayString {
 export function parseExplicitGoalConstraints(text: string, today: DayString): ExplicitGoalConstraints {
   const lower = text.toLowerCase();
   const result: ExplicitGoalConstraints = {
-    excludedDays: [], requiredWeeklyRoles: [], requiredRoleDays: [],
+    excludedDays: [], requiredWeeklyRoles: [], requiredRoleDays: [], forbiddenActivities: [],
     undefinedMetric:false, requiresClarification:false, prohibitConsecutiveEvenings:false,
   };
   const weekly = lower.match(/\b(exactly\s+|at most\s+|no more than\s+|maximum (?:of )?)?(\d+|once|twice|thrice|one|two|three|four|five|six|seven)(?:\s+(?:different\s+)?(?:total\s+)?[^.!?]{0,28}?(?:sessions?|times?|blocks?|training days?|days?))?\s*(?:(?:each|a|per|every)\s+week|weekly)\b/);
@@ -98,19 +140,6 @@ export function parseExplicitGoalConstraints(text: string, today: DayString): Ex
   if(authorityOverride) result.exactWeekly=numberOf(authorityOverride[1]);
   const answeredFrequency = lower.match(/"question":"[^"]*(?:how many|frequency)[^"]*(?:days|sessions?)[^"]*(?:per week|weekly)[^"]*","answer":(\d+)/);
   if (answeredFrequency) result.exactWeekly=Number(answeredFrequency[1]);
-  // A resolved frequency conflict outranks the opening statement. The blocking
-  // question offers reduce / allow two sessions on one day / free up another
-  // day, and whichever the user picks is authoritative — otherwise the
-  // contradiction the question resolved would still dead-end generation.
-  const reduceAnswer = lower.match(new RegExp(`"answer":"[^"]*reduce[^"]{0,80}?(?:to\\s+)?(\\d+|${Object.keys(WORD_NUMBERS).filter((k)=>!/once|twice|thrice/.test(k)).join('|')})\\s+days?`));
-  if (reduceAnswer) result.exactWeekly=numberOf(reduceAnswer[1]);
-  if (/"answer":"[^"]*allow[^"]{0,40}two sessions? on (?:one|a|the same) day/.test(lower)) {
-    result.exactWeekly=result.allowedDays?.length ?? result.exactWeekly;
-  }
-  const addedDayAnswer = lower.match(new RegExp(`"answer":"[^"]*(?:make|add)[^"]{0,40}?\\b(${DAY_ALT})\\b[^"]{0,30}available`));
-  if (addedDayAnswer) {
-    result.allowedDays=[...new Set([...(result.allowedDays??[]),DAYS[addedDayAnswer[1]]])];
-  }
   if (/\badd(?:ed|ing)?\s+(?:exactly\s+)?(?:one|1)\s+weekly\b/.test(lower) && !answeredFrequency) {
     // This is the executable delta the user accepted. A previous baseline is not
     // present in a self-contained request, so never invent one and call the total
@@ -189,30 +218,40 @@ export function parseExplicitGoalConstraints(text: string, today: DayString): Ex
     result.calendarFrequency = { intervalMonths: 1 };
   }
   if (result.calendarFrequency) {
-    const ordinal = lower.match(/\b(?:on\s+)?the\s+(\d{1,2})(?:st|nd|rd|th)?\s+(?:day\s+)?of\s+(?:each|every|the)\s+month\b/);
-    if (ordinal) result.calendarFrequency.dayOfMonth=Number(ordinal[1]);
-    // "on the first day of every month", "the fifteenth of each month" — word
-    // ordinals carry the same day-of-month intent digits do.
-    const wordOrdinal = lower.match(new RegExp(`\\b(?:on\\s+)?the\\s+(${Object.keys(WORD_ORDINALS).join('|')})(?:\\s+day)?\\s+of\\s+(?:each|every|the)\\s+month\\b`));
-    if (wordOrdinal) result.calendarFrequency.dayOfMonth=WORD_ORDINALS[wordOrdinal[1]];
-    // A bare "monthly on the 1st, starting September" — an ordinal suffix is
-    // required and a following month name means it is a date, not a monthly day.
-    if (result.calendarFrequency.dayOfMonth === undefined) {
-      const bareOrdinal = lower.match(new RegExp(`\\b(?:on|by)\\s+the\\s+(\\d{1,2})(?:st|nd|rd|th)\\b(?!\\s*(?:of\\s+|,?\\s*)(?:${Object.keys(MONTHS).join('|')})\\b)`));
-      if (bareOrdinal) result.calendarFrequency.dayOfMonth=Number(bareOrdinal[1]);
-    }
-    if (/\blast day of (?:each|every|the) month\b|\bend of (?:each|every|the) month\b/.test(lower)) result.calendarFrequency.dayOfMonth='LAST';
+    // Digit ordinals, word ordinals, bare "on the 1st", and "last day of the
+    // month" all state which calendar day a monthly recurrence belongs on;
+    // statedDayOfMonth carries the shared precedence for parse and repair.
+    const stated=statedDayOfMonth(lower);
+    if(stated!==undefined) result.calendarFrequency.dayOfMonth=stated;
     if (!/\b(?:per|each|every|a) week\b|\bweekly\b/.test(openingText)) result.exactWeekly=undefined;
   }
   for (const match of lower.matchAll(/(?:never|unavailable|exclude|not available)[^.]{0,35}\b(sun(?:day)?|mon(?:day)?|tues?(?:day)?|wed(?:nesday)?|thurs?(?:day)?|fri(?:day)?|sat(?:urday)?)\b/g)) result.excludedDays.push(DAYS[match[1]]);
   for (const match of lower.matchAll(/\b(sun(?:day)?|mon(?:day)?|tues?(?:day)?|wed(?:nesday)?|thurs?(?:day)?|fri(?:day)?|sat(?:urday)?)\b[^.]{0,25}(?:is|are)\s+(?:unavailable|excluded|not available)/g)) result.excludedDays.push(DAYS[match[1]]);
-  result.excludedDays=[...new Set(result.excludedDays)];
+  result.excludedDays=canonicalWeekdayOrder(result.excludedDays);
   if(result.allowedDays?.length) result.allowedDays=result.allowedDays.filter((day)=>!result.excludedDays.includes(day));
   if (/\bweekdays?\b/.test(lower)) {
     const weekdays = [1, 2, 3, 4, 5].filter((day) => !result.excludedDays.includes(day));
     result.allowedDays = result.allowedDays?.length
       ? result.allowedDays.filter((day) => weekdays.includes(day))
       : weekdays;
+  }
+  if(result.allowedDays?.length) result.allowedDays=canonicalWeekdayOrder(result.allowedDays);
+  // A resolved frequency conflict outranks everything above it. The blocking
+  // question offers reduce / allow two sessions on one day / free up another
+  // day, and whichever the user picks is authoritative — otherwise the
+  // contradiction the question resolved would still dead-end generation. The
+  // answer is applied LAST, after every extraction and filter above (including
+  // the weekday-keyword filter, which the question text itself can trigger), so
+  // it can only widen or override the sets and never be clobbered by an
+  // earlier-stated "only days" clause.
+  const reduceAnswer = lower.match(new RegExp(`"answer":"[^"]*reduce[^"]{0,80}?(?:to\\s+)?(\\d+|${Object.keys(WORD_NUMBERS).filter((k)=>!/once|twice|thrice/.test(k)).join('|')})\\s+days?`));
+  if (reduceAnswer) result.exactWeekly=numberOf(reduceAnswer[1]);
+  if (/"answer":"[^"]*allow[^"]{0,40}two sessions? on (?:one|a|the same) day/.test(lower)) {
+    result.exactWeekly=result.allowedDays?.length ?? result.exactWeekly;
+  }
+  const addedDayAnswer = lower.match(new RegExp(`"answer":"[^"]*(?:make|add)[^"]{0,40}?\\b(${DAY_ALT})\\b[^"]{0,30}available`));
+  if (addedDayAnswer) {
+    result.allowedDays=canonicalWeekdayOrder([...(result.allowedDays??[]),DAYS[addedDayAnswer[1]]]);
   }
   const minutes=lower.match(/(?:must be|no longer than|at most|maximum (?:of )?|may not exceed)\s+(\d+)\s*minutes?/);
   if(minutes) result.maxMinutes=Number(minutes[1]);
@@ -232,6 +271,11 @@ export function parseExplicitGoalConstraints(text: string, today: DayString): Ex
     result.monthlyMoneyCap=Number(cap[1].replace(/,/g,''));
   }
   result.undefinedMetric=/\b(?:twice as (?:creative|smart)|\d+% more productive|become[^.]{0,40}\bexpert\b)/.test(lower);
+  // Negative constraints: activities the user explicitly forbade. The lexicon is
+  // deliberately narrow — a missed "no swimming" is caught in review, but a
+  // false "forbidden" would reject honest plans.
+  for (const match of lower.matchAll(/\b(?:never|no|not|don't|do not|cannot|can't|avoid|without|quit|stop|zero)\s+(?:any\s+|more\s+)?(running|runs?|jogging|swimming|swims?|cycling|biking|smoking|drinking|alcohol|sugar|desserts?|snacking|fast food|junk food|gaming|gambling)\b/g)) result.forbiddenActivities.push(match[1]);
+  result.forbiddenActivities=[...new Set(result.forbiddenActivities)];
   if (/\b(?:one|1)\b[^.!?]{0,35}\bstrength\b[^.!?]{0,25}\b(?:weekly|per week|session|day)\b|\bone of (?:the )?(?:three|3) weekly days must be strength\b/i.test(lower)) {
     result.requiredWeeklyRoles.push({ role:'STRENGTH', minOccurrences:1 });
   }
@@ -266,7 +310,8 @@ export function taskWeeklyFrequency(task: Pick<NormalizedTask,'recurrenceType'|'
   return 0;
 }
 
-function taskMoneyAmounts(task: NormalizedTask): number[] {
+/** Every money amount a task states directly or via an AMOUNT ladder. */
+export function taskMoneyAmounts(task: Pick<NormalizedTask,'title'|'description'|'reason'|'progression'>): number[] {
   const text=`${task.title} ${task.description} ${task.reason}`;
   const direct=[...text.matchAll(/[€$£]\s*([\d,]+)|([\d,]+)\s*[€$£]/g)].map((m)=>Number((m[1]??m[2]).replace(/,/g,'')));
   const ladder=task.progression?.metricType==='AMOUNT'?task.progression.stages.map((s)=>s.target):[];

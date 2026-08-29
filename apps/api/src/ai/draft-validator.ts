@@ -4,7 +4,14 @@ import { validateStages } from '../domain/progression.js';
 import { RecurrenceError, validateRecurrence, type RecurrenceConfig } from '../domain/recurrence.js';
 import type { DraftTaskInput, GoalDraftInput } from './schemas.js';
 import { toSecondPerson } from './voice.js';
-import { explicitConstraintErrors, extractEvidenceRequirements, parseExplicitGoalConstraints, semanticTaskRoles } from './goal-constraints.js';
+import {
+  canonicalWeekdayOrder, explicitConstraintErrors, extractEvidenceRequirements,
+  parseExplicitGoalConstraints, semanticTaskRoles, statedDayOfMonth,
+} from './goal-constraints.js';
+import {
+  buildConstraintContract, checkContract, describeContractViolations,
+  type ConstraintContract, type ContractViolation,
+} from './constraint-contract.js';
 import { computeFinancialFeasibility, monthlyCapPeriods, parseFinancialPlan, planningAssumptionRate } from './financial-plan.js';
 import { GENERIC_TASK_TITLES, meaningfulTokens } from './plan-quality.js';
 
@@ -135,6 +142,66 @@ function assertValidRecurrence(type: RecurrenceType, config: RecurrenceConfig): 
   }
 }
 
+/**
+ * Merge two duplicate recurrences into one that still executes the same total
+ * occurrences — or null when no merge can prove that equivalence.
+ *
+ * Two disjoint weekday schedules union cleanly ("dinner Mon" + "dinner Sat" →
+ * dinner Mon+Sat); two flexible quotas add up; two occurrences on the SAME day
+ * cannot become one without silently dropping one, so they refuse to merge and
+ * the contract gate decides whether dropping is allowed at all.
+ */
+function mergeRecurrenceShapes(
+  a: { type: RecurrenceType; config: RecurrenceConfig },
+  b: { type: RecurrenceType; config: RecurrenceConfig },
+): { type: RecurrenceType; config: RecurrenceConfig } | null {
+  if (a.type === 'ONCE') return b;
+  if (b.type === 'ONCE') return a;
+  if (a.type === 'SPECIFIC_WEEKDAYS' && b.type === 'SPECIFIC_WEEKDAYS') {
+    const daysA = canonicalWeekdayOrder(a.config.weekdays ?? []);
+    const daysB = canonicalWeekdayOrder(b.config.weekdays ?? []);
+    const weekdays = canonicalWeekdayOrder([...daysA, ...daysB]);
+    if (weekdays.length !== daysA.length + daysB.length) return null;
+    return { type: 'SPECIFIC_WEEKDAYS', config: { weekdays } };
+  }
+  if (a.type === 'TIMES_PER_WEEK' && b.type === 'TIMES_PER_WEEK') {
+    const allowedA = a.config.allowedWeekdays;
+    const allowedB = b.config.allowedWeekdays;
+    const unrestrictedA = (allowedA?.length ?? 0) === 0;
+    const unrestrictedB = (allowedB?.length ?? 0) === 0;
+    // One quota bounded to a day pool and one unrestricted cannot merge into a
+    // single equivalent quota, so the pair refuses.
+    if (unrestrictedA !== unrestrictedB) return null;
+    const timesPerWeek = (a.config.timesPerWeek ?? 1) + (b.config.timesPerWeek ?? 1);
+    const allowedWeekdays = unrestrictedA
+      ? undefined
+      : canonicalWeekdayOrder([...allowedA!, ...(allowedB ?? [])]);
+    if (allowedWeekdays && allowedWeekdays.length < timesPerWeek) return null;
+    const excludedA = a.config.excludedWeekdays;
+    const excludedB = b.config.excludedWeekdays;
+    const excludedWeekdays = (excludedA?.length ?? 0) && (excludedB?.length ?? 0)
+      ? excludedA!.filter((day) => excludedB!.includes(day))
+      : excludedA?.length ? excludedA : excludedB;
+    return {
+      type: 'TIMES_PER_WEEK',
+      config: { timesPerWeek, allowedWeekdays, excludedWeekdays },
+    };
+  }
+  return null;
+}
+
+/** A normalized task's recurrence read back in the shape the merger consumes. */
+function mergeTasks(survivor: NormalizedTask, dropped: NormalizedTask): boolean {
+  const merged = mergeRecurrenceShapes(
+    { type: survivor.recurrenceType, config: survivor.recurrenceConfig },
+    { type: dropped.recurrenceType, config: dropped.recurrenceConfig },
+  );
+  if (!merged) return false;
+  survivor.recurrenceType = merged.type;
+  survivor.recurrenceConfig = merged.config;
+  return true;
+}
+
 function normalizeRecurrence(
   task: DraftTaskInput,
   adjustments: string[],
@@ -199,12 +266,23 @@ function normalizeRecurrence(
       break;
     }
     case 'MONTHLY': {
-      config.dayOfMonth = task.recurrence.dayOfMonth;
+      // A monthly task that states its day ("Pay rent on the 1st") but omits
+      // dayOfMonth would execute on the start date instead — carry the stated
+      // day in rather than silently shifting the occurrence.
+      config.dayOfMonth = task.recurrence.dayOfMonth
+        ?? statedDayOfMonth(`${task.title} ${task.description} ${task.reason}`);
+      if (config.dayOfMonth !== undefined && task.recurrence.dayOfMonth === undefined) {
+        adjustments.push(`Carried the stated day of month into "${task.title}"`);
+      }
       break;
     }
     case 'EVERY_X_MONTHS': {
       config.intervalMonths = task.recurrence.intervalMonths;
-      config.dayOfMonth = task.recurrence.dayOfMonth;
+      config.dayOfMonth = task.recurrence.dayOfMonth
+        ?? statedDayOfMonth(`${task.title} ${task.description} ${task.reason}`);
+      if (config.dayOfMonth !== undefined && task.recurrence.dayOfMonth === undefined) {
+        adjustments.push(`Carried the stated day of month into "${task.title}"`);
+      }
       break;
     }
     default:
@@ -327,6 +405,17 @@ export function validateAndNormalizeDraft(
 ): NormalizedDraft {
   const adjustments: string[] = [];
   const today = todayIn(timezone, now);
+  // The contract is built once, before any repair step: dedupe, the financial
+  // transforms, and the final gate all verify against the same reading of the
+  // user's words instead of re-parsing per step.
+  const explicit = sourceText ? parseExplicitGoalConstraints(sourceText, today) : null;
+  const sourceFinancialPlan = sourceText ? parseFinancialPlan(sourceText, '') : null;
+  const contract: ConstraintContract | null = explicit ? buildConstraintContract(explicit, {
+    excludedMonths: sourceFinancialPlan?.skippedMonths,
+    monthlyPhases: sourceFinancialPlan?.monthlyCaps?.length
+      ? monthlyCapPeriods(sourceFinancialPlan, today)
+      : undefined,
+  }) : null;
 
   if (input.tasks.length === 0) {
     throw new DraftValidationError('The plan came back with no tasks');
@@ -337,18 +426,6 @@ export function validateAndNormalizeDraft(
     adjustments.push(`Trimmed ${tasks.length} tasks down to ${MAX_TASKS}`);
     tasks = tasks.slice(0, MAX_TASKS);
   }
-
-  // Drop duplicate task titles — the model occasionally restates one.
-  const seen = new Set<string>();
-  tasks = tasks.filter((task) => {
-    const key = task.title.trim().toLowerCase();
-    if (seen.has(key)) {
-      adjustments.push(`Removed duplicate task "${task.title}"`);
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
 
   let normalizedTasks: NormalizedTask[] = tasks.map((task) => {
     const { type, config } = normalizeRecurrence(task, adjustments);
@@ -403,66 +480,11 @@ export function validateAndNormalizeDraft(
     };
   });
 
-  // Models frequently create "Session 1" and "Session 2" with the same full
-  // recurrence. The app executes both schedules, so that representation doubles
-  // the user's workload. Numbered sessions and weekday-labelled duplicates are
-  // one activity split into labels; keep one executable task.
-  const semanticSeen = new Set<string>();
-  normalizedTasks = normalizedTasks.filter((task) => {
-    const raw = task.title.toLowerCase();
-    const key = raw
-      .replace(/\((?:sun|mon|tues?|wed|thurs?|fri|sat)(?:day)?\)/g, '')
-      .replace(/\b(session|block)\s*\d+\b/g, '$1')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (key === raw.trim()) return true;
-    if (semanticSeen.has(key)) {
-      adjustments.push(`Removed duplicate scheduled task "${task.title}"`);
-      return false;
-    }
-    semanticSeen.add(key);
-    return true;
-  });
-
-  // Near-duplicates in different words: "Morning run in the park" and "Park run
-  // in the morning" are one activity written twice, and the exact and labelled
-  // passes above cannot see it. Titles are compared as token sets — a Jaccard
-  // overlap of 0.8 means the two titles share almost every meaningful word, so
-  // they schedule the same work and only the later copy survives. A pair is
-  // skipped when either title is too short to judge; the first task of a group
-  // is never removed, so the plan cannot empty out here.
-  const titleTokens = normalizedTasks.map((task) => meaningfulTokens(task.title));
-  const removedIndexes = new Set<number>();
-  for (let i = 0; i < normalizedTasks.length; i++) {
-    if (removedIndexes.has(i) || titleTokens[i].size < 2) continue;
-    for (let j = i + 1; j < normalizedTasks.length; j++) {
-      if (removedIndexes.has(j) || titleTokens[j].size < 2) continue;
-      const union = new Set([...titleTokens[i], ...titleTokens[j]]);
-      const shared = [...titleTokens[i]].filter((token) => titleTokens[j].has(token)).length;
-      if (shared / union.size >= 0.8) {
-        removedIndexes.add(j);
-        adjustments.push(`Removed near-duplicate task "${normalizedTasks[j].title}"`);
-      }
-    }
-  }
-  if (removedIndexes.size > 0 && removedIndexes.size < normalizedTasks.length) {
-    normalizedTasks = normalizedTasks.filter((_, index) => !removedIndexes.has(index));
-  }
-
-  // A placeholder title is not a representation mistake that can be normalised —
-  // it means the model had nothing real to offer, so the caller regenerates.
-  // Only the exact list throws; the vaguer heuristic stays a scoring signal.
-  for (const task of normalizedTasks) {
-    if (GENERIC_TASK_TITLES.has(task.title.trim().toLowerCase())) {
-      throw new DraftValidationError(
-        `"${task.title}" is a placeholder, not a real task. Try generating the plan again.`,
-      );
-    }
-  }
-
   // If a task itself names exactly one weekday, that statement is less ambiguous
   // than a model-produced integer. Correct Friday/Saturday and Sunday/weekday
-  // mapping mistakes deterministically.
+  // mapping mistakes deterministically. This runs BEFORE the dedupe passes so a
+  // merged duplicate keeps the union of its labelled days instead of being
+  // re-pinned to the day named in the surviving title.
   const dayNames: Record<string, number> = {
     sunday: 0, monday: 1, tuesday: 2, wednesday: 3,
     thursday: 4, friday: 5, saturday: 6,
@@ -491,6 +513,124 @@ export function validateAndNormalizeDraft(
         task.recurrenceConfig = { weekdays: named };
         adjustments.push(`Made "${task.title}" recur on its mandatory named weekday`);
       }
+    }
+  }
+
+  // Dedupe is the step that historically corrupted a correct reading ("dinner
+  // Monday" + "dinner Saturday" collapsing to one day), so the contract is
+  // snapshotted before it: a pass may merge complementary schedules — which
+  // provably preserves the total weekly occurrences and the weekday set — but
+  // must not introduce a violation class the draft did not already have.
+  const contractViolationsBeforeRepair = (): ContractViolation[] => contract
+    ? checkContract(contract, {
+      targetType: input.targetType,
+      targetValue: input.targetValue ?? null,
+      deadline: input.deadline ?? null,
+      tasks: normalizedTasks,
+    })
+    : [];
+  const preDedupeCodes = new Set(contractViolationsBeforeRepair().map((violation) => violation.code));
+
+  // Drop duplicate task titles — the model occasionally restates one. Under a
+  // contract, identical titles with complementary schedules merge into one task
+  // that still executes every stated occurrence ("Family dinner" on Mon/Wed/Sat
+  // stays three dinners per week) instead of silently becoming one.
+  const titleSeen = new Map<string, NormalizedTask>();
+  normalizedTasks = normalizedTasks.filter((task) => {
+    const key = task.title.trim().toLowerCase();
+    const existing = titleSeen.get(key);
+    if (existing === undefined) {
+      titleSeen.set(key, task);
+      return true;
+    }
+    if (contract && mergeTasks(existing, task)) {
+      adjustments.push(`Merged duplicate task "${task.title}" into "${existing.title}"`);
+      return false;
+    }
+    adjustments.push(`Removed duplicate task "${task.title}"`);
+    return false;
+  });
+
+  // Models frequently create "Session 1" and "Session 2" with the same full
+  // recurrence. The app executes both schedules, so that representation doubles
+  // the user's workload. Numbered sessions and weekday-labelled duplicates are
+  // one activity split into labels; keep one executable task. With complementary
+  // schedules and a contract in force, the merge keeps every labelled day.
+  const semanticSeen = new Map<string, NormalizedTask>();
+  normalizedTasks = normalizedTasks.filter((task) => {
+    const raw = task.title.toLowerCase();
+    const key = raw
+      // Full day names must strip too: "(Saturday)" carries "ur", which the
+      // short-form pattern below cannot consume, and an unstripped label hides
+      // the duplicate from this pass entirely.
+      .replace(/\((?:sun(?:day)?|mon(?:day)?|tues?(?:day)?|wed(?:nesday)?|thurs?(?:day)?|fri(?:day)?|sat(?:urday)?)\)/g, '')
+      .replace(/\b(session|block)\s*\d+\b/g, '$1')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (key === raw.trim()) return true;
+    const existing = semanticSeen.get(key);
+    if (existing === undefined) {
+      semanticSeen.set(key, task);
+      return true;
+    }
+    if (contract && mergeTasks(existing, task)) {
+      adjustments.push(`Merged duplicate scheduled task "${task.title}" into "${existing.title}"`);
+      return false;
+    }
+    adjustments.push(`Removed duplicate scheduled task "${task.title}"`);
+    return false;
+  });
+
+  // Near-duplicates in different words: "Morning run in the park" and "Park run
+  // in the morning" are one activity written twice, and the exact and labelled
+  // passes above cannot see it. Titles are compared as token sets — a Jaccard
+  // overlap of 0.8 means the two titles share almost every meaningful word, so
+  // they schedule the same work and only the later copy survives. A pair is
+  // skipped when either title is too short to judge; the first task of a group
+  // is never removed, so the plan cannot empty out here.
+  const titleTokens = normalizedTasks.map((task) => meaningfulTokens(task.title));
+  const removedIndexes = new Set<number>();
+  for (let i = 0; i < normalizedTasks.length; i++) {
+    if (removedIndexes.has(i) || titleTokens[i].size < 2) continue;
+    for (let j = i + 1; j < normalizedTasks.length; j++) {
+      if (removedIndexes.has(j) || titleTokens[j].size < 2) continue;
+      const union = new Set([...titleTokens[i], ...titleTokens[j]]);
+      const shared = [...titleTokens[i]].filter((token) => titleTokens[j].has(token)).length;
+      if (shared / union.size >= 0.8) {
+        // The near-duplicate always leaves the plan; under a contract its
+        // schedule is first folded into the survivor so no occurrence is lost.
+        if (contract) mergeTasks(normalizedTasks[i], normalizedTasks[j]);
+        removedIndexes.add(j);
+        adjustments.push(contract
+          ? `Merged near-duplicate task "${normalizedTasks[j].title}" into "${normalizedTasks[i].title}"`
+          : `Removed near-duplicate task "${normalizedTasks[j].title}"`);
+      }
+    }
+  }
+  if (removedIndexes.size > 0 && removedIndexes.size < normalizedTasks.length) {
+    normalizedTasks = normalizedTasks.filter((_, index) => !removedIndexes.has(index));
+  }
+
+  // Deduping may simplify representation only when equivalence is provable;
+  // anything the passes broke is rejected here rather than rewritten silently.
+  if (contract) {
+    const fresh = [...new Set(contractViolationsBeforeRepair().map((violation) => violation.code))]
+      .filter((code) => !preDedupeCodes.has(code));
+    if (fresh.length) {
+      throw new DraftValidationError(describeContractViolations(
+        contractViolationsBeforeRepair().filter((violation) => fresh.includes(violation.code)),
+      ));
+    }
+  }
+
+  // A placeholder title is not a representation mistake that can be normalised —
+  // it means the model had nothing real to offer, so the caller regenerates.
+  // Only the exact list throws; the vaguer heuristic stays a scoring signal.
+  for (const task of normalizedTasks) {
+    if (GENERIC_TASK_TITLES.has(task.title.trim().toLowerCase())) {
+      throw new DraftValidationError(
+        `"${task.title}" is a placeholder, not a real task. Try generating the plan again.`,
+      );
     }
   }
 
@@ -536,12 +676,13 @@ export function validateAndNormalizeDraft(
   }
   if (targetType === 'HABIT') targetValue = null;
 
-  if (sourceText) {
-    const explicit = parseExplicitGoalConstraints(sourceText, today);
-
+  if (sourceText && explicit && contract) {
     // Calendar-month intent has higher authority than a synthetic weekday answer.
     // Only finance-transfer tasks are changed, so a monthly budget review does not
     // accidentally rewrite unrelated weekly work in the same goal.
+    const preFinanceCodes = new Set(checkContract(contract, {
+      targetType, targetValue, deadline, tasks: normalizedTasks,
+    }).map((violation) => violation.code));
     if (explicit.calendarFrequency) {
       for (const task of normalizedTasks) {
         if (!semanticTaskRoles(task).has('FINANCE_TRANSFER')) continue;
@@ -558,9 +699,19 @@ export function validateAndNormalizeDraft(
         task.progression = null;
         adjustments.push(`Preserved calendar-month recurrence for "${task.title}"`);
       }
+      // A monthly task that lost the user's stated day of month would execute on
+      // the start date instead. The forcing above rewrites finance transfers; any
+      // other task already carrying the monthly cadence gets the stated day too.
+      if (explicit.calendarFrequency.dayOfMonth !== undefined) {
+        for (const task of normalizedTasks) {
+          if (task.recurrenceType !== 'MONTHLY' && task.recurrenceType !== 'EVERY_X_MONTHS') continue;
+          if (task.recurrenceConfig.dayOfMonth !== undefined) continue;
+          task.recurrenceConfig.dayOfMonth = explicit.calendarFrequency.dayOfMonth;
+          adjustments.push(`Carried the user's stated day of month into "${task.title}"`);
+        }
+      }
     }
 
-    const sourceFinancialPlan=parseFinancialPlan(sourceText,'');
     if(sourceFinancialPlan?.monthlyCaps?.length){
       const template=normalizedTasks.find((task)=>semanticTaskRoles(task).has('FINANCE_TRANSFER'));
       if(template){
@@ -588,6 +739,21 @@ export function validateAndNormalizeDraft(
         }
       }
       adjustments.push('Encoded the explicitly skipped contribution months in the recurrence');
+    }
+
+    // The financial transforms own the calendar-month and money-cap semantics:
+    // if a monthly cadence, a skipped month, or a bounded phase got lost here,
+    // that is a semantic rewrite and the draft is rejected, not repaired away.
+    if (contract) {
+      const fresh = [...new Set(checkContract(contract, {
+        targetType, targetValue, deadline, tasks: normalizedTasks,
+      }).map((violation) => violation.code))].filter((code) => !preFinanceCodes.has(code));
+      if (fresh.length) {
+        throw new DraftValidationError(describeContractViolations(
+          checkContract(contract, { targetType, targetValue, deadline, tasks: normalizedTasks })
+            .filter((violation) => fresh.includes(violation.code)),
+        ));
+      }
     }
 
     if (explicit.undefinedMetric && (targetType === 'QUANTITY' || targetType === 'WEEKLY_TARGET')) {
@@ -865,13 +1031,33 @@ export function validateAndNormalizeDraft(
         }
       }
     }
+    // The clamp steps above may only reduce scope. If one of them traded away a
+    // constraint the user stated (an exact total, a required day), the contract
+    // says so here instead of the rewrite slipping through.
+    if (contract) {
+      const fresh = [...new Set(checkContract(contract, {
+        targetType, targetValue, deadline, tasks: normalizedTasks,
+      }).map((violation) => violation.code))].filter((code) => !preFinanceCodes.has(code));
+      if (fresh.length) {
+        throw new DraftValidationError(describeContractViolations(
+          checkContract(contract, { targetType, targetValue, deadline, tasks: normalizedTasks })
+            .filter((violation) => fresh.includes(violation.code)),
+        ));
+      }
+    }
     assertMedicalRiskHandled(sourceText, normalizedTasks);
-    const errors = explicitConstraintErrors(explicit, {
-      targetType,
-      targetValue,
-      deadline,
-      tasks: normalizedTasks,
-    });
+    const errors = [
+      ...explicitConstraintErrors(explicit, {
+        targetType,
+        targetValue,
+        deadline,
+        tasks: normalizedTasks,
+      }),
+      // Final contract gate: every invariant must hold on the draft as it will
+      // be persisted — this is the same checker the benchmark scorer reuses.
+      ...checkContract(contract, { targetType, targetValue, deadline, tasks: normalizedTasks })
+        .map((violation) => violation.message),
+    ];
     for(const task of normalizedTasks)assertValidRecurrence(task.recurrenceType,task.recurrenceConfig);
     if (errors.length) throw new DraftValidationError(errors.join(' '));
   }
@@ -951,7 +1137,7 @@ export function validateAndNormalizeDraft(
   if (/falls? short/i.test(rationaleText) && !/shortfall/i.test(rationaleText)) {
     rationaleText += ' This is a shortfall that requires a trade-off.';
   }
-  const finalConstraints=sourceText ? parseExplicitGoalConstraints(sourceText,today) : null;
+  const finalConstraints=explicit;
   if (finalConstraints?.progressionPolicy) {
     const policy=finalConstraints.progressionPolicy;
     const parts:string[]=[];
