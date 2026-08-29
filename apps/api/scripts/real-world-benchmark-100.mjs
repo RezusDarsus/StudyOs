@@ -8,14 +8,34 @@
  *
  *   BENCHMARK_API=http://127.0.0.1:4000/api node scripts/real-world-benchmark-100.mjs
  *
+ * Flags (see --help for the full text):
+ *   --cases 12,18,41   Run only these fixture ids (the full fixture is still
+ *                      SHA-256 verified; artifacts are marked as a partial run,
+ *                      N/100). Combined with --resume, only the intersection of
+ *                      the dir's rerunnable cases and the selection is rerun and
+ *                      the combined artifact covers exactly the selected ids.
+ *   --resume <dir>     Resume an interrupted run's artifact directory (the one
+ *                      holding raw-results.json): finalized cases are carried
+ *                      verbatim, transport-failed and never-run cases are rerun
+ *                      on a fresh disposable account, and the combined artifacts
+ *                      are written back into the SAME directory. Refuses a dir
+ *                      without raw-results.json, corrupt JSON, or a different
+ *                      fixture SHA-256 — never combine fixture versions.
+ *   --help             Usage + parseRunnerArgs self-test; exits 0 without any
+ *                      network or fixture access.
+ *
  * Hard rules honored here:
  *  - The fixture is frozen: SHA-256 verified before anything runs; mismatch aborts.
  *  - A dedicated benchmark account is registered per run (generated password, held
- *    in memory only, never logged, never written to an artifact).
+ *    in memory only, never logged, never written to an artifact); a resumed run
+ *    registers another fresh account for its reruns.
  *  - Per case: real HTTP flow only (start -> answers -> generate), then ALWAYS
  *    (try/finally) discard the draft and DELETE the session.
  *  - Retries: at most one per HTTP call, transport-level only (connection
- *    failure/timeout or any 5xx), every retry recorded in the results.
+ *    failure/timeout or any 5xx), every retry recorded with its delay. Adaptive
+ *    backoff: 45s for 5xx AI_RATE_LIMIT, 20s for other 5xx and network errors,
+ *    raised to max(Retry-After seconds, base delay) capped at 120s when the
+ *    response carries a Retry-After header.
  *  - No fixture is edited after outputs are seen; suspected fixture errors are
  *    documented in the report instead.
  */
@@ -43,10 +63,154 @@ const SHA_PATH = path.join(here, 'benchmark-fixtures', 'frozen-100.sha256');
 const RESULTS_ROOT = path.resolve(here, '../../../benchmark-results');
 
 const REQUEST_TIMEOUT_MS = 150_000;
-// A 5xx retry with no delay just burns its second attempt inside the same
-// provider rate-limit window, doubling the damage an outage does to the run.
+// Backoff before the single transport-level retry. A retry with no delay just
+// burns its second attempt inside the same provider window, so every retry
+// sleeps first. Rate limiting needs a longer cool-down than a blip: AI_RATE_LIMIT
+// waits 45s, every other 5xx and network error waits 20s, and a Retry-After
+// header raises the wait to max(Retry-After seconds, base), capped at 120s.
 const RETRY_DELAY_MS = 20_000;
+const RATE_LIMIT_RETRY_DELAY_MS = 45_000;
+const RETRY_DELAY_CAP_MS = 120_000;
 const HARD_QUESTION_CEILING = 10;
+// The incremental checkpoint the run loop rewrites after every case — also the
+// file --resume validates and updates in place.
+const RESUME_RESULTS_FILE = 'raw-results.json';
+
+// ---------------------------------------------------------------- CLI flags
+
+export const RUNNER_USAGE = `Goalify Copilot — Real-World Quality Benchmark (frozen 100-case baseline)
+
+Usage:
+  BENCHMARK_API=http://127.0.0.1:4000/api node scripts/real-world-benchmark-100.mjs [flags]
+
+Flags:
+  (none)            Run the full frozen 100-case baseline against the live API.
+  --cases <ids>     Comma-separated fixture case ids, e.g. --cases 12,18,41.
+                    The full fixture is still SHA-256 verified; only the selected
+                    ids execute and every artifact is marked as a partial run
+                    (N/100). Combined with --resume, only the intersection of the
+                    dir's rerunnable cases and the selection is rerun, and the
+                    combined artifact covers exactly the selected ids.
+  --resume <dir>    Resume an interrupted run from its artifact directory (the one
+                    holding raw-results.json). Finalized cases (transport success,
+                    scored draft, NOT_READY, or a SCHEMA_INVALID/DRAFT_INVALID
+                    rejection) are carried verbatim; transport-failed and
+                    never-run cases are rerun on a FRESH disposable account.
+                    Combined artifacts are written back into the same directory.
+                    Refuses: missing/corrupt raw-results.json, or a fixture
+                    SHA-256 different from the frozen fixture.
+  --help            Print this text, run the parseRunnerArgs self-test, exit 0.
+                    No API call, no fixture access.
+
+Environment:
+  BENCHMARK_API     Base URL of the live API (default http://127.0.0.1:4000/api).
+
+Artifacts (per run dir): raw-results.json (incremental checkpoint),
+summary.json, transcripts.json, drafts.json, report.md, failures.md,
+frozen-100.json + frozen-100.sha256 copies.`;
+
+/**
+ * Parse runner CLI arguments. Pure — no I/O, no process.exit — so --help can
+ * self-test it without touching the network or the fixture. `cases` ids are
+ * validated as positive integers here; membership in the frozen fixture is
+ * checked later (parse runs before the fixture is even read).
+ */
+export function parseRunnerArgs(argv) {
+  const parsed = { help: false, resumeDir: null, cases: null, error: null };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--help' || arg === '-h') {
+      parsed.help = true;
+      continue;
+    }
+    if (arg === '--resume' || arg.startsWith('--resume=')) {
+      if (parsed.resumeDir) return { ...parsed, error: '--resume given twice' };
+      const value = arg.includes('=') ? arg.slice('--resume='.length) : argv[++i];
+      if (!value) return { ...parsed, error: '--resume requires a results directory path' };
+      parsed.resumeDir = value;
+      continue;
+    }
+    if (arg === '--cases' || arg.startsWith('--cases=')) {
+      if (parsed.cases) return { ...parsed, error: '--cases given twice' };
+      const value = arg.includes('=') ? arg.slice('--cases='.length) : argv[++i];
+      if (value == null || value === '') {
+        return { ...parsed, error: '--cases requires a comma-separated list of fixture ids, e.g. --cases 12,18,41' };
+      }
+      const ids = [];
+      for (const part of value.split(',')) {
+        const trimmed = part.trim();
+        if (!/^\d+$/.test(trimmed)) {
+          return { ...parsed, error: `--cases: "${trimmed}" is not a case id (positive integers only, e.g. --cases 12,18,41)` };
+        }
+        const id = Number(trimmed);
+        if (id < 1) return { ...parsed, error: `--cases: case ids start at 1 (got ${id})` };
+        ids.push(id);
+      }
+      parsed.cases = [...new Set(ids)].sort((a, b) => a - b);
+      continue;
+    }
+    return { ...parsed, error: `unknown argument "${arg}"` };
+  }
+  return parsed;
+}
+
+const RUNNER_ARGS_SELFTEST = [
+  { argv: [], expect: { help: false, resumeDir: null, cases: null, error: null } },
+  { argv: ['--help'], expect: { help: true, resumeDir: null, cases: null, error: null } },
+  { argv: ['-h'], expect: { help: true, resumeDir: null, cases: null, error: null } },
+  { argv: ['--cases', '12,18,41'], expect: { help: false, resumeDir: null, cases: [12, 18, 41], error: null } },
+  { argv: ['--cases=7'], expect: { help: false, resumeDir: null, cases: [7], error: null } },
+  { argv: ['--cases', ' 5 , 5, 41 '], expect: { help: false, resumeDir: null, cases: [5, 41], error: null } },
+  { argv: ['--resume', 'benchmark-results/run-x'], expect: { help: false, resumeDir: 'benchmark-results/run-x', cases: null, error: null } },
+  { argv: ['--resume=run-x', '--cases', '1,2'], expect: { help: false, resumeDir: 'run-x', cases: [1, 2], error: null } },
+  { argv: ['--cases', '0'], expectError: 'case ids start at 1' },
+  { argv: ['--cases', '12,abc'], expectError: 'is not a case id' },
+  { argv: ['--cases'], expectError: 'requires a comma-separated list' },
+  { argv: ['--resume'], expectError: 'requires a results directory' },
+  { argv: ['--resume', 'a', '--resume', 'b'], expectError: 'twice' },
+  { argv: ['--cases', '1', '--cases', '2'], expectError: 'twice' },
+  { argv: ['--bogus'], expectError: 'unknown argument' },
+  { argv: ['12'], expectError: 'unknown argument' },
+];
+
+/** @returns {number} checks run; throws on the first mismatch. */
+function runRunnerArgsSelfTest() {
+  for (const t of RUNNER_ARGS_SELFTEST) {
+    const got = parseRunnerArgs(t.argv);
+    if (t.expectError) {
+      if (!got.error || !got.error.includes(t.expectError)) {
+        throw new Error(`parseRunnerArgs(${JSON.stringify(t.argv)}) should fail with "${t.expectError}", got ${JSON.stringify(got)}`);
+      }
+      continue;
+    }
+    for (const key of ['help', 'resumeDir', 'cases', 'error']) {
+      const expected = JSON.stringify(t.expect[key] ?? null);
+      const actual = JSON.stringify(got[key] ?? null);
+      if (actual !== expected) {
+        throw new Error(`parseRunnerArgs(${JSON.stringify(t.argv)}).${key}: expected ${expected}, got ${actual}`);
+      }
+    }
+  }
+  return RUNNER_ARGS_SELFTEST.length;
+}
+
+const cli = parseRunnerArgs(process.argv.slice(2));
+if (cli.help) {
+  try {
+    const checks = runRunnerArgsSelfTest();
+    console.log(RUNNER_USAGE);
+    console.log(`\nparseRunnerArgs self-test: ${checks}/${checks} checks passed — no API call made.`);
+    process.exit(0);
+  } catch (err) {
+    console.error(`parseRunnerArgs SELF-TEST FAILED: ${err.message}`);
+    process.exit(1);
+  }
+}
+if (cli.error) {
+  console.error(`Argument error: ${cli.error}\n`);
+  console.error(RUNNER_USAGE);
+  process.exit(2);
+}
 
 // ---------------------------------------------------------------- fixture
 
@@ -64,6 +228,66 @@ const fixture = JSON.parse(fixtureText);
 if (fixture.length !== 100 || fixture.some((c, index) => c.id !== index + 1)) {
   console.error('FROZEN FIXTURE is not exactly IDs 1-100 in order — refusing to run.');
   process.exit(2);
+}
+
+// ---------------------------------------------------------------- resume & selection
+
+function abort(message) {
+  console.error(message);
+  process.exit(2);
+}
+
+/**
+ * A carried result is FINAL when rerunning it cannot change the outcome: the
+ * transport succeeded end-to-end, any scored draft exists, the interview
+ * honestly reported NOT_READY, or the API itself rejected the draft (the
+ * SCHEMA_INVALID classification whose error carries the API's DRAFT_INVALID
+ * code). Everything else — PROVIDER/TRANSPORT failures and cases the partial
+ * run never reached — is rerun on resume.
+ */
+function isFinalizedResult(r) {
+  if (r.transportSuccess === true) return true;
+  if (r.draft) return true;
+  if (r.errorKind === 'NOT_READY') return true;
+  const codes = new Set([...(r.criticals ?? []), ...(r.failures ?? []).map((f) => f.code)]);
+  const detail = [r.error ?? '', ...(r.failures ?? []).map((f) => f.detail ?? '')].join(' ');
+  return codes.has('SCHEMA_INVALID') && detail.includes('DRAFT_INVALID');
+}
+
+/** Load and validate a --resume directory. Exits (2) loudly on any problem. */
+async function loadResumeState(dir) {
+  const resolved = path.resolve(dir);
+  const rawPath = path.join(resolved, RESUME_RESULTS_FILE);
+  let text;
+  try {
+    text = await readFile(rawPath, 'utf8');
+  } catch {
+    abort(`--resume: ${resolved} is not a benchmark results directory — no ${RESUME_RESULTS_FILE} found.`);
+  }
+  let prior;
+  try {
+    prior = JSON.parse(text);
+  } catch (err) {
+    abort(`--resume: ${rawPath} is corrupted (JSON parse failed: ${err.message}) — refusing to silently combine a partial results file. Rerun without --resume or point at a clean directory.`);
+  }
+  if (prior?.benchmark !== 'GOALIFY_COPILOT_REAL_WORLD_QUALITY_BASELINE_100' || !Array.isArray(prior.results)) {
+    abort(`--resume: ${rawPath} is not a 100-case baseline checkpoint file.`);
+  }
+  if (prior.fixtureSha256 !== fixtureSha256) {
+    abort(`RESUME FIXTURE MISMATCH — never combine fixture versions.
+  resume dir ${resolved}
+  recorded   ${prior.fixtureSha256}
+  current    ${fixtureSha256}`);
+  }
+  const seen = new Set();
+  for (const [index, r] of prior.results.entries()) {
+    if (!r || !Number.isInteger(r.id) || r.id < 1 || r.id > fixture.length) {
+      abort(`--resume: unrecognizable result entry at index ${index} (id ${JSON.stringify(r?.id)}) — checkpoint is corrupt.`);
+    }
+    if (seen.has(r.id)) abort(`--resume: duplicate result for case ${r.id} — checkpoint is corrupt.`);
+    seen.add(r.id);
+  }
+  return { dir: resolved, prior, results: prior.results };
 }
 
 // ---------------------------------------------------------------- helpers
@@ -127,7 +351,8 @@ function promptDays(prompt) {
 // -------------------------------------------------------- HTTP with retry
 
 let cookie = '';
-const retryLog = []; // {caseId, route, attempt, reason, status}
+const retryLog = []; // {caseId, route, attempt, reason, status?, code?, delayMs, retryAfterSeconds?}
+let totalRetryDelayMs = 0; // backoff actually slept across the whole invocation
 
 async function call(route, init = {}, meta = {}) {
   const attempts = [];
@@ -157,9 +382,27 @@ async function call(route, init = {}, meta = {}) {
       const elapsed = Date.now() - started;
       attempts.push({ attempt, status, elapsed, ok: status < 500 });
       if (status >= 500 && attempt === 1) {
-        retryLog.push({ caseId: meta.caseId, route, attempt, reason: `HTTP ${status}`, status, code: body?.code ?? null });
-        console.log(`    · transport retry ${meta.caseId} ${route} -> HTTP ${status} (${body?.code ?? 'no code'})`);
-        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+        // Adaptive backoff (bounded single retry): the provider said "busy"
+        // (AI_RATE_LIMIT) vs "broken/slow" (AI_TIMEOUT/AI_PROVIDER/AI_UNAVAILABLE),
+        // and a Retry-After header, when present, wins over the base delay.
+        const code = body?.code ?? null;
+        const baseDelayMs = code === 'AI_RATE_LIMIT' ? RATE_LIMIT_RETRY_DELAY_MS : RETRY_DELAY_MS;
+        const retryAfterRaw = response.headers.get('retry-after');
+        const retryAfterSeconds = retryAfterRaw != null && /^\d+$/.test(retryAfterRaw.trim()) ? Number(retryAfterRaw.trim()) : null;
+        const delayMs = retryAfterSeconds != null
+          ? Math.min(Math.max(retryAfterSeconds * 1000, baseDelayMs), RETRY_DELAY_CAP_MS)
+          : baseDelayMs;
+        totalRetryDelayMs += delayMs;
+        retryLog.push({
+          caseId: meta.caseId, route, attempt, reason: `HTTP ${status}`, status, code, delayMs,
+          ...(retryAfterSeconds != null ? { retryAfterSeconds } : {}),
+        });
+        console.log(
+          `    · transport retry ${meta.caseId} ${route} -> HTTP ${status} (${code ?? 'no code'})` +
+          ` — waiting ${(delayMs / 1000).toFixed(0)}s` +
+          (retryAfterSeconds != null ? ` (Retry-After: ${retryAfterSeconds}s)` : ''),
+        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
         continue;
       }
       return { status, body, attempts };
@@ -167,8 +410,9 @@ async function call(route, init = {}, meta = {}) {
       const reason = err?.name === 'AbortError' ? 'timeout' : `network: ${err?.cause?.code ?? err?.message ?? err}`;
       attempts.push({ attempt, status: null, elapsed: Date.now() - started, ok: false });
       if (attempt === 1) {
-        retryLog.push({ caseId: meta.caseId, route, attempt, reason });
-        console.log(`    · transport retry ${meta.caseId} ${route} -> ${reason}`);
+        totalRetryDelayMs += RETRY_DELAY_MS;
+        retryLog.push({ caseId: meta.caseId, route, attempt, reason, delayMs: RETRY_DELAY_MS });
+        console.log(`    · transport retry ${meta.caseId} ${route} -> ${reason} — waiting ${RETRY_DELAY_MS / 1000}s`);
         continue;
       }
       throw new Error(`${route}: ${reason} (after 1 recorded retry)`);
@@ -393,7 +637,28 @@ async function runCase(testCase) {
 // ---------------------------------------------------------------- main
 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-const outDir = path.join(RESULTS_ROOT, `100-case-baseline-${stamp}`);
+const selectedIds = cli.cases; // null = all 100
+const partialRun = selectedIds != null;
+if (selectedIds) {
+  const unknown = selectedIds.filter((id) => !fixture.some((c) => c.id === id));
+  if (unknown.length) abort(`--cases: ids not in the frozen fixture (1-${fixture.length}): ${unknown.join(', ')}`);
+}
+const runList = selectedIds ? fixture.filter((c) => selectedIds.includes(c.id)) : fixture;
+
+const resumeState = cli.resumeDir ? await loadResumeState(cli.resumeDir) : null;
+
+// Resume plan: finalized cases are carried verbatim into the combined output;
+// transport-failed cases and cases the partial run never reached are rerun.
+const carriedResults = [];
+const rerunCaseIds = [];
+for (const testCase of runList) {
+  const priorEntry = resumeState?.results.find((r) => r.id === testCase.id);
+  if (priorEntry && isFinalizedResult(priorEntry)) carriedResults.push(priorEntry);
+  else rerunCaseIds.push(testCase.id);
+}
+
+const outDir = resumeState ? resumeState.dir : path.join(RESULTS_ROOT, `100-case-baseline-${stamp}`);
+const runStartedAt = resumeState ? (resumeState.prior.startedAt ?? stamp) : stamp;
 await mkdir(outDir, { recursive: true });
 await copyFile(FIXTURE_PATH, path.join(outDir, 'frozen-100.json'));
 await copyFile(SHA_PATH, path.join(outDir, 'frozen-100.sha256'));
@@ -404,58 +669,76 @@ console.log(`  fixture:    ${FIXTURE_PATH}`);
 console.log(`  sha256:     ${fixtureSha256}`);
 console.log(`  artifacts:  ${outDir}`);
 console.log(`  today:      ${TODAY}  defaultAnswerDate: ${DEFAULT_DATE}`);
+console.log(`  mode:       ${partialRun ? `partial run — ${runList.length} of ${fixture.length} fixture cases (ids: ${selectedIds.join(', ')})` : `full run — all ${fixture.length} cases`}`);
+if (resumeState) {
+  console.log(`  resume:     ${resumeState.dir} (original run started ${resumeState.prior.startedAt ?? 'unknown'})`);
+  if (resumeState.prior.api && resumeState.prior.api !== API) {
+    console.log(`  WARNING:    original run targeted ${resumeState.prior.api}; this run targets ${API} — the combined artifact mixes APIs.`);
+  }
+  console.log(`  plan:       ${carriedResults.length} carried verbatim, ${rerunCaseIds.length} to rerun`);
+  console.log(`  rerun ids:  ${rerunCaseIds.join(', ') || '(none — everything already final; artifacts rewritten in place)'}`);
+  if (carriedResults.length) console.log(`  carried:    ${carriedResults.map((r) => r.id).join(', ')}`);
+}
 
-// dedicated, disposable account — generated password lives in memory only
-const account = {
-  name: 'Benchmark 100',
-  email: `benchmark-100+${Date.now()}@goalify.app`,
-  password: randomBytes(18).toString('base64url'),
-};
-let register;
-try {
-  register = await call('/auth/register', {
-    method: 'POST',
-    body: JSON.stringify({
-      name: account.name,
-      email: account.email,
-      password: account.password,
-      confirmPassword: account.password,
-      timezone: 'UTC',
-    }),
-  }, { caseId: 'ACCOUNT' });
-} catch (err) {
-  console.error(`Account registration failed: ${err.message}`);
-  process.exit(2);
+if (rerunCaseIds.length) {
+  // dedicated, disposable account — generated password lives in memory only.
+  // A resumed run registers another fresh account: the partial run's sessions
+  // and drafts were already discarded by the per-case cleanup, and its cookie
+  // is only reusable while that old account still exists.
+  const account = {
+    name: 'Benchmark 100',
+    email: `benchmark-100+${Date.now()}@goalify.app`,
+    password: randomBytes(18).toString('base64url'),
+  };
+  let register;
+  try {
+    register = await call('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: account.name,
+        email: account.email,
+        password: account.password,
+        confirmPassword: account.password,
+        timezone: 'UTC',
+      }),
+    }, { caseId: 'ACCOUNT' });
+  } catch (err) {
+    console.error(`Account registration failed: ${err.message}`);
+    process.exit(2);
+  }
+  if (register.status !== 200 && register.status !== 201) {
+    console.error(`Account registration failed (HTTP ${register.status}): ${JSON.stringify(register.body)}`);
+    process.exit(2);
+  }
+  let login;
+  try {
+    login = await call('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: account.email, password: account.password }),
+    }, { caseId: 'ACCOUNT' });
+  } catch (err) {
+    console.error(`Login failed: ${err.message}`);
+    process.exit(2);
+  }
+  if (login.status !== 200) {
+    console.error(`Login failed (HTTP ${login.status}): ${JSON.stringify(login.body)}`);
+    process.exit(2);
+  }
+  console.log(`  account:    ${account.email} (dedicated, disposable; credentials not stored)`);
+} else {
+  console.log('  account:    none needed — nothing to rerun (no API call made)');
 }
-if (register.status !== 200 && register.status !== 201) {
-  console.error(`Account registration failed (HTTP ${register.status}): ${JSON.stringify(register.body)}`);
-  process.exit(2);
-}
-let login;
-try {
-  login = await call('/auth/login', {
-    method: 'POST',
-    body: JSON.stringify({ email: account.email, password: account.password }),
-  }, { caseId: 'ACCOUNT' });
-} catch (err) {
-  console.error(`Login failed: ${err.message}`);
-  process.exit(2);
-}
-if (login.status !== 200) {
-  console.error(`Login failed (HTTP ${login.status}): ${JSON.stringify(login.body)}`);
-  process.exit(2);
-}
-console.log(`  account:    ${account.email} (dedicated, disposable; credentials not stored)`);
 console.log(`  gates:      structural>=90  usefulness>=75  no critical failure  questionCount within range\n`);
 
-const results = [];
-for (let index = 0; index < fixture.length; index++) {
-  const testCase = fixture[index];
+const results = [...carriedResults]; // final combined set, kept sorted by case id
+const rerunCases = rerunCaseIds.map((id) => fixture[id - 1]);
+for (const testCase of rerunCases) {
   const r = await runCase(testCase);
   results.push(r);
+  results.sort((a, b) => a.id - b.id);
   const mark = r.pass ? 'PASS' : 'FAIL';
   console.log(
-    `[${String(index + 1).padStart(3)}/100] ${r.difficulty.padEnd(6)} #${String(r.id).padStart(3)} q=${r.questionCount}` +
+    `[${String(r.id).padStart(3)}/100] ${r.difficulty.padEnd(6)} #${String(r.id).padStart(3)} q=${r.questionCount}` +
     `  structural=${String(r.structural?.score ?? '-').padStart(3)} usefulness=${String(r.usefulness?.usefulnessScore ?? '-').padStart(3)}  ${mark}` +
     `  ${(r.timings.totalMs / 1000).toFixed(1)}s` +
     (r.criticals.length ? `  CRITICAL: ${[...new Set(r.criticals)].join(',')}` : '') +
@@ -464,16 +747,20 @@ for (let index = 0; index < fixture.length; index++) {
   if (!r.pass && r.criticals.length) {
     console.log(`      ${r.criticals.map((c) => `${c}: ${(r.failures.find((f) => f.code === c)?.detail ?? '').slice(0, 160)}`).join('\n      ')}`);
   }
-  // checkpoint after every case so a crash never loses the run
-  await writeFile(path.join(outDir, 'raw-results.json'), JSON.stringify({
+  // checkpoint after every case so a crash never loses the run — the whole
+  // combined set is written in place, so resuming again carries everything so far
+  await writeFile(path.join(outDir, RESUME_RESULTS_FILE), JSON.stringify({
     benchmark: 'GOALIFY_COPILOT_REAL_WORLD_QUALITY_BASELINE_100',
     api: API,
     fixtureSha256,
     today: TODAY,
     defaultAnswerDate: DEFAULT_DATE,
-    startedAt: stamp,
+    startedAt: runStartedAt,
     updatedAt: new Date().toISOString(),
     completedCases: results.length,
+    partialRun,
+    selectedCases: selectedIds,
+    resumedFrom: resumeState ? resumeState.dir : null,
     results,
   }, null, 2));
 }
@@ -496,15 +783,31 @@ const executed = results.filter((r) => r.transportSuccess).length;
 const criticalTotal = results.reduce((sum, r) => sum + [...new Set(r.criticals)].length, 0);
 const casesWithCritical = results.filter((r) => r.criticals.length > 0).length;
 const passCount = results.filter((r) => r.pass).length;
+const n = results.length;
+// On a partial run a /100 denominator would be wrong for every per-metric line,
+// so those lines switch to the executed count and say "partial" explicitly.
+const denom = partialRun ? `${n} (partial run of 100)` : '100';
+const retryAfterRespectedCount = retryLog.filter((e) => e.retryAfterSeconds != null).length;
+const maxRetriesPerCase = results.reduce((max, r) => Math.max(max, r.retries ?? 0), 0);
 
 const summary = {
   benchmark: 'GOALIFY_COPILOT_REAL_WORLD_QUALITY_BASELINE_100',
   fixtureSha256,
   scorerVersion: SCORER_VERSION,
   api: API,
-  startedAt: stamp,
+  startedAt: runStartedAt,
   finishedAt: new Date().toISOString(),
+  totalFixtureCases: fixture.length,
   executedCases: results.length,
+  partialRun,
+  selectedCases: selectedIds,
+  resumedFrom: resumeState ? resumeState.dir : null,
+  resume: resumeState ? {
+    resumedAt: new Date().toISOString(),
+    originalStartedAt: resumeState.prior.startedAt ?? null,
+    carriedCaseIds: carriedResults.map((r) => r.id),
+    rerunCaseIds,
+  } : null,
   executedFully: executed,
   transportFailureCases: results.filter((r) => !r.transportSuccess).map((r) => ({ id: r.id, kind: r.criticals?.[0] ?? r.errorKind, error: r.error })),
   providerFailureCases: results.filter((r) => r.criticals.includes('PROVIDER')).map((r) => r.id),
@@ -530,6 +833,12 @@ const summary = {
   overAskedCases: results.filter((r) => r.overAsked).map((r) => r.id),
   retryCount: retryLog.length,
   retries: retryLog,
+  // Transport-retry accounting for this invocation (carried results keep their
+  // original per-case `retries` count; maxRetriesPerCase covers the combined set).
+  providerRetryCount: retryLog.length,
+  totalRetryDelayMs,
+  retryAfterRespectedCount,
+  maxRetriesPerCase,
   cleanup: {
     draftsDiscarded: results.filter((r) => r.cleanup.draftDiscarded).length,
     sessionsDeletedOrCancelled: results.filter((r) => r.cleanup.sessionDeleted).length,
@@ -541,31 +850,40 @@ const summary = {
 await writeFile(path.join(outDir, 'summary.json'), JSON.stringify(summary, null, 2) + '\n');
 await writeFile(path.join(outDir, 'transcripts.json'), JSON.stringify({
   fixtureSha256, today: TODAY, defaultAnswerDate: DEFAULT_DATE,
+  partialRun, selectedCases: selectedIds,
   transcripts: results.map((r) => ({ id: r.id, interview: r.interview, transcript: r.transcript })),
 }, null, 2) + '\n');
 await writeFile(path.join(outDir, 'drafts.json'), JSON.stringify({
   fixtureSha256,
+  partialRun, selectedCases: selectedIds,
   drafts: results.map((r) => ({ id: r.id, draft: r.draft, adjustments: r.adjustments, assumptions: r.assumptions })),
 }, null, 2) + '\n');
 
 const report = [];
 report.push('# Goalify Copilot — Real-World Quality Benchmark (frozen 100-case baseline)', '');
 report.push(`- API target: \`${API}\``);
+report.push(`- Run: ${partialRun ? `PARTIAL — ${n} of ${fixture.length} fixture cases (ids: ${selectedIds.join(', ')})` : `full baseline, all ${fixture.length} cases`}`);
+if (resumeState) {
+  report.push(`- Resume of \`${resumeState.dir}\` (original run started ${resumeState.prior.startedAt ?? 'unknown'}): ${carriedResults.length} cases carried verbatim, ${rerunCaseIds.length} rerun on a fresh disposable account`);
+}
 report.push(`- Fixture: \`apps/api/scripts/benchmark-fixtures/frozen-100.json\``);
 report.push(`- Fixture SHA-256: \`${fixtureSha256}\``);
 report.push(`- Account: dedicated, disposable benchmark account (no credentials recorded)`);
 report.push(`- Gates: structural ≥ 90, usefulness ≥ 75, no critical failure, question count within expected range`, '');
 report.push(`| Metric | Value |`);
 report.push(`|---|---:|`);
-report.push(`| Executed cases | ${results.length}/100 |`);
-report.push(`| Fully executed (draft produced) | ${executed}/100 |`);
+report.push(`| Executed cases | ${n}/100${partialRun ? ` — partial run (ids: ${selectedIds.join(', ')})` : ''} |`);
+report.push(`| Fully executed (draft produced) | ${executed}/${denom} |`);
 report.push(`| Structural average | ${summary.structuralAverage} |`);
 report.push(`| Usefulness average | ${summary.usefulnessAverage} |`);
 report.push(`| Critical failures (total) | ${criticalTotal} |`);
-report.push(`| Cases with a critical failure | ${casesWithCritical}/100 |`);
-report.push(`| Hard-gate pass | ${passCount}/100 (${(summary.hardGatePassRate * 100).toFixed(1)}%) |`);
+report.push(`| Cases with a critical failure | ${casesWithCritical}/${denom} |`);
+report.push(`| Hard-gate pass | ${passCount}/${denom} (${(summary.hardGatePassRate * 100).toFixed(1)}%) |`);
 report.push(`| Average questions per case | ${summary.averageQuestionsPerCase} |`);
 report.push(`| Recorded transport retries | ${retryLog.length} |`);
+report.push(`| Total retry backoff wait | ${(totalRetryDelayMs / 1000).toFixed(0)}s |`);
+report.push(`| Retry-After header honored | ${retryAfterRespectedCount} |`);
+report.push(`| Max retries in a single case | ${maxRetriesPerCase} |`);
 report.push(`| Provider-class failures (honest AI_TIMEOUT/AI_PROVIDER) | ${results.filter((r) => r.criticals.includes('PROVIDER')).length} |`);
 report.push(`| Over-asked cases (question cap hit) | ${summary.overAskedCases.length} |`, '');
 report.push('## Pass rate by difficulty', '', '| Difficulty | Pass | Total | Rate |', '|---|---:|---:|---:|');
@@ -591,7 +909,9 @@ const failing = results.filter((r) => !r.pass);
 const failuresMd = [];
 failuresMd.push('# Baseline failures (hard-gate fails only)', '');
 failuresMd.push(`- Fixture SHA-256: \`${fixtureSha256}\``);
-failuresMd.push(`- Failures: ${failing.length}/100`, '');
+if (partialRun) failuresMd.push(`- Partial run: ${n} of 100 fixture cases (ids: ${selectedIds.join(', ')})`);
+if (resumeState) failuresMd.push(`- Resume of \`${resumeState.dir}\`: ${carriedResults.length} carried verbatim, ${rerunCaseIds.length} rerun`);
+failuresMd.push(`- Failures: ${failing.length}/${denom}`, '');
 for (const r of failing) {
   failuresMd.push(`## ${r.id}. [${r.difficulty}] ${r.group} — structural ${r.structural.score}, usefulness ${r.usefulness.usefulnessScore}, questions ${r.questionCount}`, '');
   failuresMd.push(`Critical: ${[...new Set(r.criticals)].join(', ') || 'none'}`);
@@ -603,10 +923,14 @@ for (const r of failing) {
 await writeFile(path.join(outDir, 'failures.md'), failuresMd.join('\n') + '\n');
 
 console.log(`\nFINAL ${JSON.stringify({
-  executed: `${results.length}/100`, fullyExecuted: `${executed}/100`,
+  executed: `${n}/100${partialRun ? ` PARTIAL (ids: ${selectedIds.join(',')})` : ''}`,
+  fullyExecuted: `${executed}/${denom}`,
   structuralAverage: summary.structuralAverage, usefulnessAverage: summary.usefulnessAverage,
   criticalFailures: criticalTotal, casesWithCritical: casesWithCritical,
-  hardGatePass: `${passCount}/100`, retries: retryLog.length, overAsked: summary.overAskedCases,
+  hardGatePass: `${passCount}/${denom}`, retries: retryLog.length,
+  totalRetryDelaySeconds: Math.round(totalRetryDelayMs / 1000),
+  retryAfterRespected: retryAfterRespectedCount, maxRetriesPerCase,
+  overAsked: summary.overAskedCases,
 })}`);
 console.log(`ARTIFACTS ${outDir}`);
 process.exit(passCount === results.length ? 0 : 1);
