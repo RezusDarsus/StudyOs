@@ -31,6 +31,28 @@ function convert(amount: Money, currency: CurrencyCode, rate?: ExchangeRate): nu
   return null;
 }
 
+/** Rough planning values relative to USD, only ever used as labeled assumptions. */
+const PLANNING_RATES_IN_USD: Record<CurrencyCode, number> = {
+  USD: 1,
+  EUR: 0.92,
+  GBP: 0.79,
+  GEL: 2.65,
+};
+
+/**
+ * A labeled planning rate for two currencies, for when the user gave no usable
+ * one (a non-numeric answer, a skip). The value is a rough constant, the source
+ * is always ASSUMPTION, and the draft must say so — the user adjusts it before
+ * creating the goal. This converts a hard dead-end (the plan can never validate
+ * without a rate) into a visible, changeable assumption.
+ */
+export function planningAssumptionRate(from: CurrencyCode, to: CurrencyCode): ExchangeRate | null {
+  if (from === to) return null;
+  const value = Number((PLANNING_RATES_IN_USD[to] / PLANNING_RATES_IN_USD[from]).toFixed(4));
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return { base: from, quote: to, value, source: 'ASSUMPTION' };
+}
+
 /** Optimistic upper bound when the exact first transfer date is unknown. */
 export function monthlyOpportunities(today: DayString, deadline: DayString): number {
   if (deadline < today) return 0;

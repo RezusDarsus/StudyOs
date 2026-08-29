@@ -1,11 +1,12 @@
 import { addDays, todayIn } from '../domain/dates.js';
 import type { ProgressionMetric, RecurrenceType } from '../domain/enums.js';
 import { validateStages } from '../domain/progression.js';
-import { validateRecurrence, type RecurrenceConfig } from '../domain/recurrence.js';
+import { RecurrenceError, validateRecurrence, type RecurrenceConfig } from '../domain/recurrence.js';
 import type { DraftTaskInput, GoalDraftInput } from './schemas.js';
 import { toSecondPerson } from './voice.js';
 import { explicitConstraintErrors, extractEvidenceRequirements, parseExplicitGoalConstraints, semanticTaskRoles } from './goal-constraints.js';
-import { computeFinancialFeasibility, monthlyCapPeriods, parseFinancialPlan } from './financial-plan.js';
+import { computeFinancialFeasibility, monthlyCapPeriods, parseFinancialPlan, planningAssumptionRate } from './financial-plan.js';
+import { GENERIC_TASK_TITLES, meaningfulTokens } from './plan-quality.js';
 
 // The deterministic safety net between the model and the database.
 //
@@ -113,6 +114,27 @@ function weeklyFrequency(type: RecurrenceType, config: RecurrenceConfig): number
   }
 }
 
+/**
+ * Phase 1's recurrence authority, translated into the draft pipeline's own
+ * error type. A RecurrenceError escaping raw would bypass the corrective
+ * repair retry and reach the route as an anonymous 500; as a
+ * DraftValidationError it gets the same single regeneration-with-reason every
+ * other rejected plan gets, and the invariant holds either way: an invalid
+ * recurrence is never persisted.
+ */
+function assertValidRecurrence(type: RecurrenceType, config: RecurrenceConfig): void {
+  try {
+    validateRecurrence(type, config);
+  } catch (err) {
+    if (err instanceof RecurrenceError) {
+      throw new DraftValidationError(
+        `The plan came back with an invalid schedule (${err.message}). Try generating the plan again.`,
+      );
+    }
+    throw err;
+  }
+}
+
 function normalizeRecurrence(
   task: DraftTaskInput,
   adjustments: string[],
@@ -147,6 +169,15 @@ function normalizeRecurrence(
       config.timesPerWeek = clamped;
       if (task.recurrence.allowedWeekdays?.length) {
         config.allowedWeekdays = [...new Set(task.recurrence.allowedWeekdays)].sort((a, b) => a - b);
+        // A flexible weekly target fires at most once per day, so it cannot
+        // exceed its own allowed days. Clamping here keeps a valid schedule the
+        // repair loop can converge on instead of the same rejection twice.
+        if (config.allowedWeekdays.length < config.timesPerWeek) {
+          adjustments.push(
+            `"${task.title}" asked for ${config.timesPerWeek} days per week but only ${config.allowedWeekdays.length} day(s) are allowed; clamped to ${config.allowedWeekdays.length}`,
+          );
+          config.timesPerWeek = config.allowedWeekdays.length;
+        }
       }
       if (task.recurrence.excludedWeekdays?.length) {
         config.excludedWeekdays = [...new Set(task.recurrence.excludedWeekdays)].sort((a, b) => a - b);
@@ -181,7 +212,7 @@ function normalizeRecurrence(
   }
 
   // Final authority is the same validator Phase 1 uses for manual creation.
-  validateRecurrence(type, config);
+  assertValidRecurrence(type, config);
   return { type, config };
 }
 
@@ -241,6 +272,52 @@ function normalizeProgression(
 
   return { metricType, unitLabel: proposed.unitLabel.trim(), stages: rungs };
 }
+
+/**
+ * Conservative medical-risk gate.
+ *
+ * A goal that announces exercising through an acute medical risk (sharp or
+ * severe pain, chest pain, an injury, recent surgery, stopping prescribed
+ * medication) may not be answered with a plan that schedules the same risky
+ * activity unchanged at its requested cadence. The draft is rejected into the
+ * repair retry with a reason demanding a safe alternative — reduced intensity
+ * or frequency, rest or care first, or an explicitly renegotiated lighter
+ * schedule. This is refusal-to-schedule-dangerously, not medical advice: the
+ * product never says what is medically right, only that "run through it as
+ * asked, monitor the pain" is not a plan it will hand over.
+ */
+const ACUTE_RISK = /\b(?:sharp|acute|severe|intense)\s+(?:\w+\s+){0,2}?pain\b|\bchest\s+pain\b|\binjur(?:ed|y)\b|\b(?:recent|after|post)[- ](?:\w+\s+){0,2}?surgery\b|\bstopp?(?:ed|ing)\s+(?:taking\s+)?(?:my|the)?\s*(?:prescribed\s+)?medication\b/i;
+/** The risk is historical, so scheduling normally is legitimate again. */
+const RISK_RESOLVED = /\bpain\s+(?:is\s+)?(?:gone|resolved|free)\b|no\s+(?:more|longer)\s+pain\b|fully\s+(?:recovered|healed)\b/i;
+/** Activities whose continuation through an acute risk is what we refuse. */
+const RISKY_ACTIVITY = /\b(?:run(?:ning)?|jog(?:ging)?|sprint(?:ing)?|train(?:ing)?|workout|exercise|lift(?:ing)?|gym|swim(?:ming)?|cycl(?:e|ing)|hiit|marathon)\b/i;
+/** Plan-level care signals: a downgrade, a care-first step, or renegotiation. */
+const CARE_FIRST = /\b(?:recovery|recover first|rest day|day of rest|rest and|and rest first|physiotherap\w*|doctor|physician|medical (?:professional|attention|advice|clearance)|healthcare|clear(?:ed)? (?:it )?(?:with|by)|low[- ]impact|gentle|light(?:er)?|short(?:er|ened)?|reduc(?:e|ed|ing)|instead|swap(?:ped)?|switch(?:ed)?|postpone|until (?:the )?pain (?:settles|subsides|resolves)|pain[- ]free|cleared by)\b/i;
+/** Conditional "if pain starts, stop and rest" clauses — monitoring, not care. */
+const CONDITIONAL_PAIN_CLAUSE = /\b(?:if|when|should|whenever)[^.;]*?\bpain\b[^.;]*/gi;
+
+function assertMedicalRiskHandled(sourceText: string, tasks: NormalizedTask[]): void {
+  const text = sourceText.toLowerCase();
+  if (!ACUTE_RISK.test(text) || RISK_RESOLVED.test(text)) return;
+  const risky = tasks.filter((task) => {
+    const body = `${task.title} ${task.description}`.toLowerCase();
+    return RISKY_ACTIVITY.test(body) && weeklyFrequency(task.recurrenceType, task.recurrenceConfig) > 0;
+  });
+  if (!risky.length) return;
+  // Care has to appear outside the risky task's own conditional monitoring
+  // language — "stop if the pain starts" is the pattern being rejected.
+  const hasCareFirst = tasks.some((task) => {
+    const body = `${task.title} ${task.description}`.toLowerCase()
+      .replace(CONDITIONAL_PAIN_CLAUSE, ' ');
+    return CARE_FIRST.test(body);
+  });
+  if (hasCareFirst) return;
+  throw new DraftValidationError(
+    'The user described an acute medical risk, and the plan still schedules the risky activity unchanged. Replace or downgrade it: schedule rest or care first, reduce the intensity or frequency, or state explicitly in the tasks that the activity is renegotiated to a safe level.',
+  );
+}
+
+export { assertMedicalRiskHandled };
 
 export function validateAndNormalizeDraft(
   input: GoalDraftInput,
@@ -346,6 +423,42 @@ export function validateAndNormalizeDraft(
     semanticSeen.add(key);
     return true;
   });
+
+  // Near-duplicates in different words: "Morning run in the park" and "Park run
+  // in the morning" are one activity written twice, and the exact and labelled
+  // passes above cannot see it. Titles are compared as token sets — a Jaccard
+  // overlap of 0.8 means the two titles share almost every meaningful word, so
+  // they schedule the same work and only the later copy survives. A pair is
+  // skipped when either title is too short to judge; the first task of a group
+  // is never removed, so the plan cannot empty out here.
+  const titleTokens = normalizedTasks.map((task) => meaningfulTokens(task.title));
+  const removedIndexes = new Set<number>();
+  for (let i = 0; i < normalizedTasks.length; i++) {
+    if (removedIndexes.has(i) || titleTokens[i].size < 2) continue;
+    for (let j = i + 1; j < normalizedTasks.length; j++) {
+      if (removedIndexes.has(j) || titleTokens[j].size < 2) continue;
+      const union = new Set([...titleTokens[i], ...titleTokens[j]]);
+      const shared = [...titleTokens[i]].filter((token) => titleTokens[j].has(token)).length;
+      if (shared / union.size >= 0.8) {
+        removedIndexes.add(j);
+        adjustments.push(`Removed near-duplicate task "${normalizedTasks[j].title}"`);
+      }
+    }
+  }
+  if (removedIndexes.size > 0 && removedIndexes.size < normalizedTasks.length) {
+    normalizedTasks = normalizedTasks.filter((_, index) => !removedIndexes.has(index));
+  }
+
+  // A placeholder title is not a representation mistake that can be normalised —
+  // it means the model had nothing real to offer, so the caller regenerates.
+  // Only the exact list throws; the vaguer heuristic stays a scoring signal.
+  for (const task of normalizedTasks) {
+    if (GENERIC_TASK_TITLES.has(task.title.trim().toLowerCase())) {
+      throw new DraftValidationError(
+        `"${task.title}" is a placeholder, not a real task. Try generating the plan again.`,
+      );
+    }
+  }
 
   // If a task itself names exactly one weekday, that statement is less ambiguous
   // than a model-produced integer. Correct Friday/Saturday and Sunday/weekday
@@ -577,7 +690,10 @@ export function validateAndNormalizeDraft(
       } else {
         normalizedTasks[0].recurrenceType = 'TIMES_PER_WEEK';
         normalizedTasks[0].recurrenceConfig = {
-          timesPerWeek: explicit.exactWeekly,
+          // The scheduler's ceiling is 7; a stated 12 "times per week" cannot
+          // be expressed and would otherwise fail validation after synthesis.
+          // A flexible target also cannot exceed its allowed days.
+          timesPerWeek: Math.min(7, Math.max(1, explicit.exactWeekly), explicit.allowedDays?.length || 7),
           allowedWeekdays: explicit.allowedDays?.length?explicit.allowedDays:undefined,
           excludedWeekdays: explicit.excludedDays.length ? explicit.excludedDays : undefined,
         };
@@ -606,7 +722,7 @@ export function validateAndNormalizeDraft(
       if (recurring > explicit.maxWeekly && normalizedTasks.length) {
         normalizedTasks[0].recurrenceType = 'TIMES_PER_WEEK';
         normalizedTasks[0].recurrenceConfig = {
-          timesPerWeek: explicit.maxWeekly,
+          timesPerWeek: Math.min(7, Math.max(1, explicit.maxWeekly), explicit.allowedDays?.length || 7),
           allowedWeekdays: explicit.allowedDays?.length?explicit.allowedDays:undefined,
           excludedWeekdays: explicit.excludedDays.length ? explicit.excludedDays : undefined,
         };
@@ -617,6 +733,12 @@ export function validateAndNormalizeDraft(
         if (task.recurrenceType === 'TIMES_PER_WEEK') {
           task.recurrenceConfig.allowedWeekdays = explicit.allowedDays;
           task.recurrenceConfig.excludedWeekdays = explicit.excludedDays.length ? explicit.excludedDays : undefined;
+          // Keeping the allowed-day boundary honest can pull it below the
+          // requested frequency — the boundary wins, and the schedule stays valid.
+          if (explicit.allowedDays.length < (task.recurrenceConfig.timesPerWeek ?? 0)) {
+            adjustments.push(`"${task.title}" was clamped to ${explicit.allowedDays.length} session(s) per week to stay inside the allowed days`);
+            task.recurrenceConfig.timesPerWeek = explicit.allowedDays.length;
+          }
           continue;
         }
         if (task.recurrenceType !== 'SPECIFIC_WEEKDAYS') continue;
@@ -743,13 +865,14 @@ export function validateAndNormalizeDraft(
         }
       }
     }
+    assertMedicalRiskHandled(sourceText, normalizedTasks);
     const errors = explicitConstraintErrors(explicit, {
       targetType,
       targetValue,
       deadline,
       tasks: normalizedTasks,
     });
-    for(const task of normalizedTasks)validateRecurrence(task.recurrenceType,task.recurrenceConfig);
+    for(const task of normalizedTasks)assertValidRecurrence(task.recurrenceType,task.recurrenceConfig);
     if (errors.length) throw new DraftValidationError(errors.join(' '));
   }
 
@@ -772,6 +895,17 @@ export function validateAndNormalizeDraft(
   const outputText = `${input.title}\n${input.description}\n${input.rationale}\n${input.tasks.map((task)=>`${task.title} ${task.description} ${task.reason}`).join('\n')}`;
   const financialPlan = parseFinancialPlan(sourceText, outputText);
   if (financialPlan) {
+    // A missing or non-numeric exchange-rate answer must not dead-end the draft:
+    // a labeled planning assumption is recorded instead and surfaced for the
+    // user to adjust before creating the goal.
+    if (financialPlan.target.currency !== financialPlan.contribution.currency && !financialPlan.exchangeRate) {
+      const assumption=planningAssumptionRate(financialPlan.target.currency,financialPlan.contribution.currency);
+      if (assumption) {
+        financialPlan.exchangeRate=assumption;
+        adjustments.push(`No usable exchange-rate answer; using a labeled planning rate of ${assumption.value} ${assumption.quote} per ${assumption.base} — adjust before creating`);
+        rationaleText += ` Planning rate: 1 ${assumption.base} ≈ ${assumption.value} ${assumption.quote} is a changeable planning assumption — adjust before creating.`;
+      }
+    }
     const feasibility=computeFinancialFeasibility(financialPlan,today);
     if (feasibility.missing.includes('EXCHANGE_RATE')) {
       throw new DraftValidationError('Cross-currency finance requires an explicit exchange-rate answer or labeled planning assumption.');

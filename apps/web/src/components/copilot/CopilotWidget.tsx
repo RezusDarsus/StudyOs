@@ -18,7 +18,7 @@ import { useAsync, useToast } from '../ui';
 import { api } from '../../lib/api';
 import { SLASH_COMMANDS, canSubmit, parseInput, type SlashCommand } from '../../lib/slash';
 import { isProductHelpRequest } from '../../lib/copilot-intent';
-import { useCopilotInterview } from '../../lib/useCopilotInterview';
+import { useCopilotInterview, interviewPhaseLabel } from '../../lib/useCopilotInterview';
 import { GOAL_QUICK_ASKS, useGoalCopilot } from '../../lib/useGoalCopilot';
 import type { CopilotStatus } from '../../lib/types';
 import type { CopilotTarget } from './CopilotProvider';
@@ -615,9 +615,7 @@ export default function CopilotWidget({
                     <div className="progress-bar-fill" style={{ width: `${interview.progress}%` }} />
                   </div>
                   <span style={{ fontSize: '0.68rem', color: '#8b88b0', fontWeight: 600 }}>
-                    {interview.phase === 'READY'
-                      ? 'Ready'
-                      : `${interview.turn?.questionCount ?? 0} of ~${interview.turn?.estimatedTotal ?? 2}`}
+                    {interviewPhaseLabel(interview.phase, interview.turn)}
                   </span>
                 </div>
                 <Transcript
@@ -663,6 +661,19 @@ export default function CopilotWidget({
                 />
               </div>
             )}
+            {interview.phase === 'INTERVIEWING' &&
+              !interview.turn?.canGenerate &&
+              (interview.turn?.questionCount ?? 0) >= 2 && (
+                <div className="px-4 pb-3">
+                  <button
+                    className="btn-ghost w-full py-2 text-xs"
+                    onClick={() => interview.forceGenerate()}
+                    disabled={interview.generating}
+                  >
+                    Build with what we have
+                  </button>
+                </div>
+              )}
           </div>
         </>
       )}

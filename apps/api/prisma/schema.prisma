@@ -538,6 +538,12 @@ model CopilotSession {
   askedQuestionIds String @default("[]")
   questionCount    Int    @default(0)
 
+  /// Bumped on every applied interview turn. A generate request carries the
+  /// revision it last saw; a mismatch means the interview moved on since the
+  /// plan was requested, and the request is rejected as stale instead of
+  /// building a plan from a picture that no longer exists.
+  revision Int @default(0)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   expiresAt DateTime

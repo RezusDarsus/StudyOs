@@ -22,13 +22,14 @@ import {
 import { todayIn } from '../domain/dates.js';
 import type { RecurrenceType } from '../domain/enums.js';
 import { validateRecurrence } from '../domain/recurrence.js';
-import { badRequest, notFound } from '../lib/errors.js';
+import { badRequest, conflict, notFound } from '../lib/errors.js';
+import { describeExplicitConstraints, parseExplicitGoalConstraints } from '../ai/goal-constraints.js';
 import { prisma } from '../lib/prisma.js';
 import { ensureOccurrences } from './occurrences.js';
 import { createProgressionPlan } from './progression.js';
 import { recordEvent } from './copilot-analytics.js';
 import { extractPreferences, getPreferencesForPrompt } from './preferences.js';
-import { loadSession } from './copilot-session.js';
+import { loadSession, sessionReadiness } from './copilot-session.js';
 import {
   currentSessionFacts,
   inferredValues,
@@ -41,41 +42,8 @@ import {
   memoryGateCategory,
 } from '../ai/category.js';
 import { scorePlanQuality } from '../ai/plan-quality.js';
-import { AiProviderError } from '../ai/provider.js';
 
 const TRANSCRIPT_WINDOW = 20;
-
-/**
- * A malformed or truncated model response must not dead-end a completed
- * interview. This conservative draft uses only the user's original words and
- * can be edited on the review screen before anything is created.
- */
-function fallbackDraft(
-  initialGoal: string,
-  category: GoalDraftInput['category'] | null,
-): GoalDraftInput {
-  const goal = initialGoal.replace(/\s+/g, ' ').trim();
-  return {
-    title: goal.length <= 120 ? goal : `${goal.slice(0, 117)}...`,
-    description: goal.slice(0, 1000),
-    category: category ?? 'PERSONAL',
-    targetType: 'HABIT',
-    targetValue: null,
-    deadline: null,
-    rationale: 'A simple starting plan based on your goal. You can adjust it before creating it.',
-    tasks: [
-      {
-        title: 'Take the first concrete step',
-        description: goal.slice(0, 400),
-        recurrence: { type: 'ONCE' },
-        estimatedMinutes: 20,
-        preferredTime: null,
-        reason: 'Starting small makes the goal easier to begin and refine.',
-        progression: null,
-      },
-    ],
-  };
-}
 
 async function userTimezone(userId: string) {
   const profile = await prisma.profile.findUnique({ where: { userId } });
@@ -148,12 +116,102 @@ async function persistDraft(opts: {
  * Nothing here touches Goal or TaskDefinition — a draft is a proposal the user
  * has not agreed to yet.
  */
-export async function generateDraft(sessionId: string, userId: string, regenerate = false) {
+export async function generateDraft(
+  sessionId: string,
+  userId: string,
+  regenerate = false,
+  opts: { force?: boolean; revision?: number } = {},
+) {
   const session = await loadSession(sessionId, userId);
   if (session.status === 'CONFIRMED') {
     throw badRequest('This session already produced a goal', 'ALREADY_CONFIRMED');
   }
 
+  // A generate request carries the revision it saw. If the interview has moved
+  // on since — another question asked and answered — the caller is about to
+  // plan from a picture that no longer exists, so the request is rejected
+  // rather than silently building from something stale. Deliberately checked
+  // before the claim below, so a stale request never blocks a live one.
+  if (opts.revision !== undefined && opts.revision !== session.revision) {
+    throw conflict(
+      'This interview changed since the plan was requested. Review the latest question and try again.',
+      'STALE_REQUEST',
+    );
+  }
+
+  // The backend, not the model, decides when an interview is worth planning
+  // from. A session the readiness gate calls unfinished does not get a plan
+  // invented on its behalf — unless the user explicitly insists on one after
+  // having sat through at least two questions.
+  const readiness = sessionReadiness(session);
+  // An interview that has itself concluded as READY_TO_GENERATE has opened the
+  // gate: the hard question cap and the provider-outage fallback both end a
+  // vague interview there, with no next question left to ask. Refusing to
+  // generate then would dead-end the user, which the fallback question exists
+  // to prevent. The assumptions list already says the plan uses only what the
+  // user actually said.
+  const concluded = session.status === 'READY_TO_GENERATE';
+  const forced = concluded || (opts.force === true && session.questionCount >= 2);
+  if (!readiness.ready && !forced) {
+    throw conflict('The interview has not gathered enough information yet', 'NOT_READY');
+  }
+
+  // Claim the session before any model call. The conditional update is the
+  // lock: of two concurrent generates exactly one moves the status out of the
+  // claimable set, so a double-click can neither run the model twice nor
+  // persist two drafts. A plain generate does not claim DRAFT_GENERATED
+  // sessions — it gets the existing draft back below — while a regeneration
+  // legitimately re-claims one, since re-running the model is the point.
+  const claim = await prisma.copilotSession.updateMany({
+    where: {
+      id: session.id,
+      status: regenerate
+        ? { in: ['INTERVIEWING', 'READY_TO_GENERATE', 'DRAFT_GENERATED'] }
+        : { in: ['INTERVIEWING', 'READY_TO_GENERATE'] },
+    },
+    data: { status: 'GENERATING' },
+  });
+  if (claim.count === 0) {
+    // Someone else holds the claim — or already finished. An existing draft
+    // satisfies a plain generate; only an in-flight regeneration conflicts.
+    const existing = await prisma.goalDraft.findFirst({
+      where: { sessionId, status: { not: 'DISCARDED' } },
+      orderBy: { createdAt: 'desc' },
+      include: { tasks: { orderBy: { sortOrder: 'asc' } } },
+    });
+    if (existing && !regenerate) return { draft: existing, adjustments: [] };
+    throw conflict('A plan is already being built or the session is closed', 'GENERATE_IN_PROGRESS');
+  }
+
+  try {
+    return await buildDraft(session, userId, regenerate);
+  } catch (err) {
+    // Release the claim. The session goes back to the status it held before —
+    // never stuck at GENERATING, so the user can simply try again.
+    await prisma.copilotSession
+      .updateMany({
+        where: { id: session.id, status: 'GENERATING' },
+        data: { status: session.status },
+      })
+      .catch(() => {});
+    throw err;
+  }
+}
+
+/**
+ * The model half of generation — runs only under a held claim.
+ *
+ * A provider failure is surfaced as the error it is. A malformed or timed-out
+ * response after the bounded attempt budget ends the request with a structured
+ * error; disguising it as a plan the user never asked for is exactly what the
+ * fallback used to do, and it is gone.
+ */
+async function buildDraft(
+  session: Awaited<ReturnType<typeof loadSession>>,
+  userId: string,
+  regenerate: boolean,
+) {
+  const sessionId = session.id;
   const timezone = await userTimezone(userId);
   const context = parseContext(session.structuredContext, session.initialGoalText);
 
@@ -189,42 +247,27 @@ export async function generateDraft(sessionId: string, userId: string, regenerat
     },
   ];
 
-  let raw: GoalDraftInput;
-  try {
-    raw = await chatJson(
-      {
-        purpose: 'DRAFT_GENERATION',
-        promptVersion: PROMPT_VERSIONS.draft,
-        userId,
-        sessionId,
-        // Reasoning was truncating the JSON before it closed. Correct structured
-        // output matters far more here than internal deliberation, so thinking is
-        // off and the budget is generous.
-        thinking: false,
-        temperature: regenerate ? 0.6 : 0.35,
-        maxTokens: 4000,
-        // A provider outage should reach the editable fallback quickly instead
-        // of holding the review flow for two full timeout windows.
-        timeoutMs: 8_000,
-        retryTransient: false,
-        messages,
-      },
-      goalDraftSchema,
-    );
-  } catch (err) {
-    // A completed interview should still yield something editable when the
-    // provider is slow or returns malformed JSON after its bounded retry.
-    if (
-      !(err instanceof AiProviderError) ||
-      (err.kind !== 'BAD_RESPONSE' && err.kind !== 'TIMEOUT')
-    ) {
-      throw err;
-    }
-    raw = fallbackDraft(
-      session.initialGoalText,
-      session.category as GoalDraftInput['category'] | null,
-    );
-  }
+  let raw: GoalDraftInput = await chatJson(
+    {
+      purpose: 'DRAFT_GENERATION',
+      promptVersion: PROMPT_VERSIONS.draft,
+      userId,
+      sessionId,
+      // Reasoning was truncating the JSON before it closed. Correct structured
+      // output matters far more here than internal deliberation, so thinking is
+      // off and the budget is generous.
+      thinking: false,
+      temperature: regenerate ? 0.6 : 0.35,
+      maxTokens: 4000,
+      // Long enough for a genuine generation to finish (live median ~7s,
+      // with real tails past 8s), short enough that an outage fails fast into
+      // a structured, retryable error instead of spinning the review screen.
+      timeoutMs: 45_000,
+      retryTransient: false,
+      messages,
+    },
+    goalDraftSchema,
+  );
 
   // A clear category in the user's own words outranks an occasional model miss.
   // This prevents “get fitter” from appearing as Personal Growth while leaving
@@ -252,6 +295,12 @@ export async function generateDraft(sessionId: string, userId: string, regenerat
   } catch (err) {
     if (!(err instanceof DraftValidationError)) throw err;
 
+    // One informed retry: the model gets the exact violation plus the full list
+    // of constraints parsed from the user's own words, so the replacement plan
+    // is aimed at the real contract instead of guessing at a smaller plan.
+    const constraintLines = describeExplicitConstraints(
+      parseExplicitGoalConstraints(validationSource, todayIn(timezone)),
+    );
     let repaired: GoalDraftInput = await chatJson(
       {
         purpose: 'DRAFT_GENERATION',
@@ -261,7 +310,7 @@ export async function generateDraft(sessionId: string, userId: string, regenerat
         thinking: false,
         temperature: 0.3,
         maxTokens: 4000,
-        timeoutMs: 8_000,
+        timeoutMs: 45_000,
         retryTransient: false,
         messages: [
           ...messages,
@@ -272,8 +321,9 @@ export async function generateDraft(sessionId: string, userId: string, regenerat
               `That plan was rejected: ${err.message}
 
 ` +
-              'Produce a lighter, genuinely sustainable plan for the same goal. ' +
-              'Fewer tasks, shorter sessions, or a lower frequency. Reply with ONLY the JSON.',
+              `The replacement plan must honor everything the user asked for: ${constraintLines.join('; ') || 'the stated goal, schedule, and limits'}. ` +
+              'Fix the stated violation while keeping the plan realistic and sustainable. ' +
+              'Reply with ONLY the JSON.',
           },
         ],
       },
@@ -598,6 +648,26 @@ export async function confirmDraft(draftId: string, userId: string) {
   }
   if (draft.tasks.length === 0) throw badRequest('This plan has no tasks');
 
+  // Atomic claim: of any number of concurrent confirms, exactly one moves the
+  // draft into CONFIRMED and is allowed to create the Goal. Everyone else
+  // either sees that goal appear below or learns the draft was already used.
+  const claim = await prisma.goalDraft.updateMany({
+    where: { id: draftId, status: { not: 'CONFIRMED' } },
+    data: { status: 'CONFIRMED' },
+  });
+  if (claim.count === 0) {
+    // The winner is usually still mid-creation here — creating a goal is
+    // several inserts — so wait briefly for the goal id to land rather than
+    // answer a double-click with an error.
+    const deadline = Date.now() + 3_000;
+    for (;;) {
+      const latest = await prisma.goalDraft.findUniqueOrThrow({ where: { id: draftId } });
+      if (latest.createdGoalId) return { goalId: latest.createdGoalId, alreadyCreated: true };
+      if (Date.now() > deadline) throw badRequest('This draft has already been used');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
   const timezone = await userTimezone(userId);
   const startDate = todayIn(timezone);
 
@@ -665,9 +735,10 @@ export async function confirmDraft(draftId: string, userId: string) {
   // target, so day one asks for the first rung instead of nothing.
   await ensureOccurrences(goal.id);
 
+  // Status was set to CONFIRMED by the claim above; only the goal id lands here.
   await prisma.goalDraft.update({
     where: { id: draftId },
-    data: { status: 'CONFIRMED', createdGoalId: goal.id },
+    data: { createdGoalId: goal.id },
   });
   if (draft.sessionId) {
     await prisma.copilotSession.update({

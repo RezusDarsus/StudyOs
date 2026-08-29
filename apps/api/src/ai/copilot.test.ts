@@ -497,7 +497,7 @@ describe('draft validation', () => {
       {
         ...baseDraft,
         tasks: [
-          { ...baseDraft.tasks[0], title: 'Practice', recurrence: { type: 'TIMES_PER_WEEK', timesPerWeek: 3 } },
+          { ...baseDraft.tasks[0], title: 'Guitar practice', recurrence: { type: 'TIMES_PER_WEEK', timesPerWeek: 3 } },
           { ...baseDraft.tasks[0], title: 'Review', recurrence: { type: 'TIMES_PER_WEEK', timesPerWeek: 3 } },
         ],
       },
@@ -624,7 +624,7 @@ describe('draft validation', () => {
 
   it('keeps an accepted one-session delta distinct from contradictory interview answers',()=>{
     const result=validateAndNormalizeDraft(
-      {...baseDraft,description:'Four sessions every week.',tasks:[{...baseDraft.tasks[0],title:'Practice',recurrence:{type:'SPECIFIC_WEEKDAYS',weekdays:[1,3,5,0]},reason:'You answered four days.'}]},
+      {...baseDraft,description:'Four sessions every week.',tasks:[{...baseDraft.tasks[0],title:'Guitar practice',recurrence:{type:'SPECIFIC_WEEKDAYS',weekdays:[1,3,5,0]},reason:'You answered four days.'}]},
       'UTC',new Date('2026-08-25T10:00:00Z'),
       'I explicitly accept adding one weekly practice session and no other change.\n{"frequency":{"question":"How many days?","answer":"4 days"}}',
     );
@@ -635,7 +635,7 @@ describe('draft validation', () => {
 
   it('turns user-defined outcome evidence into executable deliverables',()=>{
     const result=validateAndNormalizeDraft(
-      {...baseDraft,tasks:[{...baseDraft.tasks[0],title:'Take the first concrete step',description:'Generic fallback.',reason:'This conservative fallback preserves the goal.',recurrence:{type:'ONCE'}}]},
+      {...baseDraft,tasks:[{...baseDraft.tasks[0],title:'Take the opening step',description:'Generic fallback.',reason:'This conservative fallback preserves the goal.',recurrence:{type:'ONCE'}}]},
       'UTC',new Date('2026-08-25T10:00:00Z'),
       'The outcome must be demonstrated by a batch pipeline, one streaming prototype, tested transformations, and architecture notes.',
     );
@@ -737,6 +737,86 @@ describe('draft validation', () => {
         'UTC',
       ),
     ).toThrow(DraftValidationError);
+  });
+});
+
+describe('near-duplicate task titles', () => {
+  const titledTasks = (titles: string[]) => ({
+    ...baseDraft,
+    tasks: titles.map((title) => ({
+      ...baseDraft.tasks[0],
+      title,
+      recurrence: { type: 'TIMES_PER_WEEK' as const, timesPerWeek: 2 },
+    })),
+  });
+
+  it('removes the later of two titles that share the same meaningful words', () => {
+    // Same three tokens in a different word order — the exact-title and labelled
+    // dedup passes above cannot see this one.
+    const result = validateAndNormalizeDraft(
+      titledTasks(['Morning run in the park', 'Park run in the morning']),
+      'UTC',
+    );
+    expect(result.tasks.map((task) => task.title)).toEqual(['Morning run in the park']);
+    expect(result.adjustments).toContain('Removed near-duplicate task "Park run in the morning"');
+  });
+
+  it('removes at the 0.8 boundary, where titles share four of five tokens', () => {
+    const result = validateAndNormalizeDraft(
+      titledTasks(['Morning easy run in the park', 'Easy park run in the morning with a warmup']),
+      'UTC',
+    );
+    expect(result.tasks).toHaveLength(1);
+  });
+
+  it('keeps titles whose overlap is below the threshold', () => {
+    const result = validateAndNormalizeDraft(
+      titledTasks(['Morning run in the park', 'Evening swim at the pool']),
+      'UTC',
+    );
+    expect(result.tasks).toHaveLength(2);
+    expect(result.adjustments.join(' ')).not.toMatch(/near-duplicate/i);
+  });
+
+  it('skips pairs where either title is too short to judge', () => {
+    // "Warmup" carries a single meaningful token; comparing it by overlap
+    // would judge nothing.
+    const result = validateAndNormalizeDraft(titledTasks(['Warmup', 'Warmup scales']), 'UTC');
+    expect(result.tasks).toHaveLength(2);
+    expect(result.adjustments.join(' ')).not.toMatch(/near-duplicate/i);
+  });
+});
+
+describe('placeholder task titles', () => {
+  it('rejects a draft whose task title is an exact placeholder', () => {
+    expect(() =>
+      validateAndNormalizeDraft(
+        { ...baseDraft, tasks: [{ ...baseDraft.tasks[0], title: 'Take Action' }] },
+        'UTC',
+      ),
+    ).toThrow(/is a placeholder, not a real task/);
+  });
+
+  it('rejects every phrase on the placeholder list, whatever the casing', () => {
+    for (const title of ['Take the first concrete step', 'daily practice', 'Work On My Goal']) {
+      expect(() =>
+        validateAndNormalizeDraft(
+          { ...baseDraft, tasks: [{ ...baseDraft.tasks[0], title }] },
+          'UTC',
+        ),
+        title,
+      ).toThrow(DraftValidationError);
+    }
+  });
+
+  it('never throws on the vaguer heuristic — that stays a scoring signal', () => {
+    // "Do the thing" scores as generic but is not a certain placeholder, so the
+    // draft survives and the quality gate carries the complaint instead.
+    const result = validateAndNormalizeDraft(
+      { ...baseDraft, tasks: [{ ...baseDraft.tasks[0], title: 'Do the thing' }] },
+      'UTC',
+    );
+    expect(result.tasks).toHaveLength(1);
   });
 });
 

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   promoteMultiSelect,
+  ensureCustomAnswer,
+  goalDomain,
   questionBudget,
   questionDomainMismatch,
   essentialFallbackQuestion,
@@ -184,15 +186,106 @@ describe('how much interview a request has earned', () => {
 });
 
 describe('deterministic minimum interview',()=>{
-  it('asks success then realistic frequency for a vague goal',()=>{
+  it('asks a domain-flavoured success question for a vague fitness goal',()=>{
     const first=essentialFallbackQuestion('I want to get fitter',[]);
     expect(first.id).toBe('essential_success');
-    expect(questionTopic(first.prompt,first.type,first.options)).toBe('TARGET');
+    expect(first.type).toBe('SINGLE_SELECT');
+    expect(first.optional).toBe(false);
+    expect(first.allowCustomAnswer).toBe(true);
+    expect(first.options).toEqual(['Lose weight','Build strength','Improve endurance','Be more active generally']);
     const second=essentialFallbackQuestion('I want to get fitter',['TARGET']);
     expect(second.id).toBe('essential_frequency');
     expect(questionTopic(second.prompt,second.type,second.options)).toBe('FREQUENCY');
     expect(questionBudget('I want to get fitter')).toMatchObject({ min: 1, max: 2 });
     expect(questionBudget('Run 30 minutes three days per week')).toMatchObject({ min: 0, max: 1 });
+  });
+
+  it('keeps the open free-text success question when no domain fits',()=>{
+    const general=essentialFallbackQuestion('I want to turn my life around',[]);
+    expect(general.id).toBe('essential_success');
+    expect(general.type).toBe('FREE_TEXT');
+    expect(general.prompt).toBe('What specific target or result would make this goal feel successful to you?');
+  });
+});
+
+describe('goalDomain', () => {
+  it('routes goals by their subject', () => {
+    expect(goalDomain('I want to run a 10K race')).toBe('FITNESS');
+    expect(goalDomain('I want to learn Java')).toBe('LEARNING');
+    expect(goalDomain('I want to learn English speaking')).toBe('LANGUAGE');
+    expect(goalDomain('I want to save $5,000 in 10 months')).toBe('MONEY');
+    expect(goalDomain('Prepare for a job interview')).toBe('CAREER');
+    expect(goalDomain('Practice guitar every evening')).toBe('CREATIVE');
+    expect(goalDomain('I want to reduce my social media use')).toBe('GENERAL');
+  });
+
+  it('puts language above learning, so "learn English" is a language goal', () => {
+    expect(goalDomain('learn Japanese grammar')).toBe('LANGUAGE');
+  });
+
+  it('puts career above learning, so interview prep is about the career', () => {
+    expect(goalDomain('Study for my Java interview')).toBe('CAREER');
+  });
+
+  it('matches on word boundaries only', () => {
+    // "retraining" contains "training" but is not a training goal.
+    expect(goalDomain('retraining my cat to use the litter tray')).toBe('GENERAL');
+  });
+});
+
+describe('domain-flavoured fallback questions', () => {
+  it('offers exclusive outcome choices for a language goal', () => {
+    const question = essentialFallbackQuestion('I want to become fluent in Spanish', []);
+    expect(question.id).toBe('essential_success');
+    expect(question.type).toBe('SINGLE_SELECT');
+    expect(question.optional).toBe(false);
+    expect(question.allowCustomAnswer).toBe(true);
+    expect(question.options).toEqual(['Speaking', 'Listening', 'Grammar', 'Vocabulary']);
+  });
+
+  it('asks a money goal for its amount and date in plain text', () => {
+    const question = essentialFallbackQuestion('I want to save for a trip', []);
+    expect(question.id).toBe('essential_success');
+    expect(question.type).toBe('FREE_TEXT');
+    expect(question.prompt).toBe('How much do you want to save, and by when?');
+  });
+
+  it('gives learning, career and creative goals their own concrete choices', () => {
+    expect(essentialFallbackQuestion('I want to learn Python', []).options).toEqual([
+      'University coursework', 'Job readiness', 'General skills', 'A specific project',
+    ]);
+    expect(essentialFallbackQuestion('I want to land a job', []).options).toEqual([
+      'Pass interviews', 'Land an offer', 'Get noticed at work', 'Build a portfolio',
+    ]);
+    expect(essentialFallbackQuestion('I want to learn piano', []).options).toEqual([
+      'Finish a piece', 'Build a daily practice', 'Share publicly', 'Learn technique',
+    ]);
+  });
+
+  it('leaves every other branch of the fallback unchanged', () => {
+    const frequency = essentialFallbackQuestion('I want to get fitter', ['TARGET']);
+    expect(frequency.id).toBe('essential_frequency');
+    expect(frequency.type).toBe('NUMBER');
+  });
+});
+
+describe('the custom-answer guarantee', () => {
+  it('forces allowCustomAnswer on every single-select question', () => {
+    const asked = question({
+      prompt: 'How confident are you?',
+      type: 'SINGLE_SELECT',
+      allowCustomAnswer: false,
+    });
+    expect(ensureCustomAnswer(asked).allowCustomAnswer).toBe(true);
+  });
+
+  it('leaves every other type alone', () => {
+    const free = question({
+      prompt: 'What does success look like?',
+      type: 'FREE_TEXT',
+      allowCustomAnswer: false,
+    });
+    expect(ensureCustomAnswer(free).allowCustomAnswer).toBe(false);
   });
 });
 

@@ -28,20 +28,39 @@ const question: CopilotQuestion = {
   optional: false,
 };
 
-const turn: InterviewTurn = {
+// Reassigned by tests that need a different point in the interview; reset below.
+let turn: InterviewTurn;
+
+const draft = {
+  id: 'draft-1',
   sessionId: 'session-1',
-  status: 'INTERVIEWING',
-  assistantMessage: 'Got it. Which days suit you?',
-  question,
-  questionCount: 1,
-  estimatedTotal: 4,
-  context: {},
-  canGenerate: false,
+  title: 'Get Fitter',
+  description: 'A gentle return to regular movement.',
+  category: 'FITNESS',
+  targetType: 'HABIT',
+  targetValue: null,
+  deadline: null,
+  visibility: 'PRIVATE',
+  rationale: 'Built from what you told me.',
+  status: 'GENERATED',
+  createdGoalId: null,
+  tasks: [],
 };
 
 beforeEach(() => {
   calls = [];
   statusEnabled = true;
+  turn = {
+    sessionId: 'session-1',
+    status: 'INTERVIEWING',
+    assistantMessage: 'Got it. Which days suit you?',
+    question,
+    questionCount: 1,
+    estimatedTotal: 4,
+    context: {},
+    canGenerate: false,
+    revision: 1,
+  };
 
   vi.stubGlobal(
     'fetch',
@@ -61,7 +80,9 @@ beforeEach(() => {
             ? { unread: 0 }
             : path === '/copilot/goal-sessions'
               ? turn
-              : {};
+              : path.endsWith('/generate')
+                ? { draft }
+                : {};
 
       return { ok: true, status: 200, json: async () => payload } as Response;
     }),
@@ -201,5 +222,47 @@ describe('the interview inside the widget', () => {
       answer: ['Weekdays', 'Weekends'],
       skipped: false,
     });
+  });
+
+  it('labels the interview by what it is doing, not by a count', async () => {
+    turn = { ...turn, questionCount: 2 };
+    const user = renderWidget();
+    await send(user, 'I want to get fitter');
+
+    expect(await screen.findByText('Setting up your plan')).toBeInTheDocument();
+    expect(screen.queryByText(/of ~/)).toBeNull();
+  });
+});
+
+describe('building with partial answers', () => {
+  it('offers to build from what we have once two questions are in', async () => {
+    turn = { ...turn, questionCount: 2 };
+    const user = renderWidget();
+    await send(user, 'I want to get fitter');
+
+    await user.click(await screen.findByRole('button', { name: 'Build with what we have' }));
+
+    // The insist path: force on, never a regeneration, and the revision the
+    // turn carried so the server can refuse a stale request.
+    const generate = calls.find((c) => c.path === '/copilot/goal-sessions/session-1/generate');
+    expect(generate?.method).toBe('POST');
+    expect(generate?.body).toEqual({ regenerate: false, force: true, revision: 1 });
+  });
+
+  it('does not offer it when the gate already allows a plan', async () => {
+    turn = { ...turn, canGenerate: true };
+    const user = renderWidget();
+    await send(user, 'I want to get fitter');
+
+    await screen.findByText('Got it. Which days suit you?');
+    expect(screen.queryByRole('button', { name: 'Build with what we have' })).toBeNull();
+  });
+
+  it('does not offer it while the interview is still young', async () => {
+    const user = renderWidget();
+    await send(user, 'I want to get fitter');
+
+    await screen.findByText('Got it. Which days suit you?');
+    expect(screen.queryByRole('button', { name: 'Build with what we have' })).toBeNull();
   });
 });

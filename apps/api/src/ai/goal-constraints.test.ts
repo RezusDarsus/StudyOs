@@ -64,16 +64,19 @@ describe('explicit goal constraints',()=>{
     expect(c.allowedDays).toEqual([6]);
   });
 
-  it('understands qualified and weekly aggregate schedules',()=>{
+  it('constrains a named weekday to its weekday without inventing a plan total',()=>{
+    const c=parseExplicitGoalConstraints('Water plants every Saturday morning.','2026-08-25');
+    // "every Saturday" says which day may be used, not how many weekly sessions
+    // the whole plan gets — a named-weekday statement never synthesizes a
+    // global exactWeekly (that mis-parse used to clobber mixed schedules).
+    expect(c.exactWeekly).toBeUndefined();
+    expect(c.allowedDays).toEqual([6]);
+  });
+
+  it('does not set exactWeekly from a named weekday while still parsing weekly plan totals',()=>{
     expect(parseExplicitGoalConstraints('I need two exercise sessions every week.','2026-08-25').exactWeekly).toBe(2);
     expect(parseExplicitGoalConstraints('I need exactly three total sessions weekly.','2026-08-25').exactWeekly).toBe(3);
     expect(parseExplicitGoalConstraints('Schedule three 50-minute deep-work blocks on weekday mornings.','2026-08-25').exactWeekly).toBe(3);
-  });
-
-  it('treats every named weekday as one weekly occurrence',()=>{
-    const c=parseExplicitGoalConstraints('Water plants every Saturday morning.','2026-08-25');
-    expect(c.exactWeekly).toBe(1);
-    expect(c.allowedDays).toEqual([6]);
   });
 
   it('recognizes weekdays listed before possible-days wording',()=>{
@@ -133,7 +136,8 @@ describe('explicit goal constraints',()=>{
       '2026-08-25',
     );
     expect(c.calendarFrequency).toBeUndefined();
-    expect(c.exactWeekly).toBe(1);
+    // "every Sunday" constrains the day only; it is not a plan-total statement.
+    expect(c.exactWeekly).toBeUndefined();
     expect(c.allowedDays).toEqual([0]);
   });
 
@@ -145,5 +149,78 @@ describe('explicit goal constraints',()=>{
     expect(c.requiredWeeklyRoles).toEqual([{role:'STRENGTH',minOccurrences:1}]);
     expect(c.requiredRoleDays).toEqual([{role:'TRAIL',days:[6]}]);
     expect(c.progressionPolicy).toEqual({painFreeWeeks:2,reduceOnRepeatedPain:true,pauseOnSharpPain:true,approvalRequired:true});
+  });
+
+  // --- class regressions from the frozen-100 baseline (no case specifics) ---
+
+  it('does not clobber a mixed schedule when one activity names a weekday',()=>{
+    // A named-weekday statement constrains that activity's day; it must not
+    // synthesize a global "exactly 1 per week" that rewrites every other task.
+    const c=parseExplicitGoalConstraints(
+      'I train every Saturday and want to get stronger with two home sessions.',
+      '2026-08-25',
+    );
+    expect(c.allowedDays).toEqual([6]);
+    expect(c.exactWeekly).toBeUndefined();
+  });
+
+  it('unions weekday lists from on-statements and every-statements',()=>{
+    const c=parseExplicitGoalConstraints(
+      'Run on Tuesday and Thursday for 30 minutes and do strength training every Saturday.',
+      '2026-08-25',
+    );
+    expect(c.allowedDays).toEqual([2,4,6]);
+    expect(c.exactWeekly).toBeUndefined();
+  });
+
+  it('reads "every weekday" as the five weekday plan total',()=>{
+    expect(parseExplicitGoalConstraints('Read 20 pages every weekday evening.','2026-08-25').exactWeekly).toBe(5);
+  });
+
+  it('reads a daily statement without named weekdays as every-day frequency',()=>{
+    expect(parseExplicitGoalConstraints('Meditate for 10 minutes every morning for 30 days.','2026-08-25').exactWeekly).toBe(7);
+    expect(parseExplicitGoalConstraints('Walk daily.','2026-08-25').exactWeekly).toBe(7);
+    expect(parseExplicitGoalConstraints('Water the plants every other day.','2026-08-25').exactWeekly).toBeUndefined();
+  });
+
+  it('parses only-allowed-days phrasings in both word orders',()=>{
+    expect(parseExplicitGoalConstraints('I need three workout days, but Monday and Wednesday are the only allowed days.','2026-08-25').allowedDays).toEqual([1,3]);
+    expect(parseExplicitGoalConstraints('Study after dinner, but Tuesday and Thursday are the only days available.','2026-08-25').allowedDays).toEqual([2,4]);
+    expect(parseExplicitGoalConstraints('The only allowed days are Monday and Wednesday.','2026-08-25').allowedDays).toEqual([1,3]);
+  });
+
+  it('flags a requested day count that cannot fit the named days',()=>{
+    const c=parseExplicitGoalConstraints(
+      'I need three different workout days, but Monday and Wednesday are the only allowed days.',
+      '2026-08-25',
+    );
+    expect(c.exactWeekly).toBe(3);
+    expect(c.allowedDays).toEqual([1,3]);
+    expect(c.requiresClarification).toBe(true);
+  });
+
+  it('parses word-ordinal and bare-ordinal calendar-month days',()=>{
+    expect(parseExplicitGoalConstraints('Save €300 on the first day of every month.','2026-08-25').calendarFrequency).toEqual({intervalMonths:1,dayOfMonth:1});
+    expect(parseExplicitGoalConstraints('Transfer 500 GEL monthly on the 1st, starting September 2026.','2026-08-25').calendarFrequency).toEqual({intervalMonths:1,dayOfMonth:1});
+    expect(parseExplicitGoalConstraints('Review the budget on the fifteenth of each month.','2026-08-25').calendarFrequency).toEqual({intervalMonths:1,dayOfMonth:15});
+    // An ordinal followed by a month name is a date, not a monthly day.
+    expect(parseExplicitGoalConstraints('Save money monthly; start on the 3rd of March.','2026-08-25').calendarFrequency).toEqual({intervalMonths:1});
+  });
+
+  it('lets a recorded conflict-resolution answer free up another weekday',()=>{
+    const c=parseExplicitGoalConstraints(
+      'Exercise three days per week. Monday and Wednesday are the only days.\n{"resolve_frequency_conflict":{"question":"...or make another weekday available?","answer":"Make Friday available"}}',
+      '2026-08-25',
+    );
+    expect(c.allowedDays).toEqual([1,3,5]);
+  });
+
+  it('lets a recorded conflict-resolution answer reduce the requested frequency',()=>{
+    const c=parseExplicitGoalConstraints(
+      'Exercise three days per week. Monday and Wednesday are the only days.\n{"resolve_frequency_conflict":{"question":"Would you like to reduce...","answer":"Reduce to two days"}}',
+      '2026-08-25',
+    );
+    expect(c.exactWeekly).toBe(2);
+    expect(c.requiresClarification).toBe(false);
   });
 });

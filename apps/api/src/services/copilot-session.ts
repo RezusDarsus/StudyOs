@@ -13,6 +13,7 @@ import {
 } from '../ai/schemas.js';
 import {
   promoteMultiSelect,
+  ensureCustomAnswer,
   assessPlanningSufficiency,
   questionBudget,
   essentialFallbackQuestion,
@@ -21,6 +22,7 @@ import {
   redundancyReason,
   type QuestionTopic,
 } from '../ai/interview-plan.js';
+import { evaluatePlanReadiness, type PlanReadiness, type PlanningDimension } from '../ai/readiness.js';
 import {
   applyModelExtraction,
   createContext,
@@ -38,6 +40,8 @@ import { badRequest, forbidden, notFound } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
 import { getPreferencesForPrompt } from './preferences.js';
 import { recordEvent } from './copilot-analytics.js';
+import { parseExplicitGoalConstraints } from '../ai/goal-constraints.js';
+import { todayIn } from '../domain/dates.js';
 
 // Interview limits are enforced by the backend, not by trusting the model to
 // stop. A chatty model cannot trap the user in an endless questionnaire.
@@ -63,6 +67,10 @@ export interface InterviewTurn {
   /** Where each context value came from — for debugging and the quality harness. */
   provenance: Array<{ key: string; value: unknown; source: string; questionId: string | null }>;
   canGenerate: boolean;
+  /** The deterministic readiness gate's verdict on this turn. */
+  readiness: PlanReadiness;
+  /** Bumped on every applied turn; a generate request quotes it to prove freshness. */
+  revision: number;
 }
 
 function safeParse(raw: string): { id?: string; prompt?: string } | null {
@@ -148,6 +156,37 @@ export function askedTopics(messages: SessionMessage[]): QuestionTopic[] {
     if (!topics.includes(topic)) topics.push(topic);
   }
   return topics;
+}
+
+/** Which question subject settles which readiness dimension. */
+const DIMENSION_TOPIC: Record<PlanningDimension, QuestionTopic> = {
+  DESIRED_OUTCOME: 'TARGET',
+  WEEKLY_CAPACITY: 'FREQUENCY',
+  TIMEFRAME: 'DEADLINE',
+  BASELINE: 'EXPERIENCE',
+  CONSTRAINTS: 'CONSTRAINT',
+  PREFERENCES: 'FORMAT',
+};
+
+/**
+ * The readiness gate for a stored session.
+ *
+ * The same evaluation applyTurn enforces, computed on demand — the session
+ * snapshot and the generate route must agree with the interview about whether
+ * there is enough to plan from.
+ */
+export function sessionReadiness(session: {
+  initialGoalText: string;
+  structuredContext: string;
+  messages: SessionMessage[];
+  questionCount: number;
+}): PlanReadiness {
+  return evaluatePlanReadiness({
+    goalText: session.initialGoalText,
+    context: toPlainObject(parseContext(session.structuredContext, session.initialGoalText)),
+    answeredTopics: askedTopics(session.messages),
+    questionCount: session.questionCount,
+  });
 }
 
 async function runInterviewTurn(
@@ -261,10 +300,17 @@ async function applyTurn(
   // pages every evening on weekdays" gets a plan, not a questionnaire.
   const budget = questionBudget(session.initialGoalText);
   const priorTopics = askedTopics(session.messages);
-  const sufficiency = assessPlanningSufficiency(session.initialGoalText, priorTopics);
+  // The readiness gate, computed from the user's own words and answers so far.
+  // This is the product decision layer, independent of what the model claims.
+  const readiness = evaluatePlanReadiness({
+    goalText: session.initialGoalText,
+    context: toPlainObject(context),
+    answeredTopics: priorTopics,
+    questionCount: session.questionCount,
+  });
   // Detailed prompts generate directly even when the model tries to pad the
-  // interview. This is the product decision layer, independent of benchmark cases.
-  if (session.questionCount === 0 && sufficiency.enough) {
+  // interview — but only when the gate agrees there is enough to plan from.
+  if (session.questionCount === 0 && readiness.ready) {
     question = null;
     state = 'READY_TO_GENERATE';
   }
@@ -292,10 +338,16 @@ async function applyTurn(
     state='NEEDS_MORE_INFORMATION';
     forcedBlockingQuestion=true;
   } else if (budget.requiresClarification && session.questionCount === 0) {
-    if (/three different days|three total days/.test(text) && /only days|only .*monday.*wednesday/.test(text)) {
+    // The deterministic conflict detector — requested weekly days exceeding the
+    // named/allowed days — is the general trigger. A contradiction no preference
+    // question can resolve must be the first thing asked about, regardless of
+    // how the goal happened to word it.
+    const conflict = parseExplicitGoalConstraints(text, todayIn('UTC'));
+    if (conflict.exactWeekly !== undefined && conflict.allowedDays?.length
+        && conflict.exactWeekly > conflict.allowedDays.length) {
       question = {
         id: 'resolve_frequency_conflict', type: 'FREE_TEXT', optional: false,
-        prompt: 'Would you reduce the frequency to two days, allow two sessions on one day, or make another weekday available?',
+        prompt: `You asked for ${conflict.exactWeekly} different days in the week, but only ${conflict.allowedDays.length} day(s) are available. Would you like to reduce the frequency, allow two sessions on one day, or make another weekday available?`,
         allowCustomAnswer: true,
       };
       state = 'NEEDS_MORE_INFORMATION';
@@ -324,10 +376,11 @@ async function applyTurn(
     : null;
   if (redundant) question = null;
 
-  // Too few questions and the plan is generic; too many and it is a survey. Both
-  // ends come from the budget, so a detailed opening message can legitimately skip
-  // the interview altogether.
-  if (state === 'READY_TO_GENERATE' && !sufficiency.enough) {
+  // The model does not get to declare the interview finished before the
+  // readiness gate agrees. What it may not end, the gate downgrades — and the
+  // hard cap below still absolutely terminates the interview, so a user who
+  // keeps answering without ever satisfying the gate is not trapped forever.
+  if (state === 'READY_TO_GENERATE' && !readiness.ready) {
     state = 'NEEDS_MORE_INFORMATION';
   }
   if (session.questionCount >= Math.min(budget.max, HARD_MAX_QUESTIONS)) {
@@ -336,11 +389,14 @@ async function applyTurn(
   }
   let fallbackQuestionInjected = false;
   if (!question && state === 'NEEDS_MORE_INFORMATION') {
-    if (!sufficiency.enough) {
+    if (!readiness.ready) {
+      // Aim the deterministic fallback at the first unsatisfied blocking
+      // dimension, so the next answer is one that actually unblocks planning.
+      const firstMissing = readiness.missing[0] ?? null;
       question = essentialFallbackQuestion(
         session.initialGoalText,
         [...budget.stated, ...priorTopics],
-        sufficiency.highestImpactMissing,
+        firstMissing ? DIMENSION_TOPIC[firstMissing] : null,
       );
       fallbackQuestionInjected = true;
     } else {
@@ -353,6 +409,9 @@ async function applyTurn(
   // a radio group, forcing someone who reads morning *and* night to discard half
   // their answer.
   if (question) question = promoteMultiSelect(question);
+  // And never trapped by the options it did offer — every single-select can be
+  // answered in the user's own words, whatever the model claimed.
+  if (question) question = ensureCustomAnswer(question);
 
   const nextCount = question ? session.questionCount + 1 : session.questionCount;
   const nextAsked = question ? [...asked, question.id] : asked;
@@ -383,6 +442,10 @@ async function applyTurn(
       askedQuestionIds: JSON.stringify(nextAsked),
       questionCount: nextCount,
       category: result.category ?? session.category,
+      // Every applied turn moves the interview on. A generate request that
+      // quotes an older revision is planning from a picture that no longer
+      // exists, and is refused for exactly that reason.
+      revision: { increment: 1 },
     },
   });
 
@@ -400,6 +463,8 @@ async function applyTurn(
     context: toPlainObject(context),
     provenance: describeProvenance(context),
     canGenerate: status === 'READY_TO_GENERATE',
+    readiness,
+    revision: updated.revision,
   };
 }
 

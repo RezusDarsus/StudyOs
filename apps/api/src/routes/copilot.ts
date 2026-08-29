@@ -5,15 +5,17 @@ import { AiProviderError } from '../ai/provider.js';
 import { DraftValidationError } from '../ai/draft-validator.js';
 import { RECURRENCE_TYPE } from '../domain/enums.js';
 import { isDayString } from '../domain/dates.js';
-import { badRequest, notFound } from '../lib/errors.js';
+import { badRequest, notFound, serviceUnavailable } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
 import { describeProvenance, parseContext, toPlainObject } from '../ai/context.js';
 import { questionBudget } from '../ai/interview-plan.js';
+import type { PlanReadiness } from '../ai/readiness.js';
 import {
   answerQuestion,
   cancelSession,
   loadSession,
   resumableSessions,
+  sessionReadiness,
   startSession,
 } from '../services/copilot-session.js';
 import {
@@ -85,17 +87,79 @@ function toUserFacing(err: unknown): never {
     throw badRequest(err.message, 'DRAFT_INVALID');
   }
   if (err instanceof AiProviderError) {
+    // AUTH is the one permanent failure: retrying cannot help, so it stays a
+    // 400 describing the server's configuration. Everything else is the
+    // provider being down, slow or incoherent — a 503 that says to try again,
+    // never a fake plan dressed up as success.
+    if (err.kind === 'AUTH') {
+      throw badRequest('The Copilot is not configured correctly on this server.', 'AI_AUTH');
+    }
     const message =
       err.kind === 'TIMEOUT'
         ? 'The Copilot took too long to respond. Your answers are saved — try again.'
         : err.kind === 'RATE_LIMIT'
           ? 'The Copilot is busy right now. Your answers are saved — try again in a moment.'
-          : err.kind === 'AUTH'
-            ? 'The Copilot is not configured correctly on this server.'
-            : "I couldn't build that correctly. Your answers are saved — try again.";
-    throw badRequest(message, `AI_${err.kind}`);
+          : "I couldn't build that correctly. Your answers are saved — try again.";
+    const code =
+      err.kind === 'TIMEOUT' ? 'AI_TIMEOUT' : err.kind === 'RATE_LIMIT' ? 'AI_RATE_LIMIT' : 'AI_PROVIDER';
+    throw serviceUnavailable(message, code);
   }
   throw err;
+}
+
+/** The part of a session the assumptions helper reads. */
+interface AssumptionSession {
+  structuredContext: string;
+  initialGoalText: string;
+  /** READY_TO_GENERATE means the interview itself concluded early (cap or outage). */
+  status: string;
+}
+
+/** Sources that are the model guessing — neither the user answering nor old memory. */
+const ASSUMED_SOURCES: ReadonlySet<string> = new Set([
+  'CURRENT_SESSION_INFERENCE',
+  'MODEL_INFERENCE',
+]);
+
+const LIMITED_INFORMATION_LINE =
+  'Generated with limited information — the plan uses only what you told me.';
+
+/**
+ * What a plan rests on that the user never said, said out loud.
+ *
+ * Every line comes from something actually stored: context entries whose source
+ * is an inference tier are listed verbatim (capped, so a long interview cannot
+ * bury the plan in fine print, and skipping empty or structured values, which
+ * do not render as a sentence). A refused readiness gate adds its one honest
+ * line, and a missing deadline gets its own. Nothing here is invented.
+ */
+export function buildAssumptions(
+  draft: { deadline: string | null },
+  session: AssumptionSession | null,
+  readiness: PlanReadiness | null,
+): string[] {
+  const assumptions: string[] = [];
+  if (session) {
+    const provenance = describeProvenance(parseContext(session.structuredContext, session.initialGoalText));
+    for (const entry of provenance) {
+      if (assumptions.length >= 6) break;
+      if (!ASSUMED_SOURCES.has(entry.source)) continue;
+      const { value } = entry;
+      if (value === null || value === undefined || value === '' || typeof value === 'object') continue;
+      assumptions.push(`${entry.key}: ${String(value)} (assumed — you didn't state this)`);
+    }
+  }
+  if (readiness && !readiness.ready) assumptions.push(LIMITED_INFORMATION_LINE);
+  if (session && session.status === 'READY_TO_GENERATE' && assumptions.length === 0 && !draft.deadline) {
+    // The interview ended early (question cap or outage fallback) and nothing
+    // was inferred either: say the plan is conservative rather than pretending
+    // every detail was asked for.
+    assumptions.push(LIMITED_INFORMATION_LINE);
+  }
+  if (!draft.deadline) {
+    assumptions.push('No deadline was provided, so this plan focuses on steady weekly progress.');
+  }
+  return assumptions;
 }
 
 export default async function copilotRoutes(app: FastifyInstance) {
@@ -131,6 +195,10 @@ export default async function copilotRoutes(app: FastifyInstance) {
       status: session.status,
       initialGoalText: session.initialGoalText,
       questionCount: session.questionCount,
+      // Both are re-derived on demand so the snapshot always agrees with the
+      // gates the interview and the generate route actually enforce.
+      revision: session.revision,
+      readiness: sessionReadiness(session),
       estimatedTotal: session.status === 'INTERVIEWING'
         ? questionBudget(session.initialGoalText).max
         : session.questionCount,
@@ -179,12 +247,32 @@ export default async function copilotRoutes(app: FastifyInstance) {
 
   app.post('/copilot/goal-sessions/:id/generate', { preHandler: app.requireAuth }, async (req) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
-    const { regenerate } = z
-      .object({ regenerate: z.boolean().default(false) })
+    const { regenerate, force, revision } = z
+      .object({
+        regenerate: z.boolean().default(false),
+        // The one override for the readiness gate: a user who insists on a plan
+        // for an under-answered interview gets one, once at least two questions
+        // were asked — with the assumptions it rests on said out loud.
+        force: z.boolean().default(false),
+        // The revision the caller last saw; a mismatch is a stale request.
+        revision: z.number().int().nonnegative().optional(),
+      })
       .parse(req.body ?? {});
     try {
-      const { draft, adjustments } = await generateDraft(id, req.user!.id, regenerate);
-      return { draft: serializeDraft(draft), adjustments };
+      const { draft, adjustments } = await generateDraft(id, req.user!.id, regenerate, {
+        force,
+        revision,
+      });
+      const session = await loadSession(id, req.user!.id);
+      const readiness = sessionReadiness(session);
+      const serialized = serializeDraft(draft);
+      return {
+        draft: serialized,
+        adjustments,
+        readiness,
+        missingDimensions: readiness.ready ? [] : readiness.missing,
+        assumptions: buildAssumptions(serialized, session, readiness),
+      };
     } catch (err) {
       toUserFacing(err);
     }
@@ -192,7 +280,14 @@ export default async function copilotRoutes(app: FastifyInstance) {
 
   app.get('/copilot/goal-drafts/:id', { preHandler: app.requireAuth }, async (req) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
-    return { draft: serializeDraft(await loadDraft(id, req.user!.id)) };
+    const draft = serializeDraft(await loadDraft(id, req.user!.id));
+    // The draft's own session is read directly, not through loadSession: an
+    // expired interview must not break reviewing the plan it produced. A draft
+    // with no session (or a deleted one) simply has no provenance to assume from.
+    const session = draft.sessionId
+      ? await prisma.copilotSession.findUnique({ where: { id: draft.sessionId } })
+      : null;
+    return { draft, assumptions: buildAssumptions(draft, session, null) };
   });
 
   app.patch('/copilot/goal-drafts/:id', { preHandler: app.requireAuth }, async (req) => {

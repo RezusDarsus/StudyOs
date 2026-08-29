@@ -15,3 +15,4 @@ export const forbidden = (m = 'You do not have access to this') => new HttpError
 export const notFound = (m = 'Not found') => new HttpError(404, m, 'NOT_FOUND');
 export const conflict = (m: string, code?: string) => new HttpError(409, m, code);
 export const tooManyRequests = (m: string) => new HttpError(429, m, 'TOO_MANY_REQUESTS');
+export const serviceUnavailable = (m: string, code?: string) => new HttpError(503, m, code);

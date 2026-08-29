@@ -11,7 +11,7 @@ describe('public goal discovery', () => {
     const { goal } = await h.ok<{ goal: { id: string } }>(owner, 'POST', '/api/goals', {
       title: 'Public study challenge',
       description: 'Study together',
-      category: 'LEARNING',
+      category: 'STUDY',
       visibility: 'PUBLIC',
       targetType: 'HABIT',
       tasks: [],

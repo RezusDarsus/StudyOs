@@ -70,6 +70,11 @@ Interview rules:
 - Each question must build on previous answers. If they chose walking, ask about
   walking — not about gym equipment.
 - Prefer quick-select options over free text. Options must be short and concrete.
+- Match the question type to the ask: NUMBER for how many days/minutes,
+  DAYS_OF_WEEK for which days, DATE for deadlines, SINGLE_SELECT/MULTI_SELECT
+  for choices. Free text only when no structured type fits.
+- For every SINGLE_SELECT question set allowCustomAnswer true so the user is
+  never trapped by your options.
 - EVERY QUESTION MUST SERVE THIS GOAL. Before asking, check that a different answer
   would produce a different plan. If the answer cannot change what gets scheduled,
   do not ask it. "Which activities do you enjoy?" shapes a fitness goal and is noise

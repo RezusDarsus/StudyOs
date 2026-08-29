@@ -9,7 +9,7 @@ const generic = {
   description: 'A plan for getting fitter.',
   rationale: 'You can adjust this starting plan.',
   tasks: [{
-    title: 'Take the first concrete step',
+    title: 'Get started',
     description: 'Start working on your goal.',
     reason: 'Starting small makes the goal easier.',
     recurrenceType: 'ONCE' as const,
@@ -91,10 +91,12 @@ describe('usefulness benchmark', () => {
 
 describe('real-world regression architecture', () => {
   it('contains every normal-user case and gives ambiguous goals only one or two questions', () => {
-    expect(REAL_WORLD_FIXTURES).toHaveLength(16);
-    for (const fixture of REAL_WORLD_FIXTURES.slice(0, 15)) {
+    expect(REAL_WORLD_FIXTURES).toHaveLength(27);
+    for (const fixture of REAL_WORLD_FIXTURES) {
       const sufficiency = assessPlanningSufficiency(fixture.prompt);
-      expect(sufficiency.enough, fixture.prompt).toBe(false);
+      // A fixture's own declared range is the expectation: ambiguous goals get
+      // one or two questions, detailed ones generate directly.
+      expect(sufficiency.enough, fixture.prompt).toBe(fixture.questions.min === 0);
       expect(sufficiency.questionRange, fixture.prompt).toEqual(fixture.questions);
     }
   });

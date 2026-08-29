@@ -16,6 +16,7 @@ import {
 import { useNavigate, useParams } from 'react-router-dom';
 import { Badge, ErrorState, Modal, Skeleton, useAsync, useToast } from '../components/ui';
 import { ApiError, api } from '../lib/api';
+import { describeCopilotError } from '../lib/copilot-errors';
 import { canSubmit } from '../lib/slash';
 import {
   CATEGORY_EMOJI,
@@ -56,7 +57,7 @@ export default function DraftReview() {
       push('Goal created 🎉');
       navigate(`/app/goals/${result.goalId}`, { replace: true });
     } catch (err) {
-      push(err instanceof ApiError ? err.message : 'Could not create the goal', 'error');
+      push(describeCopilotError(err), 'error');
     } finally {
       setBusy(null);
     }
@@ -89,7 +90,7 @@ export default function DraftReview() {
       push('Here’s another take');
       navigate(`/app/goals/drafts/${result.draft.id}`, { replace: true });
     } catch (err) {
-      push(err instanceof ApiError ? err.message : 'Could not rebuild the plan', 'error');
+      push(describeCopilotError(err), 'error');
     } finally {
       setBusy(null);
     }

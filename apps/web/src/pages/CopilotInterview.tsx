@@ -4,7 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Modal, useToast } from '../components/ui';
 import QuestionInput from '../components/QuestionInput';
 import Transcript from '../components/copilot/Transcript';
-import { useCopilotInterview } from '../lib/useCopilotInterview';
+import { useCopilotInterview, interviewPhaseLabel } from '../lib/useCopilotInterview';
 
 /**
  * The conversational goal builder.
@@ -183,9 +183,7 @@ export default function CopilotInterview() {
           <div className="progress-bar-fill" style={{ width: `${progress}%` }} />
         </div>
         <span style={{ fontSize: '0.72rem', color: '#8b88b0', fontWeight: 600, whiteSpace: 'nowrap' }}>
-          {phase === 'READY'
-            ? 'Ready'
-            : `${turn?.questionCount ?? 0} of ~${turn?.estimatedTotal ?? 2}`}
+          {interviewPhaseLabel(phase, turn)}
         </span>
       </div>
 
@@ -210,6 +208,15 @@ export default function CopilotInterview() {
             </button>
           </div>
         ) : null}
+        {phase === 'INTERVIEWING' && !turn?.canGenerate && (turn?.questionCount ?? 0) >= 2 && (
+          <button
+            className="btn-ghost w-full py-2.5 text-xs mt-2"
+            onClick={() => interview.forceGenerate()}
+            disabled={generating}
+          >
+            Build with what we have
+          </button>
+        )}
       </div>
 
       <Modal

@@ -16,6 +16,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { addDays, todayIn } from '../domain/dates.js';
+import { AiProviderError } from '../ai/provider.js';
 import { prisma } from '../lib/prisma.js';
 import { createProgressionPlan } from '../services/progression.js';
 import { useHarness } from './harness.js';
@@ -58,7 +59,19 @@ describe('Copilot acceptance', () => {
         prompt: 'Which activities do you enjoy?',
         options: ['Walking', 'Swimming', 'Dancing', 'Cycling'],
       }),
-      ready(),
+      // The second turn ends the interview — but the readiness gate, not the
+      // model, decides that. It passes because the model extracted the outcome
+      // and the weekly rhythm the user just described into context, which is
+      // exactly what a real model does with a real answer of this shape.
+      {
+        state: 'READY_TO_GENERATE',
+        assistantMessage: "That's everything I need.",
+        question: null,
+        extractedContext: {
+          desired_outcome: 'Move most days and feel fitter within two months',
+          days_per_week: 3,
+        },
+      },
     );
 
     const first = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
@@ -69,6 +82,9 @@ describe('Copilot acceptance', () => {
     expect(first.questionCount).toBe(1);
     expect(first.estimatedTotal).toBe(2);
     expect(first.canGenerate).toBe(false);
+    // The gate agrees with the question: a vague opening is not ready to plan.
+    expect(first.readiness.ready).toBe(false);
+    expect(first.readiness.missing[0]).toBe('DESIRED_OUTCOME');
 
     const second = await h.ok(user, 'POST', `/api/copilot/goal-sessions/${first.sessionId}/answers`, {
       questionId: 'liked_activities',
@@ -77,6 +93,7 @@ describe('Copilot acceptance', () => {
     expect(second.questionCount).toBe(1);
     expect(second.canGenerate).toBe(true);
     expect(second.estimatedTotal).toBe(1);
+    expect(second.revision).toBeGreaterThan(0);
     expect(h.ai.countOf('INTERVIEW')).toBe(2);
 
     // Both chosen activities survived into the model's view of the conversation.
@@ -114,6 +131,17 @@ describe('Copilot acceptance', () => {
     );
     const draft = generated.draft;
     expect(draft.tasks).toHaveLength(2);
+    // The generate response carries the gate's verdict: a ready session plans
+    // with nothing missing. The limited-information line stays out — the gate did
+    // not refuse — and the only standing assumption is the missing deadline.
+    expect(generated.readiness.ready).toBe(true);
+    expect(generated.missingDimensions).toEqual([]);
+    expect(generated.assumptions).not.toContain(
+      'Generated with limited information — the plan uses only what you told me.',
+    );
+    expect(generated.assumptions).toContain(
+      'No deadline was provided, so this plan focuses on steady weekly progress.',
+    );
 
     const walk = draft.tasks.find((t: any) => t.title === 'Brisk walk');
     const swim = draft.tasks.find((t: any) => t.title === 'Swim');
@@ -576,5 +604,291 @@ describe('Copilot acceptance', () => {
     const stored = await prisma.userPreference.findMany({ where: { userId: user.id } });
     expect(stored).toHaveLength(2);
     expect(stored.every((p) => p.category === 'FITNESS')).toBe(true);
+  });
+
+  // ------------------------------------------------- P0 correctness fixes
+  //
+  // Four behaviours the interview and draft flow are now required to have:
+  // a provider outage is never dressed up as a plan; two racing requests
+  // cannot build two goals; a generate request that quotes an old revision is
+  // refused; and an unfinished interview does not get a plan invented for it
+  // unless the user insists.
+
+  /** A frequency question the model asks first for a vague goal. */
+  const frequencyQuestion = asks({
+    id: 'days_per_week',
+    type: 'NUMBER',
+    prompt: 'How many days a week can you train?',
+  });
+
+  it('P0 — a provider outage is a 503, and no fake plan is left behind', async () => {
+    const user = await h.createUser({ timezone: TZ });
+
+    // Walk the interview to a legitimately ready state: two answers given, and
+    // the model extracting the desired outcome it just heard about.
+    h.ai.queue(
+      'INTERVIEW',
+      frequencyQuestion,
+      asks({ id: 'session_minutes', type: 'NUMBER', prompt: 'How many minutes per session?' }),
+      {
+        state: 'READY_TO_GENERATE',
+        assistantMessage: "That's everything I need.",
+        question: null,
+        extractedContext: { desired_outcome: 'Feel strong and energetic again' },
+      },
+    );
+
+    const started = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
+      goal: 'I want to get fitter',
+    });
+    await h.ok(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/answers`, {
+      questionId: 'days_per_week',
+      answer: 3,
+    });
+    const finished = await h.ok(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${started.sessionId}/answers`,
+      { questionId: 'session_minutes', answer: 30 },
+    );
+    expect(finished.canGenerate).toBe(true);
+
+    // The provider dies exactly where the plan would have been built.
+    h.ai.respond('DRAFT_GENERATION', () => {
+      throw new AiProviderError('Stub provider timed out', 'TIMEOUT');
+    });
+
+    const response = await h.call(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${started.sessionId}/generate`,
+    );
+    expect(response.status).toBe(503);
+    expect(response.body.code).toBe('AI_TIMEOUT');
+
+    // The requirement this test exists for: nothing was persisted in place of
+    // a plan, and the session is not stuck at GENERATING — it can try again.
+    expect(await prisma.goalDraft.count({ where: { sessionId: started.sessionId } })).toBe(0);
+    const session = await prisma.copilotSession.findUniqueOrThrow({
+      where: { id: started.sessionId },
+    });
+    expect(['INTERVIEWING', 'READY_TO_GENERATE']).toContain(session.status);
+  });
+
+  it('P0 — racing generates build one draft, and racing confirms create one goal', async () => {
+    const user = await h.createUser({ timezone: TZ });
+
+    h.ai.queue(
+      'INTERVIEW',
+      frequencyQuestion,
+      asks({ id: 'session_minutes', type: 'NUMBER', prompt: 'How many minutes per session?' }),
+      {
+        state: 'READY_TO_GENERATE',
+        assistantMessage: "That's everything I need.",
+        question: null,
+        extractedContext: { desired_outcome: 'Feel strong and energetic again' },
+      },
+    );
+
+    const started = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
+      goal: 'I want to get fitter',
+    });
+    await h.ok(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/answers`, {
+      questionId: 'days_per_week',
+      answer: 3,
+    });
+    await h.ok(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/answers`, {
+      questionId: 'session_minutes',
+      answer: 30,
+    });
+
+    h.ai.queue('DRAFT_GENERATION', {
+      title: 'Get Fitter',
+      description: 'Three sessions to rebuild the habit.',
+      category: 'FITNESS',
+      targetType: 'HABIT',
+      rationale: 'You said three days a week suits you, so the plan starts there.',
+      tasks: [
+        {
+          title: 'Brisk walk',
+          description: 'A steady walk at a pace you can still talk at.',
+          recurrence: { type: 'TIMES_PER_WEEK', timesPerWeek: 3 },
+          estimatedMinutes: 30,
+          reason: 'Fits the week you described.',
+        },
+      ],
+    });
+
+    // Two generates enter at the same time. Exactly one may run the model; the
+    // other either gets the winner's draft back or a clean conflict — never a
+    // second draft and never a 500.
+    const generates = await Promise.allSettled([
+      h.call(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/generate`),
+      h.call(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/generate`),
+    ]);
+    const generateResponses = generates.map((g) => {
+      expect(g.status).toBe('fulfilled');
+      return (g as PromiseFulfilledResult<any>).value;
+    });
+    expect(generateResponses.every((r) => r.status === 200 || r.status === 409)).toBe(true);
+    expect(generateResponses.some((r) => r.status === 200)).toBe(true);
+    expect(h.ai.countOf('DRAFT_GENERATION')).toBe(1);
+    expect(await prisma.goalDraft.count({ where: { sessionId: started.sessionId } })).toBe(1);
+
+    const draft = generateResponses.find((r) => r.status === 200)!.body.draft;
+
+    // Both confirms enter at the same time. Exactly one Goal may appear.
+    const confirms = await Promise.allSettled([
+      h.call(user, 'POST', `/api/copilot/goal-drafts/${draft.id}/confirm`),
+      h.call(user, 'POST', `/api/copilot/goal-drafts/${draft.id}/confirm`),
+    ]);
+    const confirmResponses = confirms.map((c) => {
+      expect(c.status).toBe('fulfilled');
+      return (c as PromiseFulfilledResult<any>).value;
+    });
+    expect(confirmResponses.every((r) => r.status === 200)).toBe(true);
+    const created = confirmResponses.filter((r) => r.body.alreadyCreated === false);
+    expect(created).toHaveLength(1);
+    // Both learn the same goal — the second sees what the first created.
+    expect(new Set(confirmResponses.map((r) => r.body.goalId)).size).toBe(1);
+    expect(await prisma.goal.count({ where: { ownerId: user.id } })).toBe(1);
+  });
+
+  it('P0 — a generate request quoting a stale revision is refused', async () => {
+    const user = await h.createUser({ timezone: TZ });
+
+    h.ai.queue('INTERVIEW', frequencyQuestion);
+    const started = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
+      goal: 'I want to get fitter',
+    });
+
+    const snapshot = await h.ok(user, 'GET', `/api/copilot/goal-sessions/${started.sessionId}`);
+    expect(snapshot.revision).toBeGreaterThan(0);
+    expect(snapshot.readiness.ready).toBe(false);
+
+    // One revision behind — the interview moved on since this caller looked.
+    const stale = await h.call(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${started.sessionId}/generate`,
+      { revision: snapshot.revision - 1 },
+    );
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('STALE_REQUEST');
+    // The refusal happened before any model call or claim.
+    expect(h.ai.countOf('DRAFT_GENERATION')).toBe(0);
+
+    // The current revision passes the staleness gate — and then hits the
+    // readiness one, because nothing has been answered yet.
+    const fresh = await h.call(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${started.sessionId}/generate`,
+      { revision: snapshot.revision },
+    );
+    expect(fresh.status).toBe(409);
+    expect(fresh.body.code).toBe('NOT_READY');
+  });
+
+  it('P0 — an unfinished interview refuses to generate unless the user insists', async () => {
+    const user = await h.createUser({ timezone: TZ });
+
+    // The model keeps trying to end the interview; the gate keeps refusing.
+    h.ai.queue('INTERVIEW', frequencyQuestion, ready(), ready());
+
+    const started = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
+      goal: 'I want to get fitter',
+    });
+    expect(started.readiness.ready).toBe(false);
+    expect(started.readiness.missing[0]).toBe('DESIRED_OUTCOME');
+
+    // Zero questions answered: the gate refuses, and force is not available
+    // below two questions.
+    const generateUrl = `/api/copilot/goal-sessions/${started.sessionId}/generate`;
+    const early = await h.call(user, 'POST', generateUrl, {});
+    expect(early.status).toBe(409);
+    expect(early.body.code).toBe('NOT_READY');
+    const forcedEarly = await h.call(user, 'POST', generateUrl, { force: true });
+    expect(forcedEarly.status).toBe(409);
+    expect(forcedEarly.body.code).toBe('NOT_READY');
+
+    // The model's ready() is downgraded, and the deterministic fallback asks
+    // for the first missing blocking dimension: the desired outcome.
+    const second = await h.ok(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${started.sessionId}/answers`,
+      { questionId: 'days_per_week', answer: 3 },
+    );
+    expect(second.canGenerate).toBe(false);
+    expect(second.question.id).toBe('essential_success');
+    expect(second.questionCount).toBe(2);
+
+    // Answered, but the goal is still outcome-less; the hard cap now closes
+    // the interview anyway. It says ready; the gate still says not ready.
+    const capped = await h.ok(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${started.sessionId}/answers`,
+      { questionId: 'essential_success', answer: 'I just want to move more' },
+    );
+    expect(capped.canGenerate).toBe(true);
+    expect(capped.readiness.ready).toBe(false);
+
+    // The hard cap concluded the interview (READY_TO_GENERATE) with nothing
+    // left to ask, so a plain generate is allowed: refusing here would dead-end
+    // the user with no next question. The non-concluded refusals are asserted
+    // above (before the cap). The plan still says out loud that it rests on
+    // limited information.
+    h.ai.queue('DRAFT_GENERATION', {
+      title: 'Move More Gently',
+      description: 'A starting plan built from limited answers.',
+      category: 'FITNESS',
+      targetType: 'HABIT',
+      rationale: 'Built from what little was gathered; edit freely.',
+      tasks: [
+        {
+          title: 'Short walk',
+          description: 'Ten minutes, any pace.',
+          recurrence: { type: 'TIMES_PER_WEEK', timesPerWeek: 3 },
+          estimatedMinutes: 10,
+          reason: 'Matches the days you gave.',
+        },
+      ],
+    });
+    const concludedGenerate = await h.ok(user, 'POST', generateUrl, {});
+    expect(concludedGenerate.assumptions).toContain(
+      'Generated with limited information — the plan uses only what you told me.',
+    );
+
+    // Two questions were asked, so the user may also insist explicitly — and
+    // that response says out loud what the plan rests on.
+    h.ai.queue('DRAFT_GENERATION', {
+      title: 'Move More',
+      description: 'A starting plan built from limited answers.',
+      category: 'FITNESS',
+      targetType: 'HABIT',
+      rationale: 'Built from what little was gathered; edit freely.',
+      tasks: [
+        {
+          title: 'Short walk',
+          description: 'Ten minutes, any pace.',
+          recurrence: { type: 'TIMES_PER_WEEK', timesPerWeek: 3 },
+          estimatedMinutes: 10,
+          reason: 'Matches the days you gave.',
+        },
+      ],
+    });
+    const forced = await h.ok(user, 'POST', generateUrl, { force: true });
+    // The forced plan still says out loud that it rests on limited information,
+    // alongside the standing note about the missing deadline.
+    expect(forced.assumptions).toContain(
+      'Generated with limited information — the plan uses only what you told me.',
+    );
+    expect(forced.assumptions).toContain(
+      'No deadline was provided, so this plan focuses on steady weekly progress.',
+    );
+    expect(forced.readiness.ready).toBe(false);
+    expect(forced.missingDimensions).toContain('DESIRED_OUTCOME');
   });
 });

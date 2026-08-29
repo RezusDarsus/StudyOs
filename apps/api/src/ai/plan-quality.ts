@@ -60,6 +60,46 @@ const ACTIONS = new Set([
   'study', 'swim', 'track', 'train', 'transfer', 'walk', 'write',
 ]);
 
+/**
+ * Exact placeholder titles the model emits when it has nothing real to schedule.
+ * Matching is exact (trimmed, lower-cased) on purpose: the heuristic below catches
+ * vaguer phrasing as a scoring signal, while only these certain placeholders are
+ * ever allowed to reject a draft outright.
+ */
+export const GENERIC_TASK_TITLES: ReadonlySet<string> = new Set([
+  'take the first concrete step',
+  'take the first step',
+  'take action',
+  'work on goal',
+  'work on my goal',
+  'make progress',
+  'stay consistent',
+  'improve yourself',
+  'focus on your goal',
+  'get better',
+  'daily practice',
+  'practice',
+  'review progress',
+  'track progress',
+  'stay on track',
+]);
+
+/**
+ * A title that names no concrete action is a placeholder, not a task.
+ *
+ * "Read 25 pages" survives despite being short — "read" is an action verb. A
+ * goal-family token counts as concrete too: on a chess goal, "opening tactics"
+ * says something. Only a title that is both short AND contentless is generic.
+ */
+export function isGenericTaskTitle(title: string, goalFamilyTokens?: Set<string> | null): boolean {
+  if (GENERIC_TASK_TITLES.has(title.trim().toLowerCase())) return true;
+  const titleTokens = meaningfulTokens(title);
+  if (titleTokens.size > 2) return false;
+  if ([...titleTokens].some((token) => ACTIONS.has(token))) return false;
+  if (goalFamilyTokens && [...titleTokens].some((token) => goalFamilyTokens.has(token))) return false;
+  return true;
+}
+
 const stem = (word: string) => word
   .replace(/ies$/, 'y')
   .replace(/ing$/, '')
@@ -72,6 +112,11 @@ function tokens(text: string): string[] {
 
 function meaningful(text: string): Set<string> {
   return new Set(tokens(text).filter((token) => token.length > 2 && !STOP.has(token)));
+}
+
+/** The stemmer lives here and nowhere else: draft-validator reuses it for near-duplicate detection. */
+export function meaningfulTokens(text: string): Set<string> {
+  return meaningful(text);
 }
 
 function familyFor(text: string): Set<string> | null {
@@ -107,17 +152,46 @@ export function scorePlanQuality(
   const goalTokens = meaningful(goalText);
   const planTokens = meaningful(taskText);
   const goalFamily = familyFor(goalText);
+  // Relevance is established by the task TITLES — the work actually scheduled —
+  // not by descriptions, where an incidental goal word ("Study Java
+  // fundamentals" under an interview-prep goal; "project scaffolding" under a
+  // social-network goal) used to carry plans whose titles shared nothing with
+  // the goal. Titles are matched with the same inflection tolerance the
+  // benchmark evaluator uses (stemmed, silent trailing "e" dropped).
+  const titleTokens = meaningful(plan.tasks.map((task) => task.title).join(' '));
+  const titleNorm = (word: string) => (word.length > 3 ? word.replace(/e$/, '') : word);
+  const titleNorms = [...titleTokens].map(titleNorm);
+  const titleMatches = (words: Iterable<string>): boolean => [...words].some((word) => {
+    const n = titleNorm(word);
+    return titleNorms.some((t) => t === n || t.startsWith(n) || (n.startsWith(t) && t.length >= 6));
+  });
+  const titleRelevant = !goalTokens.size
+    || titleMatches(goalTokens)
+    || (goalFamily !== null && titleMatches(goalFamily));
   const overlap = [...goalTokens].filter((token) => planTokens.has(token)).length;
   const familyOverlap = goalFamily ? [...goalFamily].some((token) => planTokens.has(token)) : false;
-  const goalRelevance = !goalTokens.size || overlap > 0 || familyOverlap ? 20 : 4;
+  const goalRelevance = titleRelevant ? 20 : 4;
   if (goalRelevance < 20) issues.push('Tasks do not clearly pursue the stated goal');
+
+  const genericTasks = plan.tasks.filter((task) => isGenericTaskTitle(task.title, goalFamily));
+  // A few placeholder titles are worth calling out by name; beyond that the plan
+  // as a whole is the problem, and the all-generic rule below says so once.
+  for (const task of genericTasks.slice(0, 3)) {
+    issues.push(`GENERIC_TASKS: "${task.title}" is too generic to be actionable`);
+  }
 
   const actionableCount = plan.tasks.filter((task) => actionable(task, goalFamily)).length;
   const describedCount = plan.tasks.filter((task) => meaningful(task.description ?? '').size >= 2).length;
   const specificityRatio = plan.tasks.length
     ? (actionableCount * 0.7 + describedCount * 0.3) / plan.tasks.length
     : 0;
-  const taskSpecificity = Math.round(20 * specificityRatio);
+  let taskSpecificity = Math.round(20 * specificityRatio);
+  // A plan made entirely of placeholders has no executable content to score —
+  // however well the descriptions read, specificity is zero.
+  if (plan.tasks.length > 0 && genericTasks.length === plan.tasks.length) {
+    taskSpecificity = 0;
+    issues.push('All task titles are generic placeholders');
+  }
   if (taskSpecificity < 14) issues.push('Tasks are vague or not directly actionable');
 
   let planCompleteness = 0;

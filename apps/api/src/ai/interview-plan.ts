@@ -32,6 +32,7 @@ export const QUESTION_TOPIC = [
   'CONSTRAINT',
   'MOTIVATION',
   'TARGET',
+  'DEADLINE',
   'EXPERIENCE',
   'OTHER',
 ] as const;
@@ -128,6 +129,86 @@ export function promoteMultiSelect(question: CopilotQuestion): CopilotQuestion {
 }
 
 /**
+ * A single-select question must always accept the user's own words.
+ *
+ * The prompt asks the model to set allowCustomAnswer itself and it does not
+ * reliably, so the backend guarantees it: the options are suggestions, never a
+ * trap. Widening a question is promoteMultiSelect's job; this only guarantees
+ * the escape hatch.
+ */
+export function ensureCustomAnswer(question: CopilotQuestion): CopilotQuestion {
+  return question.type === 'SINGLE_SELECT'
+    ? { ...question, allowCustomAnswer: true }
+    : question;
+}
+
+// ------------------------------------------------------------ goal domains
+
+export type GoalDomain =
+  | 'FITNESS'
+  | 'LEARNING'
+  | 'LANGUAGE'
+  | 'MONEY'
+  | 'CAREER'
+  | 'CREATIVE'
+  | 'GENERAL';
+
+/**
+ * Which domain a goal belongs to, by keyword.
+ *
+ * The order below is the precedence: "learn English" is a language goal even
+ * though it contains a learning verb, and a Java interview is about the career
+ * before it is about the language of the code. Matching is on word boundaries,
+ * so "retraining" does not read as "training".
+ */
+const DOMAIN_KEYWORDS: Array<{ domain: GoalDomain; pattern: RegExp }> = [
+  { domain: 'LANGUAGE', pattern: /\b(?:english|spanish|french|german|japanese|fluent|vocabulary|speaking|grammar|language)\b/ },
+  { domain: 'MONEY', pattern: /\b(?:save|saving|savings|budget|debt|income|spending|money|deposit)\b/ },
+  { domain: 'CAREER', pattern: /\b(?:interview|resume|cv|job|career|promotion|networking)\b/ },
+  { domain: 'CREATIVE', pattern: /\b(?:guitar|piano|paint|painting|draw|drawing|writing|novel|song|music)\b/ },
+  { domain: 'LEARNING', pattern: /\b(?:learn|study|java|python|javascript|programming|coding|course|exam|university|code|math)\b/ },
+  { domain: 'FITNESS', pattern: /\b(?:fit|fitter|fitness|gym|workout|exercise|run|running|jog|weight|muscle|strength|endurance|train|training|cycle|swim)\b/ },
+];
+
+export function goalDomain(goalText: string): GoalDomain {
+  const text = goalText.toLowerCase();
+  for (const { domain, pattern } of DOMAIN_KEYWORDS) {
+    if (pattern.test(text)) return domain;
+  }
+  return 'GENERAL';
+}
+
+/**
+ * The success question, flavoured by domain.
+ *
+ * "What does success look like?" is hard to answer in the abstract. Each domain
+ * has a handful of concrete results a beginner actually recognises; MONEY stays
+ * free text because the useful answer is a number and a date, not a choice.
+ */
+const DOMAIN_SUCCESS_QUESTIONS: Partial<Record<GoalDomain, { prompt: string; options: string[] }>> = {
+  FITNESS: {
+    prompt: 'What result matters most right now?',
+    options: ['Lose weight', 'Build strength', 'Improve endurance', 'Be more active generally'],
+  },
+  LEARNING: {
+    prompt: 'What are you learning this for?',
+    options: ['University coursework', 'Job readiness', 'General skills', 'A specific project'],
+  },
+  LANGUAGE: {
+    prompt: 'Which skill should the plan prioritize?',
+    options: ['Speaking', 'Listening', 'Grammar', 'Vocabulary'],
+  },
+  CAREER: {
+    prompt: 'What would success look like?',
+    options: ['Pass interviews', 'Land an offer', 'Get noticed at work', 'Build a portfolio'],
+  },
+  CREATIVE: {
+    prompt: 'What does progress look like for you?',
+    options: ['Finish a piece', 'Build a daily practice', 'Share publicly', 'Learn technique'],
+  },
+};
+
+/**
  * How many questions this request has earned.
  *
  * Someone who writes "I want read more" has told us nothing and a few questions
@@ -165,17 +246,36 @@ const STATED_PATTERNS: Array<{ topic: QuestionTopic; pattern: RegExp }> = [
   { topic: 'CONTENT', pattern: /fiction|non-?fiction|fantasy|history|biograph|sci-?fi|novels?/ },
 ];
 
+/**
+ * Topics the user's own opening words already settled, read off the goal text.
+ *
+ * Used both by assessPlanningSufficiency and by the readiness gate
+ * (ai/readiness.ts) — the one source of truth for what a goal statement itself
+ * says, so the two gates cannot disagree about it.
+ */
+export function statedTopics(goalText: string): QuestionTopic[] {
+  const text = goalText.toLowerCase();
+  return STATED_PATTERNS.filter(({ pattern }) => pattern.test(text)).map(({ topic }) => topic);
+}
+
 export function assessPlanningSufficiency(
   goalText: string,
   answeredTopics: readonly QuestionTopic[] = [],
 ): PlanningSufficiency {
   const text = goalText.toLowerCase();
-  const stated = STATED_PATTERNS.filter(({ pattern }) => pattern.test(text)).map(({ topic }) => topic);
+  const stated = statedTopics(goalText);
   const known = [...new Set([...stated, ...answeredTopics])];
   const undefinedMetric = /\b(?:twice as (?:creative|smart)|\d+% more productive|become[^.]{0,40}\bexpert\b)/.test(text);
-  const exact = text.match(/\b(?:exactly\s+)?(\d+|once|twice|one|two|three|four|five|six|seven)\s+(?:different\s+)?days?\s+(?:each|a|per|every)\s+week/);
+  const exact = text.match(/\b(?:exactly\s+)?(\d+|once|twice|one|two|three|four|five|six|seven)\s+(?:different\s+)?days?\s+(?:each|a|per|every)\s+week/)
+    ?? text.match(/\b(?:need|want)\s+(\d+|one|two|three|four|five|six|seven)\s+different\s+(?:[a-z]+\s+){0,2}days\b/);
+  // "…are the only days", "…are the only allowed days (available)",
+  // "only (allowed) days are …", "only on …" — every phrasing that names the
+  // full set of available days must feed the requested-vs-named conflict check.
   const only = text.match(/(?:only days?[^.]*?(?:are|:)|([^.]*)\s+are the only days|only (?:on )?)([^.]+)/);
-  const named = `${only?.[1] ?? ''} ${only?.[2] ?? ''}`.match(/\b(?:sun(?:day)?|mon(?:day)?|tues?(?:day)?|wed(?:nesday)?|thurs?(?:day)?|fri(?:day)?|sat(?:urday)?)\b/g) ?? [];
+  const onlyBefore = text.match(/([^.]+?)\s+are the only (?:allowed )?days(?:\s+available)?\b/)?.[1] ?? '';
+  const onlyAfter = text.match(/only (?:allowed )?days(?:\s+available)?\s+(?:are|:)\s*([^.]+)/)?.[1] ?? '';
+  const named = `${only?.[1] ?? ''} ${only?.[2] ?? ''} ${onlyBefore} ${onlyAfter}`
+    .match(/\b(?:sun(?:day)?|mon(?:day)?|tues?(?:day)?|wed(?:nesday)?|thurs?(?:day)?|fri(?:day)?|sat(?:urday)?)\b/g) ?? [];
   const words:Record<string,number>={one:1,once:1,two:2,twice:2,three:3,four:4,five:5,six:6,seven:7};
   const requested=exact?words[exact[1]]??Number(exact[1]):0;
   const missingDecisions = /have not set a budget|not (?:set|hired|decided)[^.]{0,80}(?:budget|contractor|move out)/.test(text);
@@ -218,9 +318,34 @@ export function essentialFallbackQuestion(
     ? preferred
     : (['TARGET', 'FREQUENCY', 'DURATION', 'CONSTRAINT'] as QuestionTopic[])
       .find((topic) => !used.has(topic));
-  if (next === 'TARGET') return {
-    id: 'essential_success', type: 'FREE_TEXT', optional: false, allowCustomAnswer: true,
-    prompt: 'What specific target or result would make this goal feel successful to you?',
+  if (next === 'TARGET') {
+    // A generic "what does success look like?" is hard to answer in the abstract,
+    // so the question is flavoured by domain. MONEY stays free text — the useful
+    // answer is an amount and a date — and a goal with no domain keeps the
+    // original open prompt.
+    const domain = goalDomain(goalText);
+    if (domain === 'MONEY') return {
+      id: 'essential_success', type: 'FREE_TEXT', optional: false, allowCustomAnswer: true,
+      prompt: 'How much do you want to save, and by when?',
+    };
+    const flavored = DOMAIN_SUCCESS_QUESTIONS[domain];
+    if (flavored) return {
+      id: 'essential_success', type: 'SINGLE_SELECT', optional: false, allowCustomAnswer: true,
+      prompt: flavored.prompt,
+      options: flavored.options,
+    };
+    return {
+      id: 'essential_success', type: 'FREE_TEXT', optional: false, allowCustomAnswer: true,
+      prompt: 'What specific target or result would make this goal feel successful to you?',
+    };
+  }
+  // Preferred only — the readiness gate sends TIMEFRAME here (see the
+  // dimension→topic mapping in services/copilot-session.ts); it is never picked
+  // by the default order below because a deadline is a scheduling dimension,
+  // not one of the four blocking ambiguities this fallback was written for.
+  if (next === 'DEADLINE') return {
+    id: 'essential_deadline', type: 'DATE', optional: false, allowCustomAnswer: true,
+    prompt: 'When would you like to reach this by?',
   };
   if(next === 'FREQUENCY')return{
     id:'essential_frequency',type:'NUMBER',optional:false,allowCustomAnswer:true,

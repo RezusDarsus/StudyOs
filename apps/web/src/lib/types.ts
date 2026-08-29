@@ -540,6 +540,8 @@ export interface InterviewTurn {
   estimatedTotal: number;
   context: Record<string, unknown>;
   canGenerate: boolean;
+  /** Server-side edit counter, quoted back by generate so a stale request is refused. */
+  revision: number;
 }
 
 /**

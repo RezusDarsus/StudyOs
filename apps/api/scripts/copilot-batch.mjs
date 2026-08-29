@@ -61,7 +61,7 @@ const SCENARIOS = [
     name: 'fitness-dislikes-running',
     goal: 'I want to get fitter. I hate running and I only have evenings free.',
     persona: { activity: 'Swimming', time: 'Evening', days: 4, minutes: 45 },
-    intent: ['swim', 'fit', 'exercise', 'train'],
+    intent: ['swim', 'fit', 'exercise', 'train', 'circuit', 'bodyweight', 'strength', 'workout'],
     intentForbidden: ['run', 'jog'],
     // They stated their availability up front; asking again is a redundancy bug.
     redundantQuestions: ['what time of day', 'when are you free', 'when would you'],
@@ -170,7 +170,9 @@ function assess(scenario, draft, asked, provenance) {
   }
   if (scenario.intentForbidden) {
     for (const bad of scenario.intentForbidden) {
-      if (taskText.includes(bad.toLowerCase())) {
+      // Word-boundary match: "Final walkthrough" is not about "walk".
+      const pattern = new RegExp(`\\b${bad.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+      if (pattern.test(taskText)) {
         add('INTENT', `a task is about "${bad}", which is not this goal`);
       }
     }
