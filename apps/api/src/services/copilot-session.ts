@@ -419,10 +419,13 @@ async function applyTurn(
   const status = state === 'READY_TO_GENERATE' ? 'READY_TO_GENERATE' : 'INTERVIEWING';
 
   // A suppressed question must not leave its message behind. Without this the user
-  // saw the question text with nothing to answer it with.
+  // saw the question text with nothing to answer it with. Questions can be
+  // suppressed for several reasons (redundancy, readiness, domain mismatch or the
+  // question cap), so key this off the final question rather than one reason.
+  const questionWasSuppressed = result.question !== null && question === null;
   const assistantMessage = fallbackQuestionInjected
     ? 'I need a little more detail before I can make this plan genuinely useful.'
-    : redundant && state === 'READY_TO_GENERATE'
+    : questionWasSuppressed && state === 'READY_TO_GENERATE'
     ? "That's everything I need."
     : result.assistantMessage;
 

@@ -42,6 +42,60 @@ const ready = (message = "That's everything I need.") => ({
 });
 
 describe('Copilot acceptance', () => {
+  it('does not display a capped question after the interview becomes ready', async () => {
+    const user = await h.createUser({ timezone: TZ });
+
+    h.ai.queue(
+      'INTERVIEW',
+      asks({
+        id: 'desired_outcome',
+        type: 'FREE_TEXT',
+        prompt: 'What result would make this goal successful?',
+      }),
+      {
+        ...asks({
+          id: 'days_per_week',
+          type: 'NUMBER',
+          prompt: 'How many days per week can you realistically commit to?',
+        }),
+        extractedContext: { desired_outcome: 'Lose weight' },
+      },
+      {
+        ...asks(
+          {
+            id: 'preferred_days',
+            type: 'MULTI_SELECT',
+            prompt: 'Which days of the week suit you best?',
+            options: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
+          },
+          'Which days of the week suit you best?',
+        ),
+        extractedContext: { days_per_week: 5 },
+      },
+    );
+
+    const first = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
+      goal: 'I want to get fitter',
+    });
+    const second = await h.ok(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${first.sessionId}/answers`,
+      { questionId: first.question.id, answer: 'Lose weight' },
+    );
+    const readyTurn = await h.ok(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${first.sessionId}/answers`,
+      { questionId: second.question.id, answer: 5 },
+    );
+
+    expect(readyTurn.canGenerate).toBe(true);
+    expect(readyTurn.question).toBeNull();
+    expect(readyTurn.assistantMessage).toBe("That's everything I need.");
+    expect(readyTurn.assistantMessage).not.toContain('Which days');
+  });
+
   // ------------------------------------------------------------------- PART 48
 
   it('PART 48 — a goal built in the widget is an ordinary goal', async () => {
