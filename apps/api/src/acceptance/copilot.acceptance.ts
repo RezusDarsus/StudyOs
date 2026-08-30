@@ -154,7 +154,11 @@ describe('Copilot acceptance', () => {
         suggestions: [],
       },
       {
-        explanation: 'Try The Hobbit by J.R.R. Tolkien: it is approachable, fast-moving, and a good book for restarting a reading habit.',
+        explanation: 'Try "Piranesi" by Susanna Clarke, "Project Hail Mary" by Andy Weir, and "Born a Crime" by Trevor Noah. Each is approachable and engaging in a different genre.',
+        suggestions: [],
+      },
+      {
+        explanation: 'Next try "Convenience Store Woman" by Sayaka Murata, "The Thursday Murder Club" by Richard Osman, or "Educated" by Tara Westover.',
         suggestions: [],
       },
     );
@@ -164,9 +168,24 @@ describe('Copilot acceptance', () => {
     });
 
     expect(answer.intent).toBe('ADVICE');
-    expect(answer.analysis.explanation).toContain('The Hobbit');
+    expect(answer.analysis.explanation).toContain('Piranesi');
+    expect(answer.analysis.explanation.match(/\bby\s+/g)).toHaveLength(3);
     expect(h.ai.promptsFor('PROGRESS_ANALYSIS', 'user')).toContain('Request type: ADVICE');
     expect(h.ai.countOf('PROGRESS_ANALYSIS')).toBe(2);
+
+    const more = await h.ok(user, 'POST', `/api/goals/${goal.id}/copilot`, {
+      message: 'can you give me more?',
+      history: [
+        { role: 'user', content: 'which book u can suggest' },
+        { role: 'assistant', content: answer.analysis.explanation },
+      ],
+    });
+    expect(more.intent).toBe('ADVICE');
+    expect(more.analysis.explanation).toContain('Convenience Store Woman');
+    expect(more.analysis.explanation).not.toContain('Piranesi');
+    expect(h.ai.promptsFor('PROGRESS_ANALYSIS', 'user')).toContain('Recent conversation');
+    expect(h.ai.promptsFor('PROGRESS_ANALYSIS', 'user')).toContain('Piranesi');
+    expect(h.ai.countOf('PROGRESS_ANALYSIS')).toBe(3);
   });
 
   // ------------------------------------------------------------------- PART 48

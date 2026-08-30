@@ -362,9 +362,15 @@ export default async function copilotRoutes(app: FastifyInstance) {
 
   app.post('/goals/:id/copilot', { preHandler: app.requireAuth }, async (req) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
-    const { message } = z.object({ message: copilotMessage }).parse(req.body);
+    const { message, history } = z.object({
+      message: copilotMessage,
+      history: z.array(z.object({
+        role: z.enum(['user', 'assistant']),
+        content: z.string().trim().min(1).max(800),
+      })).max(8).default([]),
+    }).parse(req.body);
     try {
-      return await askGoalCopilot(id, req.user!.id, message);
+      return await askGoalCopilot(id, req.user!.id, message, history);
     } catch (err) {
       toUserFacing(err);
     }

@@ -25,6 +25,8 @@ describe('goal Copilot intent', () => {
     expect(prompt).toMatch(/does not require\s+completed-session data/);
     expect(prompt).toContain('Do not default to "there is no data"');
     expect(prompt).toContain('"Title" by Author');
+    expect(prompt).toContain('recommend 3 real books');
+    expect(prompt).toContain('do not repeat books');
   });
 
   it('treats a question about a missing draft activity as a repair request', () => {

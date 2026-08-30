@@ -74,6 +74,45 @@ export interface GoalProgressSummary {
 
 export type GoalCopilotIntent = 'PROGRESS' | 'ADVICE' | 'ADJUSTMENT';
 
+export interface GoalCopilotHistoryEntry {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+const BOOK_FALLBACKS = [
+  ['Piranesi', 'Susanna Clarke', 'a short, imaginative mystery that is easy to return to'],
+  ['Project Hail Mary', 'Andy Weir', 'a fast-moving science-fiction adventure with short, compelling chapters'],
+  ['Born a Crime', 'Trevor Noah', 'an accessible and funny memoir built from engaging stories'],
+  ['Convenience Store Woman', 'Sayaka Murata', 'a concise, unusual novel that works well for restarting a reading habit'],
+  ['The Thursday Murder Club', 'Richard Osman', 'a warm, approachable mystery with a lively cast'],
+  ['Educated', 'Tara Westover', 'a gripping memoir about learning, change, and independence'],
+  ['The Little Prince', 'Antoine de Saint-Exupéry', 'a brief classic with plenty to think about'],
+  ['Never Let Me Go', 'Kazuo Ishiguro', 'a thoughtful novel with clear prose and a strong emotional hook'],
+  ['The House in the Cerulean Sea', 'TJ Klune', 'a hopeful fantasy with an easy-to-follow story'],
+] as const;
+
+function requestedBookCount(message: string) {
+  const digit = message.match(/\b([1-5])\s+(?:different\s+)?(?:books?|novels?)\b/i)?.[1];
+  if (digit) return Number(digit);
+  if (/\b(?:one|a single)\s+(?:book|novel)\b/i.test(message)) return 1;
+  if (/\banother\b/i.test(message)) return 1;
+  return 3;
+}
+
+function namedBookCount(text: string) {
+  return text.match(/\bby\s+[\p{L}]/giu)?.length ?? 0;
+}
+
+function fallbackBookAnswer(history: GoalCopilotHistoryEntry[], count: number) {
+  const prior = history.map((entry) => entry.content).join(' ').toLocaleLowerCase();
+  const fresh = BOOK_FALLBACKS.filter(([title]) => !prior.includes(title.toLocaleLowerCase()));
+  const choices = [...fresh, ...BOOK_FALLBACKS.filter(([title]) => prior.includes(title.toLocaleLowerCase()))]
+    .slice(0, count);
+  return choices
+    .map(([title, author, reason]) => `"${title}" by ${author} — ${reason}.`)
+    .join('\n');
+}
+
 /** Route the message without asking the model to infer what job it was given. */
 export function goalCopilotIntent(message: string): GoalCopilotIntent {
   if (/\b(?:how am i doing|progress|streak|completion|on track|falling behind|miss(?:ed|ing))\b/i.test(message)) {
@@ -297,13 +336,17 @@ export async function askGoalCopilot(
   goalId: string,
   userId: string,
   message: string,
+  history: GoalCopilotHistoryEntry[] = [],
 ): Promise<{
   intent: GoalCopilotIntent;
   summary: GoalProgressSummary;
   analysis: ProgressAnalysis;
   progressionProposals: ProgressionProposal[];
 }> {
-  const intent = goalCopilotIntent(message);
+  const historyText = history.map((entry) => entry.content).join('\n');
+  const bookFollowUp = /\b(?:more|another|different|else)\b/i.test(message)
+    && (/\b(?:books?|novels?)\b/i.test(historyText) || namedBookCount(historyText) > 0);
+  const intent = bookFollowUp ? 'ADVICE' : goalCopilotIntent(message);
   const summary = await buildProgressSummary(goalId, userId);
   const { goal, participant } = await loadGoalForUser(goalId, userId, 'participate');
   const preferences = await getPreferencesForPrompt(userId, goal.category);
@@ -313,6 +356,9 @@ ${JSON.stringify(summary, null, 2)}
 
 What this person prefers:
 ${preferences.map((p) => `- ${p.key}: ${p.value}`).join('\n') || '(nothing on file)'}
+
+Recent conversation (context only; it is not authoritative goal data):
+${history.map((entry) => `${entry.role.toUpperCase()}: ${entry.content}`).join('\n') || '(none)'}
 
 They ask:
 "${message}"
@@ -324,7 +370,7 @@ Request type: ${intent}`;
       promptVersion: PROMPT_VERSIONS.progress,
       userId,
       thinking: false,
-      temperature: 0.3,
+      temperature: intent === 'ADVICE' ? 0.65 : 0.3,
       maxTokens: 2000,
       timeoutMs: 60_000,
       messages: [
@@ -339,19 +385,23 @@ Request type: ${intent}`;
   );
   let analysis = await analyze(userPrompt);
 
-  // A vague "pick a novel" is not a recommendation. Repair once, then provide a
-  // concrete safe default only if the provider ignores the correction as well.
-  const asksForBook = /\b(?:books?|novels?|read next|reading recommendation)\b/i.test(message);
-  const namesBookAndAuthor = (text: string) => /\bby\s+[\p{L}]/iu.test(text);
-  if (intent === 'ADVICE' && asksForBook && !namesBookAndAuthor(analysis.explanation)) {
+  // A vague "pick a novel" is not a recommendation. Repair once. The deterministic
+  // list is only a last-resort provider-failure fallback; normal answers come from
+  // the model and use the person's request, preferences and recent conversation.
+  const asksForBook = /\b(?:books?|novels?|read next|reading recommendation)\b/i.test(message)
+    || bookFollowUp;
+  const bookCount = requestedBookCount(message);
+  if (intent === 'ADVICE' && asksForBook && namedBookCount(analysis.explanation) < bookCount) {
     analysis = await analyze(`${userPrompt}
 
-Your previous answer was too generic. Name one actual book using the exact form
-"Title" by Author, then give one short reason it fits.`);
-    if (!namesBookAndAuthor(analysis.explanation)) {
+Your previous answer did not provide enough concrete choices. Recommend ${bookCount}
+actual ${bookCount === 1 ? 'book' : 'books from different authors'}, each using the exact form
+"Title" by Author followed by one short reason. Use the request and preferences above.
+Do not repeat a title from the recent conversation.`);
+    if (namedBookCount(analysis.explanation) < bookCount) {
       analysis = {
         ...analysis,
-        explanation: 'Try "The Hobbit" by J.R.R. Tolkien. It is approachable, fast-moving, and a good choice for restarting a reading habit.',
+        explanation: fallbackBookAnswer(history, bookCount),
       };
     }
   }

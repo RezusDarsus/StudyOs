@@ -40,6 +40,10 @@ export function useGoalCopilot(goalId: string, onError: (message: string) => voi
       try {
         const answer = await api.post<GoalCopilotAnswer>(`/goals/${goalId}/copilot`, {
           message: question,
+          history: entries.slice(-4).flatMap((entry) => [
+            { role: 'user', content: entry.question },
+            { role: 'assistant', content: entry.answer.analysis.explanation },
+          ]),
         });
         setEntries((prev) => [...prev, { question, answer }]);
         return answer;
@@ -53,7 +57,7 @@ export function useGoalCopilot(goalId: string, onError: (message: string) => voi
     // `onError` is a fresh closure each render in both callers; excluding it
     // keeps `ask` stable, and it is only ever read at call time.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [goalId, busy],
+    [goalId, busy, entries],
   );
 
   const clear = useCallback(() => setEntries([]), []);
