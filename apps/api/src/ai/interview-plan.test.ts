@@ -29,6 +29,18 @@ function question(partial: Partial<CopilotQuestion> & { prompt: string }): Copil
 }
 
 describe('what a question is about', () => {
+  it('classifies outcome wording and fitness outcome options as the target topic', () => {
+    expect(questionTopic('What result matters most right now?')).toBe('TARGET');
+    expect(
+      questionTopic('Choose one', 'SINGLE_SELECT', [
+        'Lose weight',
+        'Build strength',
+        'Improve endurance',
+        'Be more active generally',
+      ]),
+    ).toBe('TARGET');
+  });
+
   it('files the three wordings of the day question as one subject', () => {
     // Verbatim from the run that prompted all of this.
     const wordings = [

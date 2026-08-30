@@ -57,7 +57,7 @@ const TOPIC_PATTERNS: Array<{ topic: QuestionTopic; pattern: RegExp }> = [
   { topic: 'INTEREST', pattern: /enjoy|prefer doing|like doing|which activit|favourite|favorite/ },
   { topic: 'CONSTRAINT', pattern: /avoid|stopping you|get in the way|struggle|obstacle|can'?t do|unavailable/ },
   { topic: 'MOTIVATION', pattern: /\bwhy\b|motivat|what.s driving|important to you/ },
-  { topic: 'TARGET', pattern: /how many (books|pages|kg|km)|target|by when|deadline|finish by|aiming for/ },
+  { topic: 'TARGET', pattern: /how many (books|pages|kg|km)|target|by when|deadline|finish by|aiming for|what result|result matters|success|outcome|lose weight|build strength|improve endurance|be more active/ },
   { topic: 'EXPERIENCE', pattern: /currently|at the moment|right now|experience|how fit|starting point|level/ },
 ];
 
@@ -241,7 +241,7 @@ const STATED_PATTERNS: Array<{ topic: QuestionTopic; pattern: RegExp }> = [
   { topic: 'DAYS', pattern: /\b(mon|tues?|wed|thur?s?|fri|sat|sun)(day)?s?\b|weekdays|weekends/ },
   { topic: 'DURATION', pattern: /\b\d+\s*(min|minute|hour|hr)/ },
   { topic: 'TIME_OF_DAY', pattern: /\b(morning|afternoon|evening|night|before work|after work|lunchtime)\b|\b\d{1,2}\s?(am|pm)\b/ },
-  { topic: 'TARGET', pattern: /\b\d+\s*(pages?|books?|kg|kilos?|km|miles?|words?)\b|by (january|february|march|april|may|june|july|august|september|october|november|december)|in \d+ (weeks?|months?)/ },
+  { topic: 'TARGET', pattern: /\b\d+\s*(pages?|books?|kg|kilos?|km|miles?|words?)\b|by (january|february|march|april|may|june|july|august|september|october|november|december)|in \d+ (weeks?|months?)|\b(?:lose weight|weight loss|build (?:strength|muscle)|improve (?:endurance|stamina)|be more active)\b/ },
   { topic: 'FORMAT', pattern: /e-?books?|audiobooks?|paperbacks?|kindle|podcast|at the gym|at home/ },
   { topic: 'CONTENT', pattern: /fiction|non-?fiction|fantasy|history|biograph|sci-?fi|novels?/ },
 ];

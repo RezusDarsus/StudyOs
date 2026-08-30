@@ -42,6 +42,44 @@ const ready = (message = "That's everything I need.") => ({
 });
 
 describe('Copilot acceptance', () => {
+  it('does not ask for a fitness outcome already stated in the opening message', async () => {
+    const user = await h.createUser({ timezone: TZ });
+
+    h.ai.queue(
+      'INTERVIEW',
+      asks({
+        id: 'days_per_week',
+        type: 'NUMBER',
+        prompt: 'How many days per week can you commit to?',
+      }),
+      asks(
+        {
+          id: 'desired_outcome',
+          type: 'SINGLE_SELECT',
+          prompt: 'What result matters most right now?',
+          options: ['Lose weight', 'Build strength', 'Improve endurance', 'Be more active generally'],
+        },
+        'One useful detail will help me tailor the plan.',
+      ),
+    );
+
+    const first = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
+      goal: 'I want lose weight; I will start boxing and gym',
+    });
+    expect(first.question.id).toBe('days_per_week');
+
+    const readyTurn = await h.ok(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${first.sessionId}/answers`,
+      { questionId: first.question.id, answer: '3 days' },
+    );
+
+    expect(readyTurn.canGenerate).toBe(true);
+    expect(readyTurn.question).toBeNull();
+    expect(readyTurn.assistantMessage).toBe("That's everything I need.");
+  });
+
   it('does not display a capped question after the interview becomes ready', async () => {
     const user = await h.createUser({ timezone: TZ });
 
@@ -109,10 +147,17 @@ describe('Copilot acceptance', () => {
       }],
     });
 
-    h.ai.respond('PROGRESS_ANALYSIS', {
-      explanation: 'Try The Hobbit by J.R.R. Tolkien: it is approachable, fast-moving, and a good book for restarting a reading habit.',
-      suggestions: [],
-    });
+    h.ai.queue(
+      'PROGRESS_ANALYSIS',
+      {
+        explanation: 'Pick a short, engaging novel to get started.',
+        suggestions: [],
+      },
+      {
+        explanation: 'Try The Hobbit by J.R.R. Tolkien: it is approachable, fast-moving, and a good book for restarting a reading habit.',
+        suggestions: [],
+      },
+    );
 
     const answer = await h.ok(user, 'POST', `/api/goals/${goal.id}/copilot`, {
       message: 'which book u can suggest',
@@ -121,6 +166,7 @@ describe('Copilot acceptance', () => {
     expect(answer.intent).toBe('ADVICE');
     expect(answer.analysis.explanation).toContain('The Hobbit');
     expect(h.ai.promptsFor('PROGRESS_ANALYSIS', 'user')).toContain('Request type: ADVICE');
+    expect(h.ai.countOf('PROGRESS_ANALYSIS')).toBe(2);
   });
 
   // ------------------------------------------------------------------- PART 48

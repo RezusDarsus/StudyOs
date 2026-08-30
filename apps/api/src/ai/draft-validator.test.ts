@@ -75,6 +75,23 @@ describe('goal-coverage gate', () => {
     );
     expect(result.tasks).toHaveLength(1);
   });
+
+  it('rejects a plan that drops one of two explicitly requested activities', () => {
+    const boxingOnly = draft([task({
+      title: 'Boxing session',
+      description: 'Practice boxing fundamentals.',
+      reason: 'You asked to start boxing.',
+    })]);
+    expect(() =>
+      validateAndNormalizeDraft(
+        boxingOnly,
+        'UTC',
+        new Date('2026-08-25T10:00:00Z'),
+        'I want lose weight; I will start boxing and gym',
+      ),
+    ).toThrow('The plan omits explicitly requested activities: "gym"');
+  });
+
 });
 
 describe('authority-gated build-ups', () => {

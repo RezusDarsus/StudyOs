@@ -82,7 +82,7 @@ export function goalCopilotIntent(message: string): GoalCopilotIntent {
   if (/\b(?:rest day|day off|change|adjust|reschedule|skip|remove|reduce|increase|shorten|extend|pause|resume|easier|harder|earlier|later)\b/i.test(message)) {
     return 'ADJUSTMENT';
   }
-  if (/\b(?:suggest|recommend|recommendation|idea|ideas|advice|choose|what|which|how can|how should)\b/i.test(message)) {
+  if (/\b(?:suggest|recommend|recommendation|idea|ideas|advice|choose|what|which|how can|how should|books?|novels?|read next|recipes?|courses?|podcasts?|techniques?|resources?)\b/i.test(message)) {
     return 'ADVICE';
   }
   return 'PROGRESS';
@@ -308,7 +308,17 @@ export async function askGoalCopilot(
   const { goal, participant } = await loadGoalForUser(goalId, userId, 'participate');
   const preferences = await getPreferencesForPrompt(userId, goal.category);
 
-  const analysis = await chatJson(
+  const userPrompt = `Goal statistics (authoritative — do not invent others):
+${JSON.stringify(summary, null, 2)}
+
+What this person prefers:
+${preferences.map((p) => `- ${p.key}: ${p.value}`).join('\n') || '(nothing on file)'}
+
+They ask:
+"${message}"
+
+Request type: ${intent}`;
+  const analyze = (content: string) => chatJson(
     {
       purpose: 'PROGRESS_ANALYSIS',
       promptVersion: PROMPT_VERSIONS.progress,
@@ -321,21 +331,30 @@ export async function askGoalCopilot(
         { role: 'system', content: progressSystemPrompt() },
         {
           role: 'user',
-          content: `Goal statistics (authoritative — do not invent others):
-${JSON.stringify(summary, null, 2)}
-
-What this person prefers:
-${preferences.map((p) => `- ${p.key}: ${p.value}`).join('\n') || '(nothing on file)'}
-
-They ask:
-"${message}"
-
-Request type: ${intent}`,
+          content,
         },
       ],
     },
     progressAnalysisSchema,
   );
+  let analysis = await analyze(userPrompt);
+
+  // A vague "pick a novel" is not a recommendation. Repair once, then provide a
+  // concrete safe default only if the provider ignores the correction as well.
+  const asksForBook = /\b(?:books?|novels?|read next|reading recommendation)\b/i.test(message);
+  const namesBookAndAuthor = (text: string) => /\bby\s+[\p{L}]/iu.test(text);
+  if (intent === 'ADVICE' && asksForBook && !namesBookAndAuthor(analysis.explanation)) {
+    analysis = await analyze(`${userPrompt}
+
+Your previous answer was too generic. Name one actual book using the exact form
+"Title" by Author, then give one short reason it fits.`);
+    if (!namesBookAndAuthor(analysis.explanation)) {
+      analysis = {
+        ...analysis,
+        explanation: 'Try "The Hobbit" by J.R.R. Tolkien. It is approachable, fast-moving, and a good choice for restarting a reading habit.',
+      };
+    }
+  }
 
   await recordEvent({ userId, type: 'GOAL_COPILOT_ASKED', meta: { goalId } });
 

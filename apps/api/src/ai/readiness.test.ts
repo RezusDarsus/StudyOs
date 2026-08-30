@@ -30,6 +30,12 @@ describe('statedTopics', () => {
   it('finds nothing in a vague goal', () => {
     expect(statedTopics('I want to get fitter')).toEqual([]);
   });
+
+  it('recognizes an explicit fitness outcome without requiring a number', () => {
+    expect(statedTopics('I want lose weight; I will start boxing and gym')).toContain('TARGET');
+    expect(statedTopics('I want to build strength')).toContain('TARGET');
+    expect(statedTopics('I want to improve endurance')).toContain('TARGET');
+  });
 });
 
 describe('the readiness gate', () => {
@@ -50,6 +56,16 @@ describe('the readiness gate', () => {
     expect(result.ready).toBe(true);
     expect(result.missing).not.toContain('DESIRED_OUTCOME');
     expect(result.missing).not.toContain('WEEKLY_CAPACITY');
+  });
+
+  it('does not re-ask for an outcome after frequency answers a weight-loss goal', () => {
+    const result = evaluate({
+      goalText: 'I want lose weight; I will start boxing and gym',
+      answeredTopics: ['FREQUENCY'],
+      questionCount: 1,
+    });
+    expect(result.ready).toBe(true);
+    expect(result.missing).not.toContain('DESIRED_OUTCOME');
   });
 
   it('is ready for a run-length goal with baseline and a stated schedule', () => {

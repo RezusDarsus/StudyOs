@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { explicitConstraintErrors, extractEvidenceRequirements, goalCoverageGaps, parseExplicitGoalConstraints, statedDayOfMonth } from './goal-constraints.js';
+import { explicitActivityCoverageGaps, explicitConstraintErrors, extractEvidenceRequirements, goalCoverageGaps, parseExplicitGoalConstraints, statedDayOfMonth } from './goal-constraints.js';
 import type { NormalizedTask } from './draft-validator.js';
 
 const task = (title:string, weekdays:number[], minutes=45):NormalizedTask => ({
@@ -355,6 +355,27 @@ describe('explicit goal constraints',()=>{
 });
 
 describe('goal coverage gaps',()=>{
+  it('requires every explicitly joined activity, not merely one of them', () => {
+    expect(
+      explicitActivityCoverageGaps(
+        'I want lose weight; I will start boxing and gym',
+        textTask('Boxing session'),
+      ),
+    ).toEqual(['gym']);
+    expect(
+      explicitActivityCoverageGaps(
+        'I want lose weight; I will start boxing and gym',
+        [...textTask('Boxing session'), ...textTask('Gym strength session')],
+      ),
+    ).toEqual([]);
+  });
+
+  it('does not require both activities when the user offered alternatives', () => {
+    expect(
+      explicitActivityCoverageGaps('I could do boxing or gym', textTask('Boxing session')),
+    ).toEqual([]);
+  });
+
   it('reports nothing when every first-sentence stem is covered',()=>{
     expect(goalCoverageGaps('Prepare for backend interviews',textTask('Backend interview drill'))).toEqual([]);
     expect(goalCoverageGaps('Prepare for backend interviews',textTask('Mock interview practice for backend roles'))).toEqual([]);

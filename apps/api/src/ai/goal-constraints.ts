@@ -134,6 +134,44 @@ export function goalCoverageGaps(goalText: string, tasks: Array<Pick<NormalizedT
   return stemMatch || familyMatch ? [] : central;
 }
 
+const EXPLICIT_ACTIVITIES: Array<{ label: string; pattern: RegExp }> = [
+  { label: 'boxing', pattern: /\bbox(?:ing)?\b/i },
+  { label: 'gym', pattern: /\bgym\b/i },
+  { label: 'running', pattern: /\brun(?:ning)?\b/i },
+  { label: 'walking', pattern: /\bwalk(?:ing)?\b/i },
+  { label: 'swimming', pattern: /\bswim(?:ming)?\b/i },
+  { label: 'cycling', pattern: /\bcycl(?:e|ing)\b/i },
+  { label: 'yoga', pattern: /\byoga\b/i },
+  { label: 'pilates', pattern: /\bpilates\b/i },
+];
+
+/** Activities explicitly joined with "and"/"plus" must all survive the draft. */
+export function explicitActivityCoverageGaps(
+  goalText: string,
+  tasks: Array<Pick<NormalizedTask, 'title' | 'description' | 'reason'>>,
+): string[] {
+  const opening = goalText.split('\n', 1)[0].split(/[.!?]/, 1)[0];
+  const hits = EXPLICIT_ACTIVITIES.flatMap((activity) => {
+    const match = activity.pattern.exec(opening);
+    return match ? [{ ...activity, start: match.index, end: match.index + match[0].length }] : [];
+  }).sort((a, b) => a.start - b.start);
+  const required = new Set<string>();
+  for (let index = 0; index < hits.length - 1; index++) {
+    const left = hits[index];
+    const right = hits[index + 1];
+    const connector = opening.slice(left.end, right.start);
+    if (/^\s*(?:,|&|\+|and|plus)(?:\s+(?:the|do|go to|start|practice))?\s*$/i.test(connector)) {
+      required.add(left.label);
+      required.add(right.label);
+    }
+  }
+  const taskText = tasks.map((task) => `${task.title} ${task.description} ${task.reason}`).join('\n');
+  return [...required].filter((label) => {
+    const activity = EXPLICIT_ACTIVITIES.find((candidate) => candidate.label === label)!;
+    return !activity.pattern.test(taskText);
+  });
+}
+
 const DAYS: Record<string, number> = {
   sunday: 0, sun: 0, monday: 1, mon: 1, tuesday: 2, tue: 2, tues: 2,
   wednesday: 3, wed: 3, thursday: 4, thu: 4, thurs: 4,

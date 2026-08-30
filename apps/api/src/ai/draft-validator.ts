@@ -5,7 +5,7 @@ import { RecurrenceError, validateRecurrence, type RecurrenceConfig } from '../d
 import type { DraftTaskInput, GoalDraftInput } from './schemas.js';
 import { toSecondPerson } from './voice.js';
 import {
-  canonicalWeekdayOrder, explicitConstraintErrors, extractEvidenceRequirements,
+  canonicalWeekdayOrder, explicitActivityCoverageGaps, explicitConstraintErrors, extractEvidenceRequirements,
   goalCoverageGaps, parseExplicitGoalConstraints, semanticTaskRoles, statedDayOfMonth,
   taskWeeklyFrequency,
 } from './goal-constraints.js';
@@ -1110,6 +1110,12 @@ export function validateAndNormalizeDraft(
       if (gaps.length) {
         throw new DraftValidationError(
           `The plan does not pursue the stated goal: no task covers ${gaps.map((stem) => `"${stem}"`).join(', ')}. Keep the goal's core activities in the plan.`,
+        );
+      }
+      const activityGaps = explicitActivityCoverageGaps(sourceText, normalizedTasks);
+      if (activityGaps.length) {
+        throw new DraftValidationError(
+          `The plan omits explicitly requested activities: ${activityGaps.map((activity) => `"${activity}"`).join(', ')}. Include every activity the user joined with "and" or "plus".`,
         );
       }
     }

@@ -9,7 +9,7 @@ export const PROMPT_VERSIONS = {
   interview: 'goal-interview-v5',
   draft: 'goal-draft-v5',
   edit: 'goal-edit-v1',
-  progress: 'goal-coach-v4',
+  progress: 'goal-coach-v5',
   preference: 'preference-extraction-v1',
 } as const;
 
@@ -394,6 +394,10 @@ Rules:
 - Keep recurrence within the allowed types: ${RECURRENCES}
 - If the request is unsafe or impossible, do not apply it; explain briefly in
   assistantMessage and return the smallest sensible alternative instead.
+- A question that points out an omission ("why is there no gym?") is a request to
+  repair that omission. If the missing activity appears in the original request or
+  draft description, add the smallest matching task with ADD_TASK. Never return an
+  empty operations list.
 
 Return JSON exactly of this shape:
 {
@@ -429,6 +433,8 @@ The user message includes a REQUEST TYPE:
   the goal. A book, exercise, technique or next-step recommendation does not require
   completed-session data. If a preference is missing, give one sensible concrete
   option and briefly say why; do not replace the answer with a progress report.
+  For a book request, name at least one real book as "Title" by Author. Never answer
+  only with generic advice such as "pick a short novel".
 - ADJUSTMENT: respond to the requested schedule/workload change. Describe a concrete
   proposal in "suggestions" when possible, but never claim it has been applied.
 
