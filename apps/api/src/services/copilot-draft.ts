@@ -22,7 +22,7 @@ import {
 import { todayIn } from '../domain/dates.js';
 import type { RecurrenceType } from '../domain/enums.js';
 import { validateRecurrence } from '../domain/recurrence.js';
-import { badRequest, conflict, notFound } from '../lib/errors.js';
+import { HttpError, badRequest, conflict, notFound } from '../lib/errors.js';
 import { describeExplicitConstraints, parseExplicitGoalConstraints } from '../ai/goal-constraints.js';
 import { prisma } from '../lib/prisma.js';
 import { ensureOccurrences } from './occurrences.js';
@@ -200,11 +200,18 @@ export async function generateDraft(
     return await buildDraft(session, userId, regenerate);
   } catch (err) {
     // Release the claim. The session goes back to the status it held before —
-    // never stuck at GENERATING, so the user can simply try again.
+    // never stuck at GENERATING, so the user can simply try again. The one
+    // exception is an unresolved frequency contradiction: the session is now
+    // blocked on a question the user must answer, so it returns to INTERVIEWING
+    // — READY_TO_GENERATE would let the snapshot hide the question and offer a
+    // Build button that can only fail again.
+    const releaseStatus = err instanceof HttpError && err.code === 'FREQUENCY_CONFLICT'
+      ? 'INTERVIEWING'
+      : session.status;
     await prisma.copilotSession
       .updateMany({
         where: { id: session.id, status: 'GENERATING' },
-        data: { status: session.status },
+        data: { status: releaseStatus },
       })
       .catch(() => {});
     throw err;

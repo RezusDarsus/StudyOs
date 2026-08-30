@@ -136,8 +136,9 @@ describe('generation blocked by a frequency contradiction', () => {
     expect(state.createdMessages).toHaveLength(1);
     expect(state.createdMessages[0]).toMatchObject({ role: 'assistant', content: CLARIFICATION });
     expect(String(state.createdMessages[0].structuredPayload)).toContain('"id":"resolve_frequency_conflict"');
-    // The claim is released, so the user can answer the question and retry.
-    expect(state.sessionUpdates.at(-1)).toMatchObject({ data: { status: 'READY_TO_GENERATE' } });
+    // The claim is released, and the session returns to INTERVIEWING so the
+    // stored question stays visible and answerable in the UI.
+    expect(state.sessionUpdates.at(-1)).toMatchObject({ data: { status: 'INTERVIEWING' } });
   });
 
   it('does not duplicate the clarification question on a second blocked attempt', async () => {

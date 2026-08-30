@@ -256,6 +256,21 @@ export function useCopilotInterview({
             // The refetch is best-effort; the original failure is what is surfaced.
           }
         }
+        // An unresolved frequency contradiction is not an error to report - it
+        // comes with a question the user must answer. Adopting the snapshot
+        // turns the stored question into the pending input, exactly like a
+        // turn that asked it mid-interview.
+        if (err instanceof ApiError && err.code === 'FREQUENCY_CONFLICT') {
+          try {
+            const data = await api.get<SessionSnapshot>(
+              `/copilot/goal-sessions/${current.sessionId}`,
+            );
+            adoptSnapshot(data);
+            return null;
+          } catch {
+            // Same best-effort contract as the stale-request recovery.
+          }
+        }
         handlers.current.onError(describeCopilotError(err));
         return null;
       } finally {

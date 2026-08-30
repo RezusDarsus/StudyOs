@@ -15,6 +15,8 @@ export function describeCopilotError(err: unknown): string {
       return 'A bit more information is needed before I can build a good plan.';
     case 'STALE_REQUEST':
       return 'This interview changed since the plan was requested — try again.';
+    case 'FREQUENCY_CONFLICT':
+      return 'I need you to settle a scheduling conflict before I can build the plan — answer the question above.';
     case 'GENERATE_IN_PROGRESS':
       return 'Your plan is already being built — one moment.';
     case 'AI_TIMEOUT':
