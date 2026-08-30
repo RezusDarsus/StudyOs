@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { buildAssumptions } from './copilot.js';
+import { describe, expect, it, vi } from 'vitest';
+import { buildAssumptions, routeNewSessionRequest } from './copilot.js';
 import {
   applyMemoryHints,
   applyModelExtraction,
@@ -8,6 +8,7 @@ import {
   recordAnswer,
   serializeContext,
 } from '../ai/context.js';
+import type { CopilotIntentResult } from '../ai/intent-router.js';
 import type { PlanReadiness } from '../ai/readiness.js';
 
 // These run entirely offline: the helper is pure, so no route or provider is
@@ -109,5 +110,57 @@ describe('buildAssumptions', () => {
     expect(assumptions).toEqual([
       'No deadline was provided, so this plan focuses on steady weekly progress.',
     ]);
+  });
+});
+
+describe('routeNewSessionRequest', () => {
+  const fallbackThatMustNotRun = async (): Promise<CopilotIntentResult | null> => {
+    throw new Error('the deterministic layer already had a verdict');
+  };
+
+  it('proceeds exactly as before for a high-confidence goal statement', async () => {
+    for (const goal of [
+      'I want to get fitter',
+      'Save $3,000 for a trip to Italy',
+      'I want lose weight; I will start boxing and gym',
+    ]) {
+      await expect(routeNewSessionRequest(goal, undefined, fallbackThatMustNotRun)).resolves.toEqual({
+        create: true,
+      });
+    }
+  });
+
+  it('refuses to start an interview for a product question, with the clarification', async () => {
+    const routed = await routeNewSessionRequest(
+      'What happens if I miss a day?',
+      undefined,
+      fallbackThatMustNotRun,
+    );
+    expect(routed).toEqual({
+      create: false,
+      intent: 'PRODUCT_HELP',
+      clarification: 'Do you want me to create a goal for this, or are you asking a question?',
+    });
+  });
+
+  it('consults the LLM fallback only when the rules are silent', async () => {
+    const fallback = vi.fn(async () => ({ intent: 'CREATE_GOAL' as const, confidence: 0.88, method: 'llm' as const }));
+    await expect(routeNewSessionRequest('blue apple', undefined, fallback)).resolves.toEqual({
+      create: true,
+    });
+    expect(fallback).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays unrouted when the fallback fails — never defaulting to CREATE_GOAL', async () => {
+    const routed = await routeNewSessionRequest('blue apple', undefined, async () => null);
+    expect(routed).toMatchObject({ create: false, intent: 'UNKNOWN' });
+  });
+
+  it('lets an explicit intentAnswer goal override everything', async () => {
+    const fallback = vi.fn(async () => ({ intent: 'PRODUCT_HELP' as const, confidence: 0.99, method: 'llm' as const }));
+    await expect(routeNewSessionRequest('What happens if I miss a day?', 'goal', fallback)).resolves.toEqual({
+      create: true,
+    });
+    expect(fallback).not.toHaveBeenCalled();
   });
 });

@@ -42,6 +42,7 @@ import { getPreferencesForPrompt } from './preferences.js';
 import { recordEvent } from './copilot-analytics.js';
 import { parseExplicitGoalConstraints } from '../ai/goal-constraints.js';
 import { RESOLVE_FREQUENCY_CONFLICT_ID, withCorrectionSignal } from '../ai/frequency-conflict.js';
+import { classifyIntentDeterministic, PRODUCT_HELP_STUB } from '../ai/intent-router.js';
 import { todayIn } from '../domain/dates.js';
 
 // Interview limits are enforced by the backend, not by trusting the model to
@@ -475,6 +476,57 @@ async function applyTurn(
   };
 }
 
+/**
+ * The question the interview is currently waiting on, read off the transcript.
+ *
+ * The same rule the session snapshot uses: the last assistant message that
+ * carries a structured question, and only while the session is still
+ * interviewing. Null otherwise — there is nothing to preserve.
+ */
+function pendingQuestion(
+  session: CopilotSession & { messages: SessionMessage[] },
+): CopilotQuestion | null {
+  if (session.status !== 'INTERVIEWING') return null;
+  const last = [...session.messages]
+    .reverse()
+    .find((m) => m.role === 'assistant' && m.structuredPayload);
+  if (!last?.structuredPayload) return null;
+  try {
+    return JSON.parse(last.structuredPayload) as CopilotQuestion;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A turn that changed nothing.
+ *
+ * Used by the interruption path: the transcript, the question count and the
+ * revision are untouched, the pending question is handed back exactly as it
+ * was, and the assistant message is the interruption reply. A generate request
+ * quoting the pre-interruption revision stays valid, because nothing moved.
+ */
+function interruptionTurn(
+  session: CopilotSession & { messages: SessionMessage[] },
+  question: CopilotQuestion,
+  assistantMessage: string,
+): InterviewTurn {
+  const context = parseContext(session.structuredContext, session.initialGoalText);
+  return {
+    sessionId: session.id,
+    status: session.status,
+    assistantMessage,
+    question,
+    questionCount: session.questionCount,
+    estimatedTotal: questionBudget(session.initialGoalText).max,
+    context: toPlainObject(context),
+    provenance: describeProvenance(context),
+    canGenerate: session.status === 'READY_TO_GENERATE',
+    readiness: sessionReadiness(session),
+    revision: session.revision,
+  };
+}
+
 export async function startSession(userId: string, goalText: string): Promise<InterviewTurn> {
   const session = await prisma.copilotSession.create({
     data: {
@@ -507,6 +559,22 @@ export async function answerQuestion(
   const session = await loadSession(sessionId, userId);
   if (session.status !== 'INTERVIEWING' && session.status !== 'READY_TO_GENERATE') {
     throw badRequest('This session is no longer accepting answers', 'SESSION_CLOSED');
+  }
+
+  // Interruption support: a product-mechanics question typed where an interview
+  // answer is expected ("What happens if I miss one?") must not consume the
+  // turn and kill the interview. The deterministic classifier decides, the
+  // pending question is returned untouched, and the honest reply says real
+  // product answers are coming. Only PRODUCT_HELP interrupts — a status
+  // question is still a legitimate free-text answer.
+  const pending = pendingQuestion(session);
+  if (
+    !input.skipped &&
+    pending &&
+    typeof input.answer === 'string' &&
+    classifyIntentDeterministic(input.answer).intent === 'PRODUCT_HELP'
+  ) {
+    return interruptionTurn(session, pending, PRODUCT_HELP_STUB);
   }
 
   const answerText = input.skipped ? '(skipped)' : formatAnswer(input.answer);

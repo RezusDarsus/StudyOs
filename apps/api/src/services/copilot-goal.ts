@@ -1,6 +1,7 @@
 import { chatJson } from '../ai/client.js';
 import { PROMPT_VERSIONS, progressSystemPrompt } from '../ai/prompts.js';
 import { progressAnalysisSchema, type ProgressAnalysis } from '../ai/schemas.js';
+import { classifyIntentDeterministic, GOAL_HELP_STUB } from '../ai/intent-router.js';
 import { addDays } from '../domain/dates.js';
 import type { ProgressionAction } from '../domain/enums.js';
 import { completionRate } from '../domain/progression.js';
@@ -72,7 +73,7 @@ export interface GoalProgressSummary {
   }>;
 }
 
-export type GoalCopilotIntent = 'PROGRESS' | 'ADVICE' | 'ADJUSTMENT';
+export type GoalCopilotIntent = 'PROGRESS' | 'ADVICE' | 'ADJUSTMENT' | 'PRODUCT_HELP';
 
 export interface GoalCopilotHistoryEntry {
   role: 'user' | 'assistant';
@@ -325,6 +326,22 @@ async function recordProgressionProposals(
   return proposals;
 }
 
+/** A zeroed summary for the PRODUCT_HELP stub — no statistics are read, none invented. */
+function stubSummary(goal: { title: string; category: string }): GoalProgressSummary {
+  return {
+    goalTitle: goal.title,
+    category: goal.category,
+    periodDays: 14,
+    eligibleTaskOccurrences: 0,
+    completedTaskOccurrences: 0,
+    completionRate: 0,
+    currentStreak: 0,
+    bestStreak: 0,
+    mostMissedTasks: [],
+    schedule: [],
+  };
+}
+
 /**
  * Ask the Copilot about an existing goal.
  *
@@ -346,6 +363,19 @@ export async function askGoalCopilot(
   const historyText = history.map((entry) => entry.content).join('\n');
   const bookFollowUp = /\b(?:more|another|different|else)\b/i.test(message)
     && (/\b(?:books?|novels?)\b/i.test(historyText) || namedBookCount(historyText) > 0);
+  // Interruption: a product-mechanics question in goal chat gets the honest
+  // stub, not a model improvising statistics it was never given. No summary is
+  // computed, no tokens spent; the UI renders the explanation without the stat
+  // cards. Real product answers come in a later phase.
+  if (classifyIntentDeterministic(message).intent === 'PRODUCT_HELP') {
+    const { goal } = await loadGoalForUser(goalId, userId, 'participate');
+    return {
+      intent: 'PRODUCT_HELP',
+      summary: stubSummary(goal),
+      analysis: { explanation: GOAL_HELP_STUB, suggestions: [] },
+      progressionProposals: [],
+    };
+  }
   const intent = bookFollowUp ? 'ADVICE' : goalCopilotIntent(message);
   const summary = await buildProgressSummary(goalId, userId);
   const { goal, participant } = await loadGoalForUser(goalId, userId, 'participate');

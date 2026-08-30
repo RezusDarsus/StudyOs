@@ -1063,4 +1063,72 @@ describe('Copilot acceptance', () => {
     expect(forced.readiness.ready).toBe(false);
     expect(forced.missingDimensions).toContain('DESIRED_OUTCOME');
   });
+
+  it('asks one clarification instead of starting an interview for a question, and creates on confirmation', async () => {
+    const user = await h.createUser({ timezone: TZ });
+
+    // A product question must not become an interview. The classifier decides
+    // deterministically, so no model call is queued or spent here.
+    const routed = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
+      goal: 'What happens if I miss a day?',
+    });
+    expect(routed).toEqual({
+      routed: false,
+      intent: 'PRODUCT_HELP',
+      clarification: 'Do you want me to create a goal for this, or are you asking a question?',
+    });
+    expect(await prisma.copilotSession.count({ where: { userId: user.id } })).toBe(0);
+
+    // The user answers the clarification: the same words now start the session.
+    h.ai.queue(
+      'INTERVIEW',
+      asks({ id: 'days_per_week', type: 'NUMBER', prompt: 'How many days per week can you commit to?' }),
+    );
+    const started = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
+      goal: 'What happens if I miss a day?',
+      intentAnswer: 'goal',
+    });
+    expect(started.sessionId).toBeDefined();
+    expect(started.question.id).toBe('days_per_week');
+  });
+
+  it('answers a product-mechanics interruption without consuming the pending question', async () => {
+    const user = await h.createUser({ timezone: TZ });
+    const prompt = 'How many days per week can you commit to?';
+    h.ai.queue('INTERVIEW', asks({ id: 'days_per_week', type: 'NUMBER', prompt }));
+
+    const first = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
+      goal: 'I want to get fitter',
+    });
+
+    // The user types a product question where an answer is expected. The
+    // interview must keep its pending question — no model turn runs, nothing
+    // is recorded, and the count does not move.
+    const interrupted = await h.ok(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${first.sessionId}/answers`,
+      { questionId: 'days_per_week', answer: 'Wait — what happens if I miss one?' },
+    );
+    expect(interrupted.questionId ?? interrupted.question?.id).toBe('days_per_week');
+    expect(interrupted.question?.id).toBe('days_per_week');
+    expect(interrupted.questionCount).toBe(1);
+    expect(interrupted.assistantMessage).toContain('on the way');
+    expect(h.ai.countOf('INTERVIEW')).toBe(1);
+
+    // And the very next message can still be the real answer: one more model
+    // turn runs, the count moves, and the pending question is finally spent.
+    h.ai.queue(
+      'INTERVIEW',
+      ready('Nice — that is exactly what I needed.'),
+    );
+    const answered = await h.ok(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${first.sessionId}/answers`,
+      { questionId: 'days_per_week', answer: 4 },
+    );
+    expect(answered.questionCount).toBe(2);
+    expect(h.ai.countOf('INTERVIEW')).toBe(2);
+  });
 });

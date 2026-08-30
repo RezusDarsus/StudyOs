@@ -31,6 +31,10 @@ const question: CopilotQuestion = {
 // Reassigned by tests that need a different point in the interview; reset below.
 let turn: InterviewTurn;
 
+// What POST /copilot/goal-sessions answers. Defaults to a normal interview
+// turn; the routing tests swap in the structured "not a goal" response.
+let sessionResponse: unknown;
+
 const draft = {
   id: 'draft-1',
   sessionId: 'session-1',
@@ -50,6 +54,7 @@ const draft = {
 beforeEach(() => {
   calls = [];
   statusEnabled = true;
+  sessionResponse = undefined;
   turn = {
     sessionId: 'session-1',
     status: 'INTERVIEWING',
@@ -79,7 +84,7 @@ beforeEach(() => {
           : path === '/notifications'
             ? { unread: 0 }
             : path === '/copilot/goal-sessions'
-              ? turn
+              ? (method === 'POST' && sessionResponse !== undefined ? sessionResponse : turn)
               : path.endsWith('/generate')
                 ? { draft }
                 : {};
@@ -231,6 +236,53 @@ describe('the interview inside the widget', () => {
 
     expect(await screen.findByText('Setting up your plan')).toBeInTheDocument();
     expect(screen.queryByText(/of ~/)).toBeNull();
+  });
+});
+
+describe('routing a message that is not obviously a goal', () => {
+  const routed = {
+    routed: false,
+    intent: 'PRODUCT_HELP',
+    clarification: 'Do you want me to create a goal for this, or are you asking a question?',
+  };
+
+  it('shows the clarification with both quick actions instead of an interview', async () => {
+    sessionResponse = routed;
+    const user = renderWidget();
+    await send(user, 'What happens if I miss a day?');
+
+    expect(await screen.findByText(routed.clarification)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create a goal' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Ask a question' })).toBeInTheDocument();
+    // Nothing is pending to answer — no session exists behind the response.
+    expect(screen.queryByRole('button', { name: 'Weekdays' })).toBeNull();
+  });
+
+  it('re-posts the user’s words with intentAnswer goal on confirmation', async () => {
+    sessionResponse = routed;
+    const user = renderWidget();
+    await send(user, 'What happens if I miss a day?');
+    await screen.findByText(routed.clarification);
+
+    sessionResponse = undefined; // the re-post gets a normal interview turn
+    await user.click(screen.getByRole('button', { name: 'Create a goal' }));
+
+    expect(await screen.findByText('Got it. Which days suit you?')).toBeInTheDocument();
+    const starts = sessionStarts();
+    expect(starts).toHaveLength(2);
+    expect(starts[1].body).toEqual({ goal: 'What happens if I miss a day?', intentAnswer: 'goal' });
+  });
+
+  it('switches to the help view when the user says they asked a question', async () => {
+    sessionResponse = routed;
+    const user = renderWidget();
+    await send(user, 'What happens if I miss a day?');
+    await screen.findByText(routed.clarification);
+
+    await user.click(screen.getByRole('button', { name: 'Ask a question' }));
+
+    expect(screen.getByText('What I can do')).toBeInTheDocument();
+    expect(sessionStarts()).toHaveLength(1); // no second POST was made
   });
 });
 

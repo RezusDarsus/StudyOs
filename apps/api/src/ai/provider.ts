@@ -45,6 +45,7 @@ export const AI_PURPOSES = [
   'DRAFT_EDIT',
   'PROGRESS_ANALYSIS',
   'PREFERENCE_EXTRACTION',
+  'INTENT_CLASSIFICATION',
 ] as const;
 export type AiPurpose = (typeof AI_PURPOSES)[number];
 

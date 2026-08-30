@@ -9,6 +9,13 @@ import { badRequest, notFound, serviceUnavailable } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
 import { describeProvenance, parseContext, toPlainObject } from '../ai/context.js';
 import { questionBudget } from '../ai/interview-plan.js';
+import {
+  classifyIntent,
+  classifyIntentWithLlm,
+  INTENT_CLARIFICATION,
+  type CopilotIntent,
+  type CopilotIntentResult,
+} from '../ai/intent-router.js';
 import type { PlanReadiness } from '../ai/readiness.js';
 import {
   answerQuestion,
@@ -162,6 +169,29 @@ export function buildAssumptions(
   return assumptions;
 }
 
+/**
+ * The create view's routing decision, taken before any session exists.
+ *
+ * A high-confidence goal statement proceeds exactly as it always has. Anything
+ * else — a product question, a status question, gibberish — must not silently
+ * become an interview: the caller receives the routing decision plus the one
+ * clarification, and the user decides. `intentAnswer: 'goal'` is the user
+ * answering that clarification, and overrides the classifier entirely.
+ *
+ * The LLM fallback only fires when the deterministic rules return UNKNOWN, so
+ * the frozen benchmark's 100 goal statements never wait on a model call.
+ */
+export async function routeNewSessionRequest(
+  goal: string,
+  intentAnswer?: 'goal' | 'question',
+  llmFallback: (text: string) => Promise<CopilotIntentResult | null> = classifyIntentWithLlm,
+): Promise<{ create: true } | { create: false; intent: CopilotIntent; clarification: string }> {
+  if (intentAnswer === 'goal') return { create: true };
+  const decision = await classifyIntent(goal, {}, llmFallback);
+  if (decision.intent === 'CREATE_GOAL') return { create: true };
+  return { create: false, intent: decision.intent, clarification: INTENT_CLARIFICATION };
+}
+
 export default async function copilotRoutes(app: FastifyInstance) {
   app.get('/copilot/status', { preHandler: app.requireAuth }, async (req) => {
     return { enabled: isCopilotEnabled(), resumable: await resumableSessions(req.user!.id) };
@@ -170,9 +200,19 @@ export default async function copilotRoutes(app: FastifyInstance) {
   // ------------------------------------------------------------- interview
 
   app.post('/copilot/goal-sessions', { preHandler: app.requireAuth }, async (req) => {
-    const { goal } = z
-      .object({ goal: z.string().trim().min(3, 'Tell me a little more').max(2000) })
+    const { goal, intentAnswer } = z
+      .object({
+        goal: z.string().trim().min(3, 'Tell me a little more').max(2000),
+        // The user's answer to the routing clarification. Absent means undecided.
+        intentAnswer: z.enum(['goal', 'question']).optional(),
+      })
       .parse(req.body);
+    const routed = await routeNewSessionRequest(goal, intentAnswer);
+    if (!routed.create) {
+      // 200, not an error: the message was understood well enough to know that
+      // starting an interview is wrong. Nothing was created, nothing invented.
+      return { routed: false, intent: routed.intent, clarification: routed.clarification };
+    }
     try {
       return await startSession(req.user!.id, goal);
     } catch (err) {

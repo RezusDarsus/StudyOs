@@ -226,6 +226,66 @@ function WidgetHome({
   );
 }
 
+// ----------------------------------------------------------------- clarify
+
+/**
+ * The create view's response to "this is not obviously a goal".
+ *
+ * The server refused to start an interview and asked one question; here are
+ * the two answers. "Create a goal" re-posts the user's own words with the
+ * intent answer that forces the session; "Ask a question" hands the panel to
+ * the help view. Neither silently does both.
+ */
+function ClarificationCard({
+  clarification,
+  onConfirm,
+  onAskQuestion,
+}: {
+  clarification: { text: string; prompt: string };
+  onConfirm(prompt: string): void;
+  onAskQuestion(): void;
+}) {
+  const chip = {
+    background: '#f5f4ff',
+    border: '1px solid #e8e6f5',
+    color: '#6b688f',
+    fontSize: '0.75rem',
+    fontWeight: 600,
+    minHeight: 32,
+  } as const;
+  return (
+    <div className="px-4 py-4 flex flex-col gap-3">
+      {clarification.prompt && (
+        <div className="self-end" style={{ maxWidth: '86%' }}>
+          <div
+            className="px-3.5 py-2.5 rounded-2xl"
+            style={{
+              background: '#7c3aed',
+              color: '#fff',
+              fontSize: '0.88rem',
+              lineHeight: 1.55,
+              borderBottomRightRadius: 6,
+            }}
+          >
+            {clarification.prompt}
+          </div>
+        </div>
+      )}
+      <p style={{ fontSize: '0.88rem', color: '#4b4870', lineHeight: 1.6 }}>
+        {clarification.text}
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <button className="px-3 py-1.5 rounded-full" style={chip} onClick={() => onConfirm(clarification.prompt)}>
+          Create a goal
+        </button>
+        <button className="px-3 py-1.5 rounded-full" style={chip} onClick={onAskQuestion}>
+          Ask a question
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ----------------------------------------------------------------- help
 
 function HelpView() {
@@ -573,7 +633,16 @@ export default function CopilotWidget({
             className="flex-1 overflow-y-auto flex flex-col"
             style={{ background: '#fafaff', minHeight: 0 }}
           >
-            {interview.phase === 'DONE' && interview.draft ? (
+            {interview.clarification ? (
+              <ClarificationCard
+                clarification={interview.clarification}
+                onConfirm={(prompt) => void interview.begin(prompt, { intentAnswer: 'goal' })}
+                onAskQuestion={() => {
+                  interview.reset();
+                  onChangeTarget({ view: 'help' });
+                }}
+              />
+            ) : interview.phase === 'DONE' && interview.draft ? (
               <div className="px-4 py-4">
                 <DraftPreview draft={interview.draft} onOpenFull={openFullPlan} />
               </div>

@@ -11,6 +11,7 @@ export const PROMPT_VERSIONS = {
   edit: 'goal-edit-v1',
   progress: 'goal-coach-v6',
   preference: 'preference-extraction-v1',
+  intent: 'intent-classification-v1',
 } as const;
 
 /** Rules that apply to the Copilot no matter which prompt is running. */
@@ -497,7 +498,6 @@ Return JSON exactly of this shape:
 }
 
 // -------------------------------------------------------- preference extract
-
 export function preferenceSystemPrompt() {
   return `${SHARED_RULES}
 
@@ -531,4 +531,20 @@ Return JSON exactly of this shape:
 }
 
 Return an empty array if nothing durable was said.`;
+}
+
+// -------------------------------------------------------------- intent router
+
+export function intentSystemPrompt() {
+  return `You classify ONE user message for the Copilot of Goalify, a goal and habit tracking app.
+Pick exactly one intent:
+- CREATE_GOAL: the user wants to start or commit to a new goal, habit or plan ("I want to get fitter", "read 20 pages a day", "save for a trip").
+- MODIFY_GOAL: the user asks to change something they already have ("make it three days instead", "move my run to Friday").
+- GOAL_QUESTION: a question about their own goal, progress or schedule ("how am I doing?", "when is my next workout?", "I missed my workout yesterday").
+- PRODUCT_HELP: a question about how the app itself works (streaks, coins, achievements, premium, pricing, privacy, notifications, account).
+- GENERAL_QUESTION: greetings or general advice questions ("hi", "can you help me decide whether I should exercise more?").
+- UNKNOWN: anything else, gibberish, or when genuinely unsure.
+
+Answer with ONLY a JSON object: {"intent": "<one of the six>", "confidence": <number 0 to 1>}.
+Set confidence honestly: near 1 only for unambiguous phrasing, lower when the message could plausibly be two intents.`;
 }

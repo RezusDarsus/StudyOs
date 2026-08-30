@@ -545,6 +545,19 @@ export interface InterviewTurn {
 }
 
 /**
+ * The create view's answer when the text was not clearly a new goal.
+ *
+ * The server declines to start an interview and asks the one clarification;
+ * the widget offers "Create a goal" (re-post with intentAnswer 'goal') and
+ * "Ask a question" (switch to help). No session exists behind this response.
+ */
+export interface CopilotRoutedResponse {
+  routed: false;
+  intent: string;
+  clarification: string;
+}
+
+/**
  * A build-up the Copilot proposed on a draft task: walk 15 min, then 20, then 30.
  *
  * Nothing here exists as a real {@link Progression} yet — it becomes one, through
@@ -632,7 +645,9 @@ export interface CopilotProgressionProposal {
 }
 
 export interface GoalCopilotAnswer {
-  intent?: 'PROGRESS' | 'ADVICE' | 'ADJUSTMENT';
+  // PRODUCT_HELP marks the honest coming-soon stub: the explanation renders,
+  // the stat cards do not, because no statistics were read for it.
+  intent?: 'PROGRESS' | 'ADVICE' | 'ADJUSTMENT' | 'PRODUCT_HELP';
   summary: {
     goalTitle: string;
     periodDays: number;

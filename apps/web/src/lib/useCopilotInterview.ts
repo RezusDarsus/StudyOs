@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, api } from './api';
 import { describeCopilotError } from './copilot-errors';
-import type { CopilotQuestion, GoalDraft, InterviewTurn } from './types';
+import type { CopilotQuestion, CopilotRoutedResponse, GoalDraft, InterviewTurn } from './types';
 
 export interface Bubble {
   role: 'assistant' | 'user';
@@ -22,6 +22,17 @@ interface Options {
   onResumedDraft?(draftId: string): void;
   /** The session could not be rebuilt at all. */
   onResumeFailed?(): void;
+}
+
+/**
+ * The create view asked the server to route the opening message and was told
+ * "this is not obviously a goal". The widget shows the clarification with two
+ * quick actions; the raw text is kept so "Create a goal" can re-post it.
+ */
+export interface Clarification {
+  intent: string;
+  text: string;
+  prompt: string;
 }
 
 interface SessionSnapshot {
@@ -84,6 +95,7 @@ export function useCopilotInterview({
   const [busy, setBusy] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [draft, setDraft] = useState<GoalDraft | null>(null);
+  const [clarification, setClarification] = useState<Clarification | null>(null);
 
   // Latest values for the async callbacks below. Without these, a request that
   // started a render ago would answer using a stale session or question id.
@@ -112,6 +124,7 @@ export function useCopilotInterview({
     setDraft(null);
     setBusy(false);
     setGenerating(false);
+    setClarification(null);
   }, []);
 
   /**
@@ -168,18 +181,35 @@ export function useCopilotInterview({
   }, [resumeSessionId, adoptSnapshot]);
 
   const begin = useCallback(
-    async (raw: string) => {
+    async (raw: string, opts?: { intentAnswer?: 'goal' | 'question' }) => {
       const text = raw.trim();
-      if (text.length < 3) return;
+      if (text.length < 3) return null;
       setBusy(true);
+      setClarification(null);
       setBubbles([{ role: 'user', text }]);
       try {
-        const next = await api.post<InterviewTurn>('/copilot/goal-sessions', { goal: text });
+        // intentAnswer is only ever set by the clarification's "Create a goal"
+        // action — the user's explicit decision, which the server honours
+        // without consulting the classifier again.
+        const next = await api.post<InterviewTurn | CopilotRoutedResponse>(
+          '/copilot/goal-sessions',
+          opts?.intentAnswer ? { goal: text, intentAnswer: opts.intentAnswer } : { goal: text },
+        );
+        if ('routed' in next) {
+          // No session exists. The user bubble and the clarification stay on
+          // screen with the two quick actions; nothing else moves.
+          setClarification({ intent: next.intent, text: next.clarification, prompt: text });
+          setBubbles((prev) => [...prev, { role: 'assistant', text: next.clarification }]);
+          setPhase('OPENING');
+          return next;
+        }
         applyTurn(next);
+        return next;
       } catch (err) {
         setBubbles([]);
         setPhase('OPENING');
         handlers.current.onError(describeCopilotError(err));
+        return null;
       } finally {
         setBusy(false);
       }
@@ -295,6 +325,7 @@ export function useCopilotInterview({
     bubbles,
     turn,
     draft,
+    clarification,
     question: turn?.question ?? null,
     busy,
     generating,
