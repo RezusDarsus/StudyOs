@@ -42,6 +42,32 @@ const ready = (message = "That's everything I need.") => ({
 });
 
 describe('Copilot acceptance', () => {
+  it('shows the real prompt when a redundant model question is replaced', async () => {
+    const user = await h.createUser({ timezone: TZ });
+
+    h.ai.queue(
+      'INTERVIEW',
+      asks(
+        {
+          id: 'desired_outcome',
+          type: 'SINGLE_SELECT',
+          prompt: 'What result matters most right now?',
+          options: ['Lose weight', 'Build strength', 'Improve endurance'],
+        },
+        'One useful detail will help me tailor the plan.',
+      ),
+    );
+
+    const turn = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
+      goal: 'I want to lose weight and go to the gym and box',
+    });
+
+    expect(turn.question).not.toBeNull();
+    expect(turn.question.id).not.toBe('desired_outcome');
+    expect(turn.assistantMessage).toBe(turn.question.prompt);
+    expect(turn.assistantMessage).not.toBe('One useful detail will help me tailor the plan.');
+  });
+
   it('does not ask for a fitness outcome already stated in the opening message', async () => {
     const user = await h.createUser({ timezone: TZ });
 

@@ -255,23 +255,26 @@ async function runInterviewTurn(
     if (!(err instanceof AiProviderError) || !['BAD_RESPONSE', 'TIMEOUT'].includes(err.kind)) throw err;
     const priorTopics = askedTopics(session.messages);
     const sufficiency = assessPlanningSufficiency(session.initialGoalText, priorTopics);
-    result = sufficiency.enough
-      ? {
+    if (sufficiency.enough) {
+      result = {
           state: 'READY_TO_GENERATE',
           assistantMessage: "That's enough to build a conservative plan.",
           question: null,
           category: session.category as InterviewResponse['category'],
-        }
-      : {
+        };
+    } else {
+      const fallbackQuestion = essentialFallbackQuestion(
+        session.initialGoalText,
+        [...budget.stated, ...priorTopics],
+        sufficiency.highestImpactMissing,
+      );
+      result = {
           state: 'NEEDS_MORE_INFORMATION',
-          assistantMessage: 'One useful detail will help me tailor the plan.',
-          question: essentialFallbackQuestion(
-            session.initialGoalText,
-            [...budget.stated, ...priorTopics],
-            sufficiency.highestImpactMissing,
-          ),
+          assistantMessage: fallbackQuestion.prompt,
+          question: fallbackQuestion,
           category: session.category as InterviewResponse['category'],
         };
+    }
   }
   return { result, preferences };
 }
@@ -424,7 +427,7 @@ async function applyTurn(
   // question cap), so key this off the final question rather than one reason.
   const questionWasSuppressed = result.question !== null && question === null;
   const assistantMessage = fallbackQuestionInjected
-    ? 'I need a little more detail before I can make this plan genuinely useful.'
+    ? question?.prompt ?? 'I need a little more detail before I can make this plan genuinely useful.'
     : questionWasSuppressed && state === 'READY_TO_GENERATE'
     ? "That's everything I need."
     : result.assistantMessage;
