@@ -84,6 +84,10 @@ const BOOK_FALLBACKS = [
   ['Piranesi', 'Susanna Clarke', 'a short, imaginative mystery that is easy to return to'],
   ['Project Hail Mary', 'Andy Weir', 'a fast-moving science-fiction adventure with short, compelling chapters'],
   ['Born a Crime', 'Trevor Noah', 'an accessible and funny memoir built from engaging stories'],
+  ['Monster', 'Naoki Urasawa', 'a gripping manga thriller with a slow-burn story that is easy to commit to'],
+  ['Vinland Saga', 'Makoto Yukimura', 'an epic manga about growth and discipline with gorgeous art'],
+  ['Fullmetal Alchemist', 'Hiromu Arakawa', 'a complete manga adventure with a tight plot and steady pacing'],
+  ['Death Note', 'Tsugumi Ohba', 'a psychological manga that reads fast and hooks immediately'],
   ['Convenience Store Woman', 'Sayaka Murata', 'a concise, unusual novel that works well for restarting a reading habit'],
   ['The Thursday Murder Club', 'Richard Osman', 'a warm, approachable mystery with a lively cast'],
   ['Educated', 'Tara Westover', 'a gripping memoir about learning, change, and independence'],
@@ -92,10 +96,13 @@ const BOOK_FALLBACKS = [
   ['The House in the Cerulean Sea', 'TJ Klune', 'a hopeful fantasy with an easy-to-follow story'],
 ] as const;
 
+/** Reading material words, covering manga and other formats the user may name. */
+const READING_MATERIAL = /\b(?:books?|novels?|manga|manhwa|webtoons?|comics?|graphic\s+novels?|light\s+novels?|read\s+next|reading\s+recommendation)\b/i;
+
 function requestedBookCount(message: string) {
-  const digit = message.match(/\b([1-5])\s+(?:different\s+)?(?:books?|novels?)\b/i)?.[1];
+  const digit = message.match(/\b([1-5])\s+(?:different\s+)?(?:books?|novels?|manga|manhwa|comics?|webtoons?)\b/i)?.[1];
   if (digit) return Number(digit);
-  if (/\b(?:one|a single)\s+(?:book|novel)\b/i.test(message)) return 1;
+  if (/\b(?:one|a single)\s+(?:book|novel|manga|manhwa|comic|webtoon)\b/i.test(message)) return 1;
   if (/\banother\b/i.test(message)) return 1;
   return 3;
 }
@@ -104,10 +111,22 @@ function namedBookCount(text: string) {
   return text.match(/\bby\s+[\p{L}]/giu)?.length ?? 0;
 }
 
-function fallbackBookAnswer(history: GoalCopilotHistoryEntry[], count: number) {
+/** The medium the user asked about, so answers and prompts speak their words. */
+function readingMedium(message: string): string {
+  if (/\bmanga|manhwa\b/i.test(message)) return 'manga';
+  if (/\bwebtoons?\b/i.test(message)) return 'webtoons';
+  if (/\bcomics?\b/i.test(message)) return 'comics';
+  if (/\bgraphic\s+novels?\b/i.test(message)) return 'graphic novels';
+  if (/\blight\s+novels?\b/i.test(message)) return 'light novels';
+  return 'books';
+}
+
+function fallbackBookAnswer(history: GoalCopilotHistoryEntry[], count: number, medium: string) {
   const prior = history.map((entry) => entry.content).join(' ').toLocaleLowerCase();
-  const fresh = BOOK_FALLBACKS.filter(([title]) => !prior.includes(title.toLocaleLowerCase()));
-  const choices = [...fresh, ...BOOK_FALLBACKS.filter(([title]) => prior.includes(title.toLocaleLowerCase()))]
+  const pool = BOOK_FALLBACKS.filter(([, , note]) => medium === 'books' || note.includes(medium));
+  const usable = pool.length >= count ? pool : BOOK_FALLBACKS;
+  const fresh = usable.filter(([title]) => !prior.includes(title.toLocaleLowerCase()));
+  const choices = [...fresh, ...usable.filter(([title]) => prior.includes(title.toLocaleLowerCase()))]
     .slice(0, count);
   return choices
     .map(([title, author, reason]) => `"${title}" by ${author} — ${reason}.`)
@@ -122,7 +141,7 @@ export function goalCopilotIntent(message: string): GoalCopilotIntent {
   if (/\b(?:rest day|day off|change|adjust|reschedule|skip|remove|reduce|increase|shorten|extend|pause|resume|easier|harder|earlier|later)\b/i.test(message)) {
     return 'ADJUSTMENT';
   }
-  if (/\b(?:suggest|recommend|recommendation|idea|ideas|advice|choose|what|which|how can|how should|books?|novels?|read next|recipes?|courses?|podcasts?|techniques?|resources?)\b/i.test(message)) {
+  if (/\b(?:suggest|recommend|recommendation|idea|ideas|advice|choose|what|which|how can|how should|books?|novels?|manga|manhwa|webtoons?|comics?|graphic novels?|light novels?|read next|reading|recipes?|courses?|podcasts?|techniques?|resources?)\b/i.test(message)) {
     return 'ADVICE';
   }
   return 'PROGRESS';
@@ -361,8 +380,15 @@ export async function askGoalCopilot(
   progressionProposals: ProgressionProposal[];
 }> {
   const historyText = history.map((entry) => entry.content).join('\n');
-  const bookFollowUp = /\b(?:more|another|different|else)\b/i.test(message)
-    && (/\b(?:books?|novels?)\b/i.test(historyText) || namedBookCount(historyText) > 0);
+  const lastAssistant = [...history].reverse().find((entry) => entry.role === 'assistant');
+  const lastWasAdvice = !!lastAssistant && namedBookCount(lastAssistant.content) > 0;
+  // A thin continuation ("maybe some manga name", "another one") after a
+  // recommendation turn is still that recommendation thread, not a stats question.
+  const continuationStart = /\b(?:more|another|different|else|other|similar|also|instead|name|names|one)\b/i.test(message)
+    || /^maybe\b/i.test(message);
+  const bookFollowUp = (READING_MATERIAL.test(message) || READING_MATERIAL.test(historyText))
+    && (/\b(?:more|another|different|else|other|similar|instead)\b/i.test(message) || continuationStart)
+    && (lastWasAdvice || READING_MATERIAL.test(message) || READING_MATERIAL.test(historyText));
   // Interruption: a product-mechanics question in goal chat gets the honest
   // stub, not a model improvising statistics it was never given. No summary is
   // computed, no tokens spent; the UI renders the explanation without the stat
@@ -376,7 +402,9 @@ export async function askGoalCopilot(
       progressionProposals: [],
     };
   }
-  const intent = bookFollowUp ? 'ADVICE' : goalCopilotIntent(message);
+  const thinContinuation = lastWasAdvice && continuationStart
+    && !/\b(?:how am i doing|progress|streak|completion|behind|miss(?:ed|ing)|done)\b/i.test(message);
+  const intent = bookFollowUp || thinContinuation ? 'ADVICE' : goalCopilotIntent(message);
   const summary = await buildProgressSummary(goalId, userId);
   const { goal, participant } = await loadGoalForUser(goalId, userId, 'participate');
   const preferences = await getPreferencesForPrompt(userId, goal.category);
@@ -418,20 +446,22 @@ Request type: ${intent}`;
   // A vague "pick a novel" is not a recommendation. Repair once. The deterministic
   // list is only a last-resort provider-failure fallback; normal answers come from
   // the model and use the person's request, preferences and recent conversation.
-  const asksForBook = /\b(?:books?|novels?|read next|reading recommendation)\b/i.test(message)
-    || bookFollowUp;
+  const asksForBook = READING_MATERIAL.test(message) || bookFollowUp;
   const bookCount = requestedBookCount(message);
+  const medium = readingMedium(message) === 'books' && READING_MATERIAL.test(historyText) && !READING_MATERIAL.test(message)
+    ? readingMedium(historyText.split('"').slice(-2)[0] ?? '')
+    : readingMedium(message);
   if (intent === 'ADVICE' && asksForBook && namedBookCount(analysis.explanation) < bookCount) {
     analysis = await analyze(`${userPrompt}
 
 Your previous answer did not provide enough concrete choices. Recommend ${bookCount}
-actual ${bookCount === 1 ? 'book' : 'books from different authors'}, each using the exact form
+actual ${bookCount === 1 ? medium : `${medium} from different authors`}, each using the exact form
 "Title" by Author followed by one short reason. Use the request and preferences above.
 Do not repeat a title from the recent conversation.`);
     if (namedBookCount(analysis.explanation) < bookCount) {
       analysis = {
         ...analysis,
-        explanation: fallbackBookAnswer(history, bookCount),
+        explanation: fallbackBookAnswer(history, bookCount, medium),
       };
     }
   }
