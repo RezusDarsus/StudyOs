@@ -40,8 +40,10 @@ export default function GoalAnswer({
         </p>
       </div>
 
-      {/* The numbers come from the app, not the model. */}
-      <div className="grid grid-cols-3 gap-2 mt-4">
+      {/* Advice and adjustment answers should not be buried under the same progress
+       * cards every turn. Older API responses have no intent, so retain their
+       * original display during a rolling deployment. */}
+      {(!result.intent || result.intent === 'PROGRESS') && <div className="grid grid-cols-3 gap-2 mt-4">
         {[
           {
             label: `Last ${result.summary.periodDays} days`,
@@ -71,7 +73,7 @@ export default function GoalAnswer({
             <div style={{ fontSize: '0.65rem', color: '#8b88b0', marginTop: 2 }}>{stat.label}</div>
           </div>
         ))}
-      </div>
+      </div>}
 
       {result.analysis.suggestions.length > 0 && (
         <div className="mt-4">

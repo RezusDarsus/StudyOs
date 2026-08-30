@@ -96,6 +96,33 @@ describe('Copilot acceptance', () => {
     expect(readyTurn.assistantMessage).not.toContain('Which days');
   });
 
+  it('answers a goal-related recommendation instead of repeating empty progress', async () => {
+    const user = await h.createUser({ timezone: TZ });
+    const { goal } = await h.ok(user, 'POST', '/api/goals', {
+      title: 'Read More Books',
+      category: 'READING',
+      targetType: 'HABIT',
+      tasks: [{
+        title: 'Read',
+        recurrenceType: 'TIMES_PER_WEEK',
+        recurrenceConfig: { timesPerWeek: 3 },
+      }],
+    });
+
+    h.ai.respond('PROGRESS_ANALYSIS', {
+      explanation: 'Try The Hobbit by J.R.R. Tolkien: it is approachable, fast-moving, and a good book for restarting a reading habit.',
+      suggestions: [],
+    });
+
+    const answer = await h.ok(user, 'POST', `/api/goals/${goal.id}/copilot`, {
+      message: 'which book u can suggest',
+    });
+
+    expect(answer.intent).toBe('ADVICE');
+    expect(answer.analysis.explanation).toContain('The Hobbit');
+    expect(h.ai.promptsFor('PROGRESS_ANALYSIS', 'user')).toContain('Request type: ADVICE');
+  });
+
   // ------------------------------------------------------------------- PART 48
 
   it('PART 48 — a goal built in the widget is an ordinary goal', async () => {

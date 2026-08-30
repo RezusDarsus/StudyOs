@@ -72,6 +72,22 @@ export interface GoalProgressSummary {
   }>;
 }
 
+export type GoalCopilotIntent = 'PROGRESS' | 'ADVICE' | 'ADJUSTMENT';
+
+/** Route the message without asking the model to infer what job it was given. */
+export function goalCopilotIntent(message: string): GoalCopilotIntent {
+  if (/\b(?:how am i doing|progress|streak|completion|on track|falling behind|miss(?:ed|ing))\b/i.test(message)) {
+    return 'PROGRESS';
+  }
+  if (/\b(?:rest day|day off|change|adjust|reschedule|skip|remove|reduce|increase|shorten|extend|pause|resume|easier|harder|earlier|later)\b/i.test(message)) {
+    return 'ADJUSTMENT';
+  }
+  if (/\b(?:suggest|recommend|recommendation|idea|ideas|advice|choose|what|which|how can|how should)\b/i.test(message)) {
+    return 'ADVICE';
+  }
+  return 'PROGRESS';
+}
+
 export async function buildProgressSummary(
   goalId: string,
   userId: string,
@@ -282,10 +298,12 @@ export async function askGoalCopilot(
   userId: string,
   message: string,
 ): Promise<{
+  intent: GoalCopilotIntent;
   summary: GoalProgressSummary;
   analysis: ProgressAnalysis;
   progressionProposals: ProgressionProposal[];
 }> {
+  const intent = goalCopilotIntent(message);
   const summary = await buildProgressSummary(goalId, userId);
   const { goal, participant } = await loadGoalForUser(goalId, userId, 'participate');
   const preferences = await getPreferencesForPrompt(userId, goal.category);
@@ -310,7 +328,9 @@ What this person prefers:
 ${preferences.map((p) => `- ${p.key}: ${p.value}`).join('\n') || '(nothing on file)'}
 
 They ask:
-"${message}"`,
+"${message}"
+
+Request type: ${intent}`,
         },
       ],
     },
@@ -320,5 +340,5 @@ They ask:
   await recordEvent({ userId, type: 'GOAL_COPILOT_ASKED', meta: { goalId } });
 
   const progressionProposals = await recordProgressionProposals(goalId, participant!.id, analysis);
-  return { summary, analysis, progressionProposals };
+  return { intent, summary, analysis, progressionProposals };
 }

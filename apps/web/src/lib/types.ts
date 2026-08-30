@@ -632,6 +632,7 @@ export interface CopilotProgressionProposal {
 }
 
 export interface GoalCopilotAnswer {
+  intent?: 'PROGRESS' | 'ADVICE' | 'ADJUSTMENT';
   summary: {
     goalTitle: string;
     periodDays: number;
