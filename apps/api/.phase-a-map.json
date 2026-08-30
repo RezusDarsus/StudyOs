@@ -1,0 +1,218 @@
+{
+  "_meta": {
+    "repo": "C:\\Users\\rezus\\Desktop\\website",
+    "date": "2026-08-30",
+    "phase": "A final audit",
+    "method": "native read-only audit by AutoCoder (subagent model quota exhausted)",
+    "evidenceDiscipline": "every finding is CONFIRMED BUG / CONFIRMED GAP / ALREADY CORRECT / NOT REPRODUCED / DEFERRED, with file:line evidence"
+  },
+  "findings": [
+    {
+      "id": "A1",
+      "area": "auth",
+      "title": "Session cookie config",
+      "status": "ALREADY CORRECT",
+      "evidence": "routes/auth.ts:85-92 COOKIE_OPTIONS = httpOnly:true, sameSite:'lax', path:'/', secure:NODE_ENV==='production', maxAge:30d; server.ts registers @fastify/cookie; config-audit.ts:137-142 actively audits the production-secure-over-http footgun",
+      "residualRisk": "An expired 30-day session is deleted lazily and returns 401 while the UI still looks logged in (lib/auth.ts resolveSession). Spec item 12 symptom class. NOT REPRODUCED as a bug; synthetic-driver timing remains a candidate (spec item 54). Phase E: add auth observability events + frontend 401 recovery, no rewrite."
+    },
+    {
+      "id": "A2",
+      "area": "auth",
+      "title": "No auth/session events + no frontend 401 recovery flow",
+      "status": "CONFIRMED GAP",
+      "evidence": "No auth.* events anywhere in src (grep); copilot-errors.ts maps 401 to generic text only; api.ts has no 401-specific handling",
+      "fixPhase": "E (instrument + recovery), per spec items 12, 13, 47"
+    },
+    {
+      "id": "A3",
+      "area": "timezone",
+      "title": "IANA timezone storage",
+      "status": "ALREADY CORRECT",
+      "evidence": "schema.prisma:61-62 User.timezone IANA String @default('UTC'); Goal.timezone per goal (schema:136-138); domain/dates.ts uses Intl.DateTimeFormat with timeZone; notifications tested per-user local clock (daily-notifications.test.ts:71-72)"
+    },
+    {
+      "id": "A4",
+      "area": "timezone",
+      "title": "UTC fallback paths in Copilot logic",
+      "status": "CONFIRMED GAP",
+      "evidence": "two non-test call sites use todayIn('UTC') instead of the user's timezone: services/copilot-session.ts:346 (frequency-conflict first-question parse) and ai/feasibility.ts:95 (deadline window check)",
+      "impact": "low-severity: both only compare relative day differences for 'short window' logic and 'N days vs allowed days'; a user near midnight with a 'by <date>' phrase could get a 1-day-off verdict",
+      "fixPhase": "F (pass user timezone into both; tests)"
+    },
+    {
+      "id": "A5",
+      "area": "timezone",
+      "title": "DST transition tests",
+      "status": "CONFIRMED GAP",
+      "evidence": "daily-notifications.test.ts covers midnight wrap + tz windows, but no test crosses a DST boundary",
+      "fixPhase": "F"
+    },
+    {
+      "id": "A6",
+      "area": "timezone",
+      "title": "All scheduling day-boundaries use goal/user timezone",
+      "status": "ALREADY CORRECT",
+      "evidence": "every scheduling route computes today via goalToday(goal) (goals.ts, tasks.ts, misc.ts, social.ts, progression.ts, adjustments.ts, copilot-goal.ts); grep shows zero scheduling uses of server-local new Date() for day strings",
+      "note": "new Date() is only used for timestamps (createdAt etc.), which is correct"
+    },
+    {
+      "id": "A7",
+      "area": "occurrences",
+      "title": "Streak/rest-day semantics",
+      "status": "ALREADY CORRECT",
+      "evidence": "domain/scoring.ts computeStreak: day.percent===null (nothing required) is neutral and skipped in both current and best streak walks; 'Tue REST, Mon/Wed complete' keeps the streak. Historical progress is derived from the completions list, never erased."
+    },
+    {
+      "id": "A8",
+      "area": "occurrences",
+      "title": "MISSED status never persisted",
+      "status": "CONFIRMED GAP",
+      "evidence": "OCCURRENCE_STATUS includes 'MISSED' (enums.ts:39) but grep found zero code writing status:'MISSED'; overdue occurrences simply remain PENDING and are scored as unsatisfied by date math",
+      "impact": "no hook for missed-task recovery UX, adaptive catch-up, or occurrence.missed events (spec items 17, 20, 25, 47)",
+      "fixPhase": "G"
+    },
+    {
+      "id": "A9",
+      "area": "occurrences",
+      "title": "No RESCHEDULED status / move-to-day flow",
+      "status": "CONFIRMED GAP",
+      "evidence": "tasks.ts:209 only SKIPPED; no endpoint moves an occurrence to another day; spec items 19, 21-23 have no implementation",
+      "fixPhase": "G (deterministic reschedule service + user-approved proposals)"
+    },
+    {
+      "id": "A10",
+      "area": "occurrences",
+      "title": "Difficulty-derived adaptation exists",
+      "status": "ALREADY CORRECT (partial vs spec)",
+      "evidence": "services/adjustments.ts + domain/adjustment.ts build TOO_EASY/TOO_HARD offers from ratings + ladders; applied only through existing progression endpoints the user approves (no silent AI mutation) - matches spec item 24/23",
+      "missing": "missed-task-driven rebalance proposals (spec item 25) - part of A8/A9 work"
+    },
+    {
+      "id": "A11",
+      "area": "rewards",
+      "title": "Completion -> coins -> achievements chain",
+      "status": "ALREADY CORRECT with a transaction-safety gap",
+      "evidence": "routes/tasks.ts complete(): occurrence->COMPLETED, grantReward (RewardTransaction with taskOccurrenceId @unique -> idempotent), computeStreak persisted, evaluateAchievements -> unlockAchievement pre-checks @@unique(userId, achievementId)",
+      "gap": "the occurrence update, reward grant, streak write, and achievement unlock are separate statements, not one prisma.$transaction - a crash between them can desync coins/occurrence (spec item 37 wants one authoritative event)",
+      "fixPhase": "I (wrap in a transaction or event-outbox; add item-39 first-completion regression test)"
+    },
+    {
+      "id": "A12",
+      "area": "copilot",
+      "title": "Intent routing",
+      "status": "CONFIRMED GAP",
+      "evidence": "no classifier exists; the widget routes only by view buttons (create/goal/help); any text typed in 'create' becomes initialGoalText of an interview (CopilotWidget -> useCopilotInterview.startInterview)",
+      "fixPhase": "B (spec items 1-5, 49)"
+    },
+    {
+      "id": "A13",
+      "area": "copilot",
+      "title": "Interview answer interception",
+      "status": "ALREADY CORRECT (by construction)",
+      "evidence": "answers go through the answers endpoint bound to a question id, not through a free-text router; interruption support is new work in Phase B",
+      "fixPhase": "B (interruption answering while keeping the pending question)"
+    },
+    {
+      "id": "A14",
+      "area": "copilot",
+      "title": "Session survives refresh",
+      "status": "CONFIRMED GAP",
+      "evidence": "server state is authoritative and resumable via GET /copilot/goal-sessions/:id (snapshot includes pending question when INTERVIEWING), and useCopilotInterview(resumeSessionId) exists - but NOBODY persists the active sessionId client-side; a hard refresh loses it and the widget starts a NEW session on the next 'create' (duplicate-session risk)",
+      "fixPhase": "C (persist active session id, restore on reopen; spec items 6, 7)"
+    },
+    {
+      "id": "A15",
+      "area": "copilot",
+      "title": "Generation state machine / idempotent build / no infinite spinner",
+      "status": "CONFIRMED GAP",
+      "evidence": "the session row's GENERATING status is the only in-flight marker; no PlanGenerationState entity, no idempotency key, api.ts has NO fetch timeout, CopilotWidget 'Building your plan...' has no slow-generation fallback (spec items 8-11)",
+      "fixPhase": "D"
+    },
+    {
+      "id": "A16",
+      "area": "copilot",
+      "title": "Stale goal context indicator",
+      "status": "CONFIRMED GAP",
+      "evidence": "CopilotProvider.target persists while the modal stays open across route changes (pathname does not reset target); no 'Discussing: <goal>' label, no clear-context button (spec items 35, 36)",
+      "fixPhase": "H"
+    },
+    {
+      "id": "A17",
+      "area": "frontend",
+      "title": "Deterministic loading/error/empty states",
+      "status": "ALREADY CORRECT (useAsync surfaces)",
+      "evidence": "components/ui.tsx useAsync always terminates (finally clears loading, error state on catch); all pages listing data (MyGoals, Dashboard, Discover, Friends, Leaderboard, Rewards, Profile, GoalDetail, DraftReview, JoinByCode, CreateGoalChoice) consume it with Skeleton/ErrorState(retry)/EmptyState",
+      "residual": "action-button handlers (GoalManage, ProgressionPanel, ShareGoalModal, TaskRow, AiMemoryPanel forget actions) do local try/catch toasts - no infinite-skeleton class found; Phase H does a final pass with the ViewState contract for non-useAsync fetchers"
+    },
+    {
+      "id": "A18",
+      "area": "frontend",
+      "title": "Category -> icon/emoji mapping",
+      "status": "CONFIRMED BUG (manual path) + GAP (validation of AI path)",
+      "evidence": "web/src/pages/CreateGoal.tsx:71 defaults category to 'FITNESS' and the category selector is on the form; a user who skips the selector gets Fitness (weightlifter emoji, types.ts CATEGORY_EMOJI) for 'Read Books'. The Copilot path is protected differently: ai/category.ts classifyGoalText is deterministic (verified: 'Read books' -> READING @1.0) and overrides the model's guess at copilot-draft.ts:323-325; goalDraftSchema validates category against GOAL_CATEGORY (z.enum, schemas.ts:177), so an out-of-enum model category cannot persist - but nothing forces a neutral fallback when BOTH the model and the text guess fail, since GOAL_CATEGORY has no null and draft.category is required",
+      "fix": "H: default manual form to 'OTHER' (or infer from title), ensure the Copilot draft falls back to 'OTHER' when confidence is low instead of trusting the model"
+    },
+    {
+      "id": "A19",
+      "area": "frontend",
+      "title": "Disabled primary actions without explanation",
+      "status": "CONFIRMED BUG (mild)",
+      "evidence": "ProgressionPanel.tsx:657 'Add progression' disabled when !valid (targets empty/not climbing) with only opacity dimming, no inline message; spec item 33 wants a reason",
+      "fix": "H (inline validation text like 'Enter increasing stage targets first')"
+    },
+    {
+      "id": "A20",
+      "area": "frontend",
+      "title": "Dropdown styling/overlap",
+      "status": "NOT REPRODUCED (code) - DEFERRED to visual QA",
+      "evidence": "index.css:165-189 styles native selects (focus ring, option colors); native <select> popups are browser-rendered and cannot overlap the header the way custom popovers can; three selects exist (GoalManage:98, ProgressionPanel:546, CreateGoal:568) - all native",
+      "fix": "H visual pass (spec item 45) will confirm on mobile widths"
+    },
+    {
+      "id": "A21",
+      "area": "copilot",
+      "title": "Suppressed-question dead end (found during audit)",
+      "status": "CONFIRMED BUG - FIXED during Phase A",
+      "evidence": "copilot-session.ts applyTurn keyed the 'That's everything I need.' fallback to the redundancy reason only; other suppression reasons left a question message with no answer input. Fixed in commit 8fd6763 (keyed off the final question) + acceptance test; suite green after fix"
+    },
+    {
+      "id": "A22",
+      "area": "copilot",
+      "title": "Frequency-conflict widget dead end",
+      "status": "CONFIRMED BUG - FIXED earlier today",
+      "evidence": "commit 89fe379: FREQUENCY_CONFLICT released the session to READY_TO_GENERATE so the widget showed 'Build my plan' over an unanswered stored question; now releases to INTERVIEWING and the web hook adopts the snapshot"
+    },
+    {
+      "id": "A23",
+      "area": "events",
+      "title": "Structured events for Copilot/scheduling",
+      "status": "CONFIRMED GAP",
+      "evidence": "CopilotEvent model exists with SESSION_STARTED/QUESTION_ANSWERED/DRAFT_GENERATED; no auth.* events, no occurrence.missed/rescheduled, no plan.rebalance.*",
+      "fixPhase": "E (auth), G (scheduling); copilot events extended in B/C/D"
+    },
+    {
+      "id": "A24",
+      "area": "copilot",
+      "title": "Frozen-100 fixture + baseline preserved",
+      "status": "ALREADY CORRECT",
+      "evidence": "fixture SHA a2481d4139fd8998012177d7d160f31e3e25d8842460e2db4b7bf6bff767a7d5 unchanged across all work; baseline report untouched; benchmark artifacts in benchmark-results/; runner supports --resume/--cases for later completion of the paused Round-1 run"
+    }
+  ],
+  "verificationAtAuditTime": {
+    "apiTests": "552 passed / 0 failed (27 files)",
+    "webTests": "103 passed / 0 failed (9 files)",
+    "apiAcceptance": "19 passed + 1 skipped (4 files)",
+    "typecheck": "api exit 0, web exit 0",
+    "fixtureSha256": "a2481d4139fd8998012177d7d160f31e3e25d8842460e2db4b7bf6bff767a7d5 (unchanged)"
+  },
+  "phaseRouting": {
+    "B": ["A12 intent routing", "A13 interruption support"],
+    "C": ["A14 session persistence client-side"],
+    "D": ["A15 generation state machine + idempotency + slow-generation UX"],
+    "E": ["A1 residual: 401 recovery + observability", "A2 auth events", "A23 auth events"],
+    "F": ["A4 UTC fallback paths", "A5 DST tests"],
+    "G": ["A8 MISSED transitions", "A9 reschedule service + proposals", "A10 missed-driven rebalance", "A23 scheduling events"],
+    "H": ["A16 context indicator", "A18 category defaults", "A19 disabled-reason text", "A20 visual QA", "A17 final ViewState pass"],
+    "I": ["A11 transaction wrapping + first-task regression test"]
+  }
+}
