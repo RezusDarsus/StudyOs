@@ -26,6 +26,8 @@ export function describeCopilotError(err: unknown): string {
       return 'Copilot is busy right now. Your answers are saved — try again in a moment.';
     case 'DRAFT_INVALID':
       return "Copilot couldn't create a valid plan from this attempt. Try generating again.";
+    case 'RECOMMENDATIONS_INVALID':
+      return "Copilot couldn't format its recommendations just now. Try again.";
     case 'COPILOT_DISABLED':
       return 'The Copilot is not configured on this server. You can still create goals manually.';
     default:

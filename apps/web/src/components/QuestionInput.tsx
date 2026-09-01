@@ -37,12 +37,12 @@ export default function QuestionInput({
   const shell = compact ? 'p-3' : 'card shadow-card p-4';
 
   const chip = (active: boolean) => ({
-    background: active ? '#f0ebff' : '#fff',
-    border: `1.5px solid ${active ? '#7c3aed' : '#e8e6f5'}`,
-    color: active ? '#7c3aed' : '#4b4870',
-    fontWeight: 600,
+    background: active ? 'var(--surface-3)' : 'var(--surface)',
+    border: `1px solid ${active ? 'var(--accent)' : 'var(--hairline)'}`,
+    color: active ? 'var(--text)' : 'var(--text-body)',
+    fontWeight: 500,
     fontSize: compact ? '0.8rem' : '0.85rem',
-    fontFamily: 'Plus Jakarta Sans, sans-serif',
+    fontFamily: 'var(--font-sans)',
     minHeight: 44,
   });
 

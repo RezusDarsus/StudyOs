@@ -57,10 +57,10 @@ export default function Notifications() {
       <div className="flex items-baseline justify-between gap-3 mb-6">
         <h1
           style={{
-            fontFamily: 'Plus Jakarta Sans',
-            fontWeight: 800,
+            fontFamily: 'var(--font-sans)',
+            fontWeight: 600,
             fontSize: 'clamp(1.4rem, 2.5vw, 1.75rem)',
-            color: '#1a1635',
+            color: 'var(--text)',
             letterSpacing: '-0.02em',
           }}
         >
@@ -70,11 +70,11 @@ export default function Notifications() {
             colour-blind reader guessing, and "offline" would overstate a missing socket. */}
         <span
           className="flex items-center gap-1.5 flex-shrink-0"
-          style={{ fontSize: '0.72rem', color: '#8b88b0' }}
+          style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}
         >
           <span
             className="rounded-full"
-            style={{ width: 6, height: 6, background: live ? '#22c55e' : '#c9c6e0' }}
+            style={{ width: 6, height: 6, background: live ? 'var(--green)' : 'var(--text-faint)' }}
             aria-hidden="true"
           />
           {live ? 'Live' : 'Updates on refresh'}
@@ -83,8 +83,8 @@ export default function Notifications() {
 
       {loading ? (
         <div className="flex flex-col gap-2">
-          <Skeleton height={68} radius={16} />
-          <Skeleton height={68} radius={16} />
+          <Skeleton height={68} radius={10} />
+          <Skeleton height={68} radius={10} />
         </div>
       ) : error ? (
         <ErrorState message={error} onRetry={reload} />
@@ -96,8 +96,8 @@ export default function Notifications() {
               <div
                 className="card shadow-card flex items-start gap-3 p-4"
                 style={{
-                  background: isNew ? '#fdfcff' : '#fff',
-                  borderColor: isNew ? '#ddd0ff' : '#e8e6f5',
+                  background: isNew ? 'var(--surface-2)' : 'var(--surface)',
+                  borderColor: isNew ? 'var(--hairline-strong)' : 'var(--hairline)',
                 }}
               >
                 <span style={{ fontSize: 18, flexShrink: 0, marginTop: 1 }} aria-hidden="true">
@@ -107,24 +107,24 @@ export default function Notifications() {
                   <div
                     style={{
                       fontSize: '0.88rem',
-                      color: '#1a1635',
-                      fontWeight: isNew ? 700 : 500,
-                      fontFamily: 'Plus Jakarta Sans',
+                      color: 'var(--text)',
+                      fontWeight: isNew ? 500 : 400,
+                      fontFamily: 'var(--font-sans)',
                     }}
                   >
                     {n.title}
                   </div>
                   {n.body && (
-                    <div style={{ fontSize: '0.8rem', color: '#6b688f', marginTop: 2 }}>{n.body}</div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-body)', marginTop: 2 }}>{n.body}</div>
                   )}
-                  <div style={{ fontSize: '0.72rem', color: '#b8b5d5', marginTop: 3 }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-faint)', marginTop: 3 }}>
                     {timeAgo(n.createdAt)}
                   </div>
                 </div>
                 {isNew && (
                   <span
                     className="rounded-full flex-shrink-0"
-                    style={{ width: 8, height: 8, background: '#7c3aed', marginTop: 6 }}
+                    style={{ width: 8, height: 8, background: 'var(--accent)', marginTop: 6 }}
                     aria-label="Unread"
                   />
                 )}
@@ -187,13 +187,13 @@ function NotificationSettings() {
     <section>
       <h2
         className="mb-1"
-        style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '1rem', color: '#1a1635' }}
+        style={{ fontFamily: 'var(--font-sans)', fontWeight: 500, fontSize: '1rem', color: 'var(--text)' }}
       >
         Notification settings
       </h2>
       {/* The times below are wall-clock in this timezone, so say which one it is: 08:00 means
           something different depending on the answer, and the user picked it on their profile. */}
-      <p style={{ fontSize: '0.78rem', color: '#8b88b0', marginBottom: 12 }}>
+      <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: 12 }}>
         Daily times are in {user.timezone}.
       </p>
       <div className="card shadow-card p-2">
@@ -203,7 +203,7 @@ function NotificationSettings() {
           const on = user.notifications[key];
           return (
             <div key={key} className="flex items-center justify-between gap-3 px-3 py-3">
-              <span style={{ fontSize: '0.88rem', color: '#1a1635' }}>{label}</span>
+              <span style={{ fontSize: '0.88rem', color: 'var(--text)' }}>{label}</span>
               <div className="flex items-center gap-3">
                 {time && <TimeField timeKey={time} label={label} enabled={on} onSave={save} />}
                 <button
@@ -215,7 +215,7 @@ function NotificationSettings() {
                   style={{
                     width: 44,
                     height: 26,
-                    background: on ? 'linear-gradient(135deg, #7c3aed, #6d28d9)' : '#ede9f8',
+                    background: on ? 'var(--accent)' : 'var(--surface-3)',
                     transition: 'background .18s',
                   }}
                 >
@@ -226,9 +226,8 @@ function NotificationSettings() {
                       height: 20,
                       top: 3,
                       left: on ? 21 : 3,
-                      background: '#fff',
+                      background: on ? 'var(--accent-ink)' : 'var(--text)',
                       transition: 'left .18s',
-                      boxShadow: '0 1px 3px rgba(0,0,0,.2)',
                     }}
                   />
                 </button>

@@ -12,6 +12,7 @@
 //  * Every change writes a ProgressionDecision with the evidence attached.
 
 import type { Goal, ProgressionPlan, ProgressionStage } from '@prisma/client';
+import type { DbClient } from '../capabilities/types.js';
 import { type DayString, addDays, todayIn } from '../domain/dates.js';
 import {
   authorizeAction,
@@ -68,12 +69,15 @@ export interface CreatePlanInput {
  * Attach a progression ladder to an existing task. The task keeps working exactly
  * as it did — this only adds a target to each day.
  */
-export async function createProgressionPlan(input: CreatePlanInput): Promise<PlanWithStages> {
+export async function createProgressionPlan(
+  input: CreatePlanInput,
+  client: DbClient = prisma,
+): Promise<PlanWithStages> {
   if (!PROGRESSION_METRIC.includes(input.metricType as ProgressionMetric)) {
     throw badRequest(`Unknown progression metric "${input.metricType}"`);
   }
 
-  const task = await prisma.taskDefinition.findUnique({
+  const task = await client.taskDefinition.findUnique({
     where: { id: input.taskDefinitionId },
     include: { goal: true, progression: true },
   });
@@ -96,7 +100,7 @@ export async function createProgressionPlan(input: CreatePlanInput): Promise<Pla
 
   const today = todayIn(task.goal.timezone);
 
-  const plan = await prisma.progressionPlan.create({
+  const plan = await client.progressionPlan.create({
     data: {
       taskDefinitionId: task.id,
       metricType: input.metricType,
@@ -262,7 +266,10 @@ export interface ApplyDecisionInput {
  * allowed to make their own goals harder, and refusing that would be paternalistic.
  * It is still recorded as source=USER with the real numbers attached.
  */
-export async function applyDecision(input: ApplyDecisionInput): Promise<{
+export async function applyDecision(
+  input: ApplyDecisionInput,
+  client: DbClient = prisma,
+): Promise<{
   plan: PlanWithStages;
   applied: boolean;
   verdict: ProgressionVerdict;
@@ -272,7 +279,7 @@ export async function applyDecision(input: ApplyDecisionInput): Promise<{
     throw badRequest(`Unknown decision source "${input.source}"`);
   }
 
-  const plan = await prisma.progressionPlan.findUnique({
+  const plan = await client.progressionPlan.findUnique({
     where: { id: input.planId },
     include: { stages: true, taskDefinition: { include: { goal: true } } },
   });
@@ -294,7 +301,7 @@ export async function applyDecision(input: ApplyDecisionInput): Promise<{
 
   const today = todayIn(goal.timezone);
 
-  const decision = await prisma.progressionDecision.create({
+  const decision = await client.progressionDecision.create({
     data: {
       planId: plan.id,
       action: input.action,
@@ -317,7 +324,7 @@ export async function applyDecision(input: ApplyDecisionInput): Promise<{
     return { plan, applied: false, verdict, reason: decision.reason };
   }
 
-  const updated = await prisma.progressionPlan.update({
+  const updated = await client.progressionPlan.update({
     where: { id: plan.id },
     data: {
       currentStageIndex: target,

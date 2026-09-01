@@ -107,8 +107,8 @@ function ProgressionBody({
   if (loading) {
     return (
       <div className="flex flex-col gap-3">
-        <Skeleton height={80} radius={14} />
-        <Skeleton height={140} radius={14} />
+        <Skeleton height={80} radius={10} />
+        <Skeleton height={140} radius={10} />
       </div>
     );
   }
@@ -119,7 +119,7 @@ function ProgressionBody({
     return isOwner ? (
       <CreatePlanForm taskId={taskId} onCreated={afterChange} />
     ) : (
-      <p style={{ fontSize: '0.88rem', color: '#6b688f', lineHeight: 1.6 }}>
+      <p style={{ fontSize: '0.88rem', color: 'var(--text-body)', lineHeight: 1.6 }}>
         This task has no progression — it asks for the same thing every time.
       </p>
     );
@@ -153,11 +153,11 @@ function StageLadder({ plan }: { plan: Progression }) {
       <div className="flex items-center justify-between mb-3">
         <h3
           className="flex items-center gap-2"
-          style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '0.95rem', color: '#1a1635' }}
+          style={{ fontFamily: 'var(--font-sans)', fontWeight: 500, fontSize: '0.95rem', color: 'var(--text)' }}
         >
-          <TrendingUp size={15} style={{ color: '#7c3aed' }} /> {plan.stageLabel}
+          <TrendingUp size={15} style={{ color: 'var(--text-muted)' }} /> {plan.stageLabel}
         </h3>
-        <span style={{ fontSize: '0.75rem', color: '#8b88b0' }}>
+        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
           since {shortDay(plan.stageStartedOn)}
         </span>
       </div>
@@ -176,19 +176,19 @@ function StageLadder({ plan }: { plan: Progression }) {
                   style={{
                     width: 22,
                     height: 22,
-                    background: current ? 'linear-gradient(135deg, #7c3aed, #6d28d9)' : done ? '#f0ebff' : '#fff',
-                    border: current ? 'none' : `1.5px solid ${done ? '#ddd0ff' : '#e8e6f5'}`,
-                    color: current ? '#fff' : done ? '#7c3aed' : '#b8b5d5',
+                    background: current ? 'var(--accent)' : done ? 'var(--surface-3)' : 'var(--surface)',
+                    border: current ? 'none' : `1px solid ${done ? 'var(--hairline-strong)' : 'var(--hairline)'}`,
+                    color: current ? 'var(--accent-ink)' : done ? 'var(--text)' : 'var(--text-faint)',
                     fontSize: 11,
-                    fontWeight: 800,
+                    fontWeight: 600,
                   }}
                   aria-hidden="true"
                 >
                   {/* A glyph, not just a tint: ✓ done, ● current, ○ still to come. */}
-                  {done ? '✓' : current ? <Circle size={8} fill="#fff" strokeWidth={0} /> : '○'}
+                  {done ? '✓' : current ? <Circle size={8} fill="var(--accent-ink)" strokeWidth={0} /> : '○'}
                 </span>
                 {!last && (
-                  <span style={{ width: 2, flex: 1, minHeight: 18, background: done ? '#ddd0ff' : '#eeecf8' }} />
+                  <span style={{ width: 2, flex: 1, minHeight: 18, background: done ? 'var(--hairline-strong)' : 'var(--hairline)' }} />
                 )}
               </div>
 
@@ -196,24 +196,24 @@ function StageLadder({ plan }: { plan: Progression }) {
                 <div className="flex items-baseline gap-2 flex-wrap">
                   <span
                     style={{
-                      fontFamily: 'Plus Jakarta Sans',
-                      fontWeight: current ? 800 : 600,
+                      fontFamily: 'var(--font-sans)',
+                      fontWeight: current ? 600 : 500,
                       fontSize: current ? '0.95rem' : '0.88rem',
-                      color: current ? '#7c3aed' : done ? '#6b688f' : '#8b88b0',
+                      color: current ? 'var(--text)' : done ? 'var(--text-body)' : 'var(--text-muted)',
                     }}
                   >
                     {formatTarget(stage.target, plan)}
                   </span>
                   {current && <Badge tone="primary">Now</Badge>}
                   {done && (
-                    <span style={{ fontSize: '0.72rem', color: '#b8b5d5' }}>Done</span>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-faint)' }}>Done</span>
                   )}
                 </div>
                 {stage.label && (
-                  <div style={{ fontSize: '0.75rem', color: '#b8b5d5', marginTop: 1 }}>{stage.label}</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-faint)', marginTop: 1 }}>{stage.label}</div>
                 )}
                 {!done && (
-                  <div style={{ fontSize: '0.72rem', color: '#b8b5d5', marginTop: 1 }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-faint)', marginTop: 1 }}>
                     at least {stage.minDays} {stage.minDays === 1 ? 'day' : 'days'}
                   </div>
                 )}
@@ -289,28 +289,28 @@ function ReviewCard({
       : 'No finished days at this stage yet';
 
   return (
-    <div className="rounded-2xl p-4" style={{ background: '#fdfcff', border: '1px solid #e8e6f5' }}>
+    <div className="rounded-2xl p-4" style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}>
       <div className="flex items-center justify-between mb-2">
-        <span style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '0.85rem', color: '#1a1635' }}>
+        <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 500, fontSize: '0.85rem', color: 'var(--text)' }}>
           How it's going
         </span>
-        <span style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 800, fontSize: '1rem', color: '#7c3aed' }}>
+        <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 600, fontSize: '1rem', color: 'var(--text)' }}>
           {review.completionRate}%
         </span>
       </div>
 
       <ProgressBar value={review.completionRate} height={6} />
 
-      <p className="mt-2" style={{ fontSize: '0.75rem', color: '#8b88b0' }}>
+      <p className="mt-2" style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
         {judged} · {plan.advanceThreshold}% needed to step up
       </p>
 
-      <p className="mt-3" style={{ fontSize: '0.85rem', color: '#1a1635', lineHeight: 1.55 }}>
+      <p className="mt-3" style={{ fontSize: '0.85rem', color: 'var(--text)', lineHeight: 1.55 }}>
         {review.reason}
       </p>
 
       {!isOwner ? (
-        <p className="mt-3" style={{ fontSize: '0.78rem', color: '#8b88b0', lineHeight: 1.55 }}>
+        <p className="mt-3" style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.55 }}>
           The goal owner sets the pace for everyone, so only they can change the stage. These numbers
           are your own.
         </p>
@@ -377,7 +377,7 @@ function ReviewCard({
                 onClick={() => setOverrideOpen((v) => !v)}
                 aria-expanded={overrideOpen}
                 className="flex items-center gap-1.5"
-                style={{ fontSize: '0.78rem', fontWeight: 600, color: '#8b88b0' }}
+                style={{ fontSize: '0.78rem', fontWeight: 500, color: 'var(--text-muted)' }}
               >
                 <ChevronDown
                   size={13}
@@ -389,7 +389,7 @@ function ReviewCard({
               {overrideOpen && (
                 <div
                   className="mt-2 rounded-xl p-3 flex flex-col gap-2"
-                  style={{ background: '#fff', border: '1px solid #e8e6f5' }}
+                  style={{ background: 'var(--surface)', border: '1px solid var(--hairline)' }}
                 >
                   {canReduce && (
                     <button
@@ -410,14 +410,14 @@ function ReviewCard({
                         <Plus size={14} /> {actionLabel('ADVANCE', plan)}
                       </button>
                       {review.action !== 'ADVANCE' && review.action !== 'ASK_USER' && (
-                        <p style={{ fontSize: '0.72rem', color: '#8b88b0', lineHeight: 1.5 }}>
+                        <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
                           Stepping up now goes against the review above. It will be recorded as your
                           choice, with today's numbers next to it.
                         </p>
                       )}
                     </>
                   )}
-                  <p style={{ fontSize: '0.72rem', color: '#8b88b0', lineHeight: 1.5 }}>
+                  <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
                     Either way, days already past keep the target they asked for.
                   </p>
                 </div>
@@ -442,7 +442,7 @@ function HistoryList({ plan, history }: { plan: Progression; history: Progressio
     <div>
       <h3
         className="mb-2.5"
-        style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '0.9rem', color: '#1a1635' }}
+        style={{ fontFamily: 'var(--font-sans)', fontWeight: 500, fontSize: '0.9rem', color: 'var(--text)' }}
       >
         Changes
       </h3>
@@ -454,11 +454,11 @@ function HistoryList({ plan, history }: { plan: Progression; history: Progressio
             <div
               key={d.id}
               className="rounded-xl px-3.5 py-2.5"
-              style={{ background: '#fdfcff', border: '1px solid #e8e6f5' }}
+              style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}
             >
               <div className="flex items-center gap-2 flex-wrap">
                 <span
-                  style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '0.8rem', color: '#1a1635' }}
+                  style={{ fontFamily: 'var(--font-sans)', fontWeight: 500, fontSize: '0.8rem', color: 'var(--text)' }}
                 >
                   {d.applied && from && to
                     ? `${formatTarget(from.target, plan)} → ${formatTarget(to.target, plan)}`
@@ -471,10 +471,10 @@ function HistoryList({ plan, history }: { plan: Progression; history: Progressio
                 {d.source === 'COPILOT' && <Badge tone="primary">Copilot</Badge>}
                 {d.source === 'USER' && <Badge tone="neutral">Your choice</Badge>}
               </div>
-              <p className="mt-1" style={{ fontSize: '0.75rem', color: '#6b688f', lineHeight: 1.5 }}>
+              <p className="mt-1" style={{ fontSize: '0.75rem', color: 'var(--text-body)', lineHeight: 1.5 }}>
                 {d.reason}
               </p>
-              <p className="mt-1" style={{ fontSize: '0.7rem', color: '#b8b5d5' }}>
+              <p className="mt-1" style={{ fontSize: '0.7rem', color: 'var(--text-faint)' }}>
                 {shortDay(d.createdAt.slice(0, 10))} · {d.completedCount}/{d.eligibleCount} days ·{' '}
                 {d.completionRate}%
               </p>
@@ -486,7 +486,7 @@ function HistoryList({ plan, history }: { plan: Progression; history: Progressio
         <button
           onClick={() => setExpanded((v) => !v)}
           className="mt-2"
-          style={{ fontSize: '0.78rem', fontWeight: 600, color: '#7c3aed' }}
+          style={{ fontSize: '0.78rem', fontWeight: 500, color: 'var(--text)' }}
         >
           {expanded ? 'Show less' : `Show all ${history.length}`}
         </button>
@@ -535,14 +535,14 @@ function CreatePlanForm({ taskId, onCreated }: { taskId: string; onCreated: () =
 
   return (
     <div className="flex flex-col gap-4">
-      <p style={{ fontSize: '0.85rem', color: '#6b688f', lineHeight: 1.6 }}>
+      <p style={{ fontSize: '0.85rem', color: 'var(--text-body)', lineHeight: 1.6 }}>
         Make this task get harder on purpose — walk 15 minutes, then 20, then 25. It stays the same
         task, with the same reward and streak; only the target moves, and only when the numbers say
         you're ready.
       </p>
 
       <label className="flex flex-col gap-1.5">
-        <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#6b688f' }}>What's growing</span>
+        <span style={{ fontSize: '0.78rem', fontWeight: 500, color: 'var(--text-body)' }}>What's growing</span>
         <select
           className="w-full px-4 py-3 text-sm"
           value={metricType}
@@ -557,8 +557,8 @@ function CreatePlanForm({ taskId, onCreated }: { taskId: string; onCreated: () =
       </label>
 
       <label className="flex flex-col gap-1.5">
-        <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#6b688f' }}>
-          Unit shown next to the number <span style={{ fontWeight: 500 }}>(optional)</span>
+        <span style={{ fontSize: '0.78rem', fontWeight: 500, color: 'var(--text-body)' }}>
+          Unit shown next to the number <span style={{ fontWeight: 400 }}>(optional)</span>
         </span>
         <input
           className="w-full px-4 py-3 text-sm"
@@ -570,7 +570,7 @@ function CreatePlanForm({ taskId, onCreated }: { taskId: string; onCreated: () =
       </label>
 
       <div className="flex flex-col gap-2">
-        <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#6b688f' }}>
+        <span style={{ fontSize: '0.78rem', fontWeight: 500, color: 'var(--text-body)' }}>
           The stages, easiest first
         </span>
         {targets.map((value, i) => (
@@ -580,10 +580,10 @@ function CreatePlanForm({ taskId, onCreated }: { taskId: string; onCreated: () =
               style={{
                 width: 22,
                 height: 22,
-                background: '#f0ebff',
-                color: '#7c3aed',
+                background: 'var(--surface-3)',
+                color: 'var(--text)',
                 fontSize: 11,
-                fontWeight: 800,
+                fontWeight: 600,
               }}
             >
               {i + 1}
@@ -604,7 +604,7 @@ function CreatePlanForm({ taskId, onCreated }: { taskId: string; onCreated: () =
                 onClick={() => setTargets(targets.filter((_, index) => index !== i))}
                 aria-label={`Remove stage ${i + 1}`}
                 className="flex items-center justify-center rounded-lg flex-shrink-0"
-                style={{ width: 34, height: 34, color: '#8b88b0', border: '1px solid #e8e6f5' }}
+                style={{ width: 34, height: 34, color: 'var(--text-muted)', border: '1px solid var(--hairline)' }}
               >
                 <Minus size={14} />
               </button>
@@ -616,10 +616,10 @@ function CreatePlanForm({ taskId, onCreated }: { taskId: string; onCreated: () =
             onClick={() => setTargets([...targets, ''])}
             className="py-2.5 rounded-xl flex items-center justify-center gap-2"
             style={{
-              border: '1.5px dashed #ddd0ff',
-              background: '#fdfcff',
-              color: '#8b88b0',
-              fontWeight: 700,
+              border: '1px dashed var(--hairline-strong)',
+              background: 'var(--surface-2)',
+              color: 'var(--text-muted)',
+              fontWeight: 500,
               fontSize: '0.82rem',
             }}
           >
@@ -627,14 +627,14 @@ function CreatePlanForm({ taskId, onCreated }: { taskId: string; onCreated: () =
           </button>
         )}
         {!climbing && filled && (
-          <p style={{ fontSize: '0.75rem', color: '#c8253c' }}>
+          <p style={{ fontSize: '0.75rem', color: 'var(--red)' }}>
             Each stage has to ask for more than the one before it.
           </p>
         )}
       </div>
 
       <label className="flex flex-col gap-1.5">
-        <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#6b688f' }}>
+        <span style={{ fontSize: '0.78rem', fontWeight: 500, color: 'var(--text-body)' }}>
           Hold each stage for at least
         </span>
         <div className="flex items-center gap-2">
@@ -647,7 +647,7 @@ function CreatePlanForm({ taskId, onCreated }: { taskId: string; onCreated: () =
             value={minDays}
             onChange={(e) => setMinDays(Math.max(1, Math.min(90, Number(e.target.value) || 1)))}
           />
-          <span style={{ fontSize: '0.85rem', color: '#6b688f' }}>days</span>
+          <span style={{ fontSize: '0.85rem', color: 'var(--text-body)' }}>days</span>
         </div>
       </label>
 
@@ -694,7 +694,7 @@ function RemovePlan({ taskId, onRemoved }: { taskId: string; onRemoved: () => vo
       onClick={remove}
       disabled={busy}
       className="self-start"
-      style={{ fontSize: '0.78rem', fontWeight: 600, color: '#c8253c' }}
+      style={{ fontSize: '0.78rem', fontWeight: 500, color: 'var(--red)' }}
     >
       {busy ? 'Removing…' : 'Remove progression'}
     </button>

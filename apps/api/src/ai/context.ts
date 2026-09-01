@@ -15,6 +15,8 @@
 // ("actually, I meant swimming") replaces the earlier answer rather than being
 // rejected as a duplicate.
 
+import type { RequirementState } from './requirements/types.js';
+
 export const CONTEXT_SOURCES = [
   'CURRENT_USER_ANSWER',
   'CURRENT_USER_MESSAGE',
@@ -63,9 +65,16 @@ export interface CopilotContext {
    */
   goalIntent: string;
   entries: Record<string, ContextEntry>;
+  /**
+   * Stage 5 (structuredContext v3): the requirement AST payload. Optional —
+   * contexts without one serialize exactly as v2. Present or absent, it is
+   * carried through parse -> mutate -> serialize untouched, which is what
+   * lets v2-only consumers keep working on v3 payloads unchanged.
+   */
+  requirements?: RequirementState;
 }
 
-export const RESERVED_KEYS = ['goalIntent', 'answers', 'version', 'entries'];
+export const RESERVED_KEYS = ['goalIntent', 'answers', 'version', 'entries', 'requirements'];
 
 export function createContext(goalIntent: string): CopilotContext {
   return { version: 2, goalIntent: goalIntent.trim(), entries: {} };
@@ -75,6 +84,10 @@ export function createContext(goalIntent: string): CopilotContext {
  * Read whatever is stored, including contexts written before provenance existed.
  * Older flat blobs are treated as session inferences, which is the weakest
  * plausible claim about where they came from.
+ *
+ * structuredContext v3 (Stage 5) is the same shape plus a `requirements`
+ * payload; it parses into the same context view with the AST attached, so
+ * v2-only consumers keep working on v3 payloads unchanged.
  */
 export function parseContext(raw: string, goalIntent: string): CopilotContext {
   let parsed: unknown;
@@ -86,11 +99,16 @@ export function parseContext(raw: string, goalIntent: string): CopilotContext {
   if (!parsed || typeof parsed !== 'object') return createContext(goalIntent);
 
   const candidate = parsed as Partial<CopilotContext> & Record<string, unknown>;
-  if (candidate.version === 2 && candidate.entries) {
+  if (
+    (candidate.version === 2 || candidate.version === 3) &&
+    candidate.entries &&
+    typeof candidate.entries === 'object'
+  ) {
     return {
       version: 2,
       goalIntent: candidate.goalIntent || goalIntent,
       entries: candidate.entries as Record<string, ContextEntry>,
+      requirements: (candidate.requirements as RequirementState | undefined) ?? undefined,
     };
   }
 
@@ -104,8 +122,41 @@ export function parseContext(raw: string, goalIntent: string): CopilotContext {
   return migrated;
 }
 
+/**
+ * Serialize the context. When a requirement AST payload is attached the
+ * payload is structuredContext v3 ({version: 3, goalIntent, entries,
+ * requirements}); without one the output is byte-identical to v2.
+ */
 export function serializeContext(context: CopilotContext): string {
-  return JSON.stringify(context);
+  if (context.requirements !== undefined) {
+    return JSON.stringify({
+      version: 3,
+      goalIntent: context.goalIntent,
+      entries: context.entries,
+      requirements: context.requirements,
+    });
+  }
+  return JSON.stringify({ version: 2, goalIntent: context.goalIntent, entries: context.entries });
+}
+
+/** The requirement AST payload of a stored context (empty when absent). */
+export function parseRequirementState(raw: string): RequirementState {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw || '{}');
+  } catch {
+    return { records: [], groups: [] };
+  }
+  const candidate = parsed as { requirements?: RequirementState };
+  if (
+    candidate.requirements &&
+    typeof candidate.requirements === 'object' &&
+    Array.isArray(candidate.requirements.records) &&
+    Array.isArray(candidate.requirements.groups)
+  ) {
+    return candidate.requirements;
+  }
+  return { records: [], groups: [] };
 }
 
 /**

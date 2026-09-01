@@ -77,15 +77,8 @@ export default function JoinByCode() {
   return (
     <div
       className="min-h-screen flex items-center justify-center px-4 py-10"
-      style={{ background: '#f5f4ff' }}
+      style={{ background: 'var(--bg)' }}
     >
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          background: 'radial-gradient(ellipse at 50% 0%, rgba(124,58,237,0.08) 0%, transparent 60%)',
-        }}
-      />
-
       <div className="w-full max-w-md relative">
         <Link to="/" className="flex items-center justify-center gap-2.5 mb-7">
           <div
@@ -93,14 +86,13 @@ export default function JoinByCode() {
             style={{
               width: 36,
               height: 36,
-              background: 'linear-gradient(135deg, #7c3aed, #6d28d9)',
-              boxShadow: '0 4px 12px rgba(124,58,237,0.35)',
+              background: 'var(--accent)',
             }}
           >
-            <Zap size={18} fill="white" color="white" />
+            <Zap size={18} fill="var(--accent-ink)" color="var(--accent-ink)" />
           </div>
           <span
-            style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 800, fontSize: '1.1rem', color: '#1a1635' }}
+            style={{ fontFamily: 'var(--font-sans)', fontWeight: 600, fontSize: '1.1rem', color: 'var(--text)' }}
           >
             One Up
           </span>
@@ -110,7 +102,7 @@ export default function JoinByCode() {
           <div className="card shadow-card-lg p-6 flex flex-col gap-3">
             <Skeleton height={28} width="70%" />
             <Skeleton height={60} />
-            <Skeleton height={44} radius={12} />
+            <Skeleton height={44} radius={10} />
           </div>
         ) : error ? (
           <>
@@ -125,10 +117,10 @@ export default function JoinByCode() {
           <div className="card shadow-card-lg p-6">
             <p
               className="text-center mb-5"
-              style={{ fontSize: '0.85rem', color: '#8b88b0' }}
+              style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}
             >
               <span aria-hidden="true">{data.goal.ownerAvatar}</span>{' '}
-              <strong style={{ color: '#1a1635', fontFamily: 'Plus Jakarta Sans' }}>
+              <strong style={{ color: 'var(--text)', fontFamily: 'var(--font-sans)' }}>
                 {data.goal.ownerName}
               </strong>{' '}
               invited you to join
@@ -141,8 +133,8 @@ export default function JoinByCode() {
                   width: 52,
                   height: 52,
                   fontSize: 24,
-                  background: '#f0ebff',
-                  border: '1px solid #ddd0ff',
+                  background: 'var(--surface-3)',
+                  border: '1px solid var(--hairline-strong)',
                 }}
                 aria-hidden="true"
               >
@@ -151,44 +143,44 @@ export default function JoinByCode() {
               <div className="min-w-0">
                 <h1
                   style={{
-                    fontFamily: 'Plus Jakarta Sans',
-                    fontWeight: 800,
+                    fontFamily: 'var(--font-sans)',
+                    fontWeight: 600,
                     fontSize: '1.35rem',
-                    color: '#1a1635',
+                    color: 'var(--text)',
                     letterSpacing: '-0.02em',
                     lineHeight: 1.25,
                   }}
                 >
                   {data.goal.title}
                 </h1>
-                <div style={{ fontSize: '0.78rem', color: '#8b88b0', marginTop: 3 }}>
+                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: 3 }}>
                   {CATEGORY_LABEL[data.goal.category]}
                 </div>
               </div>
             </div>
 
             {data.goal.description && (
-              <p className="mb-4" style={{ fontSize: '0.88rem', color: '#6b688f', lineHeight: 1.6 }}>
+              <p className="mb-4" style={{ fontSize: '0.88rem', color: 'var(--text-body)', lineHeight: 1.6 }}>
                 {data.goal.description}
               </p>
             )}
 
             <div
               className="flex items-center gap-4 mb-5 px-3.5 py-3 rounded-xl flex-wrap"
-              style={{ background: '#f5f4ff', border: '1px solid #e8e6f5' }}
+              style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}
             >
               <span
                 className="flex items-center gap-1.5"
-                style={{ fontSize: '0.8rem', color: '#4b4870', fontWeight: 600 }}
+                style={{ fontSize: '0.8rem', color: 'var(--text-body)', fontWeight: 500 }}
               >
                 <Users size={14} /> {data.goal.participantCount}{' '}
                 {data.goal.participantCount === 1 ? 'person' : 'people'}
               </span>
-              <span style={{ fontSize: '0.8rem', color: '#4b4870', fontWeight: 600 }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-body)', fontWeight: 500 }}>
                 {data.goal.taskCount} {data.goal.taskCount === 1 ? 'task' : 'tasks'}
               </span>
               {data.goal.deadline && (
-                <span style={{ fontSize: '0.8rem', color: '#4b4870', fontWeight: 600 }}>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-body)', fontWeight: 500 }}>
                   until {data.goal.deadline}
                 </span>
               )}
@@ -213,12 +205,12 @@ export default function JoinByCode() {
             )}
 
             {!user && (
-              <p className="text-center mt-4" style={{ fontSize: '0.8rem', color: '#8b88b0' }}>
+              <p className="text-center mt-4" style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                 Already have an account?{' '}
                 <Link
                   to="/login"
                   onClick={() => sessionStorage.setItem(PENDING_KEY, code)}
-                  style={{ color: '#7c3aed', fontWeight: 700, fontFamily: 'Plus Jakarta Sans' }}
+                  style={{ color: 'var(--text)', fontWeight: 500, fontFamily: 'var(--font-sans)' }}
                 >
                   Log in
                 </Link>
@@ -248,15 +240,15 @@ export function EnterCodeCard() {
       <div className="flex-1">
         <div
           style={{
-            fontFamily: 'Plus Jakarta Sans',
-            fontWeight: 700,
+            fontFamily: 'var(--font-sans)',
+            fontWeight: 500,
             fontSize: '0.9rem',
-            color: '#1a1635',
+            color: 'var(--text)',
           }}
         >
           Have an invite code?
         </div>
-        <div style={{ fontSize: '0.78rem', color: '#8b88b0', marginTop: 2 }}>
+        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: 2 }}>
           Enter it to join a friend's goal.
         </div>
       </div>
@@ -270,9 +262,9 @@ export function EnterCodeCard() {
           className="px-3.5 py-2.5 text-sm"
           style={{
             width: 150,
-            letterSpacing: '0.14em',
-            fontFamily: 'Plus Jakarta Sans',
-            fontWeight: 700,
+            letterSpacing: '0.12em',
+            fontFamily: 'var(--font-mono)',
+            fontWeight: 400,
             textTransform: 'uppercase',
           }}
         />

@@ -1,388 +1,337 @@
-import { ArrowRight, Check, Target, Trophy, Users, Zap } from 'lucide-react';
+import {
+  ArrowRight,
+  Check,
+  CheckCircle2,
+  ChevronRight,
+  Clock3,
+  LockKeyhole,
+  Monitor,
+  RefreshCw,
+  Route,
+  ShieldCheck,
+  Smartphone,
+  Sparkles,
+  Tablet,
+  Users,
+} from 'lucide-react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { UpMarker } from '../components/ui';
+import ProductFilm from '../components/ProductFilm';
 
-const STEPS = [
-  {
-    icon: Target,
-    title: 'Create a goal',
-    body: 'Name what you want to achieve and break it into small recurring tasks.',
-  },
-  {
-    icon: Check,
-    title: 'Do it daily',
-    body: "Your tasks show up when they're scheduled. Tick them off and build a streak.",
-  },
-  {
-    icon: Users,
-    title: 'Bring friends',
-    body: 'Invite friends or join a public challenge, and compare progress as you go.',
-  },
-];
+function UpMark({ size = 36, light = false }: { size?: number; light?: boolean }) {
+  return <UpMarker size={size} inverse={light} />;
+}
 
-const FEATURES = [
-  { emoji: '🔥', title: 'Streaks that make sense', body: 'Rest days never break your streak.' },
-  { emoji: '🏆', title: 'Two leaderboards', body: 'Who is best today, and who is most consistent.' },
-  { emoji: '🔒', title: 'Private by default', body: 'Share a goal only when you want to.' },
-  { emoji: '🪙', title: 'Rewards worth chasing', body: 'Earn coins and unlock achievements.' },
+function PulseNode({ label, tone = 'tide' }: { label: string; tone?: 'tide' | 'leaf' | 'persimmon' }) {
+  return (
+    <span className={`landing-pulse landing-pulse--${tone}`} aria-label={label}>
+      <span aria-hidden="true" />
+    </span>
+  );
+}
+
+function SectionIntro({
+  eyebrow,
+  title,
+  body,
+  align = 'left',
+}: {
+  eyebrow: string;
+  title: string;
+  body: string;
+  align?: 'left' | 'center';
+}) {
+  return (
+    <div className={`landing-section-intro landing-section-intro--${align}`}>
+      <p className="landing-eyebrow">{eyebrow}</p>
+      <h2>{title}</h2>
+      <p className="landing-section-copy">{body}</p>
+    </div>
+  );
+}
+
+function ProductChrome({ label, status }: { label: string; status: string }) {
+  return (
+    <div className="landing-product-chrome">
+      <span><UpMark size={24} />{label}</span>
+      <span className="landing-chrome-status"><i />{status}</span>
+    </div>
+  );
+}
+
+function PlanningScene() {
+  return (
+    <div className="landing-planning-scene">
+      <div className="landing-interview">
+        <div className="landing-scene-kicker"><Sparkles size={16} /> Coach interview</div>
+        <div className="landing-chat landing-chat--coach">What usually gets in the way?</div>
+        <div className="landing-chat landing-chat--user">I schedule workouts that are too ambitious for busy days.</div>
+        <div className="landing-choice-list" aria-label="Planning priorities">
+          <span className="landing-choice landing-choice--active"><Check size={13} /> Make it easy to restart</span>
+          <span className="landing-choice">Prefer weekday mornings</span>
+          <span className="landing-choice">Keep weekends flexible</span>
+        </div>
+      </div>
+      <div className="landing-planning-trail" aria-hidden="true"><i /><i /><i /><i /></div>
+      <div className="landing-plan-ladder">
+        <div className="landing-scene-kicker"><Route size={16} /> Plan logic</div>
+        {[
+          ['01', 'Start below your limit', '12 min · easy'],
+          ['02', 'Repeat before adding', '3 sessions'],
+          ['03', 'Increase one variable', '+2 min'],
+        ].map(([step, title, meta], index) => (
+          <div className="landing-ladder-step" key={step}>
+            <span className="mono">{step}</span>
+            <div><strong>{title}</strong><small>{meta}</small></div>
+            {index === 0 ? <span className="landing-reason">Because consistency is the goal</span> : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DailyLoopScene() {
+  const days = [
+    ['Ask', 'How is today?', '01'],
+    ['Act', '12 min easy', '02'],
+    ['Confirm', 'Done at 8:14', '03'],
+    ['Adapt', 'Next: 14 min', '04'],
+  ];
+  return (
+    <div className="landing-daily-scene">
+      <ProductChrome label="Build the rhythm" status="Synced just now" />
+      <div className="landing-day-header">
+        <div><span className="landing-mini-label">TUESDAY · WEEK 1</span><h3>One useful action, then move on.</h3></div>
+        <div className="landing-daily-progress"><span className="mono">1 of 3</span><span className="landing-progress-track"><i /></span></div>
+      </div>
+      <div className="landing-day-strip">
+        {days.map(([title, detail, step], index) => (
+          <div className={`landing-day-step${index === 2 ? ' landing-day-step--complete' : ''}`} key={title}>
+            <div className="landing-day-node">{index === 2 ? <Check size={16} strokeWidth={3} /> : <span className="mono">{step}</span>}</div>
+            <strong>{title}</strong><small>{detail}</small>
+          </div>
+        ))}
+      </div>
+      <div className="landing-daily-note"><RefreshCw size={16} /><span><strong>Plan adjusted quietly.</strong> Thursday changed from 16 to 14 minutes after today’s effort.</span></div>
+    </div>
+  );
+}
+
+
+function ContinuityScene() {
+  const [complete, setComplete] = useState(false);
+  return (
+    <div className="landing-relay" aria-label="A goal moving from phone to tablet to desktop">
+      <div className="landing-relay-path" aria-hidden="true"><span /><span /><span /></div>
+      <div className="landing-device landing-device--phone">
+        <div className="landing-device-top"><Smartphone size={16} /><span><strong>On the move</strong><small>Today · 8:10 AM</small></span></div>
+        <span className="landing-mini-label">NEXT ACTION</span>
+        <h3>12-minute run</h3>
+        <button type="button" className="landing-demo-action" aria-pressed={complete} onClick={() => setComplete(!complete)}><Check size={15} />{complete ? 'Completed · undo' : 'Try marking complete'}</button>
+      </div>
+      <div className="landing-device landing-device--tablet">
+        <div className="landing-device-top"><Tablet size={16} /><span><strong>At a glance</strong><small>{complete ? 'Demo updated from phone' : 'Interactive example'}</small></span></div>
+        <span className="landing-mini-label">THIS WEEK</span>
+        <div className="landing-tablet-days" aria-label="Weekly sessions"><span className={complete ? 'done' : 'active'}>Tue{complete && <Check size={14} />}</span><span>Thu</span><span>Sun</span></div>
+        <p aria-live="polite">{complete ? '1 of 3 complete · 2 left' : '0 of 3 complete · 3 left'}</p>
+      </div>
+      <div className="landing-device landing-device--desktop">
+        <div className="landing-device-top"><Monitor size={16} /><span><strong>Plan view</strong><small>{complete ? 'Run marked complete' : 'Run ready for today'}</small></span></div>
+        <div className="landing-desktop-plan"><div className={complete ? 'is-complete' : ''}>{complete ? <Check size={15} /> : <Clock3 size={15} />}<span>12-minute easy run</span><small>{complete ? 'Done' : 'Today'}</small></div><div><Clock3 size={15} /><span>14-minute run + walk</span><small>Thu</small></div><div><Clock3 size={15} /><span>16-minute easy run</span><small>Sun</small></div></div>
+        <p><strong>Build the rhythm</strong><small>See the whole plan, together.</small></p>
+      </div>
+    </div>
+  );
+}
+
+function SocialScene() {
+  return (
+    <div className="landing-social-field" aria-label="Three friends contributing to one shared challenge milestone">
+      <ProductChrome label="Run steady · Private challenge" status="3 people active" />
+      <div className="landing-person landing-person--one"><span>Y</span><strong>You</strong><small>Completed · 8:14 AM</small></div>
+      <div className="landing-person landing-person--two"><span>M</span><strong>Maya</strong><small>Checked in · 2m ago</small></div>
+      <div className="landing-person landing-person--three"><span>A</span><strong>Alex</strong><small>Rest day protected</small></div>
+      <svg className="landing-social-lines" viewBox="0 0 720 360" role="presentation" aria-hidden="true">
+        <path d="M130 80 C 270 80, 245 180, 360 180" />
+        <path d="M590 80 C 450 80, 475 180, 360 180" />
+        <path d="M160 295 C 260 295, 280 180, 360 180" />
+      </svg>
+      <div className="landing-group-node"><PulseNode label="Group milestone reached" tone="persimmon" /><strong>9 / 12 actions</strong><small>Group week</small></div>
+      <div className="landing-encouragement"><Users size={16} /><span>Maya sent encouragement</span><strong>Keep the easy pace.</strong></div>
+    </div>
+  );
+}
+
+function ProgressionScene() {
+  const [reviewOpen, setReviewOpen] = useState(false);
+  return (
+    <div className="landing-progression-scene">
+      <div className="landing-progression-chrome"><ProductChrome label="Coach review" status="Draft change" /></div>
+      <div className="landing-stage-rail">
+        {[
+          ['Foundation', '12–16 min', 'complete'],
+          ['Rhythm', '18–22 min', 'active'],
+          ['Capacity', '24–30 min', 'future'],
+          ['Independence', 'Your own pace', 'future'],
+        ].map(([name, target, state]) => (
+          <div className={`landing-stage landing-stage--${state}`} key={name}>
+            <span>{state === 'complete' ? <Check size={14} /> : null}</span>
+            <div><strong>{name}</strong><small>{target}</small></div>
+          </div>
+        ))}
+      </div>
+      <div className="landing-adaptation-card">
+        <span className="landing-mini-label">NEXT WEEK’S CHANGE · PREVIEW</span>
+        <div className="landing-change-values"><span><small>Before</small><strong className="mono">18 min</strong></span><ArrowRight /><span><small>After</small><strong className="mono">20 min</strong></span></div>
+        <div className="landing-reason-box"><Sparkles size={16} /><p><strong>Why this changed</strong>You completed all three sessions and rated the last two “comfortable.” Only duration moves; pace stays easy.</p></div>
+        <button type="button" className="landing-demo-secondary" aria-expanded={reviewOpen} aria-controls="landing-review-detail" onClick={() => setReviewOpen(!reviewOpen)}>{reviewOpen ? 'Close example review' : 'Review this example'}<ChevronRight size={15} /></button>
+        {reviewOpen && <div id="landing-review-detail" className="landing-review-detail"><strong>You decide what changes.</strong><p>This example adds two minutes, keeps the easy pace, and preserves your rest days. Nothing here changes an account or saves a plan.</p><Link to="/register">Build your own plan <ArrowRight size={14} /></Link></div>}
+      </div>
+    </div>
+  );
+}
+
+const proofEvents = [
+  {
+    icon: Sparkles,
+    time: '08:02',
+    eyebrow: 'PRODUCT-BEHAVIOR EXAMPLE',
+    title: 'AI reason shown before save',
+    state: 'Needs your review',
+    details: ['Suggestion: increase 18 → 20 min', 'Reason: 3 sessions complete; last 2 felt comfortable'],
+  },
+  {
+    icon: CheckCircle2,
+    time: '08:06',
+    eyebrow: 'PRODUCT-BEHAVIOR EXAMPLE',
+    title: 'Change reviewed by the user',
+    state: 'Accepted by you',
+    details: ['20-minute target saved', 'Pace remains easy'],
+  },
+  {
+    icon: RefreshCw,
+    time: 'SUN',
+    eyebrow: 'PRODUCT-BEHAVIOR EXAMPLE',
+    title: 'Rest day preserved',
+    state: 'Cadence intact',
+    details: ['0 tasks scheduled', 'Recovery does not break the plan'],
+  },
+  {
+    icon: LockKeyhole,
+    time: '09:18',
+    eyebrow: 'PRODUCT-BEHAVIOR EXAMPLE',
+    title: 'Audience remains private',
+    state: 'Invite only',
+    details: ['Visible to you, Maya, and Alex', 'Not listed in public challenges'],
+  },
 ];
 
 export default function Landing() {
   return (
-    <div style={{ background: '#f5f4ff', minHeight: '100vh' }}>
-      {/* ------------------------------------------------------------ nav */}
-      <header className="sticky top-0 z-50" style={{ background: 'rgba(245,244,255,0.85)', backdropFilter: 'blur(20px)' }}>
-        <div className="max-w-6xl mx-auto px-5 sm:px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div
-              className="flex items-center justify-center rounded-xl"
-              style={{
-                width: 36,
-                height: 36,
-                background: 'linear-gradient(135deg, #7c3aed, #6d28d9)',
-                boxShadow: '0 4px 12px rgba(124,58,237,0.4)',
-              }}
-            >
-              <Zap size={18} fill="white" color="white" />
-            </div>
-            <span style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 800, fontSize: '1.1rem', color: '#1a1635' }}>
-              One Up
-            </span>
-          </div>
-          <div className="flex items-center gap-2.5">
-            <Link to="/login" className="btn-ghost px-4 py-2 text-sm">
-              Log In
-            </Link>
-            <Link to="/register" className="btn-primary px-4 py-2 text-sm">
-              Get Started
-            </Link>
-          </div>
+    <div className="landing-page">
+      <a href="#main-content" className="skip-link">Skip to main content</a>
+      <header className="landing-header">
+        <div className="landing-shell landing-nav">
+          <Link to="/" className="landing-brand" aria-label="One Up home"><UpMark /><span>One Up</span></Link>
+          <nav className="landing-nav-links" aria-label="Main navigation">
+            <a href="#how-it-works">How it works</a>
+            <a href="#together">Together</a>
+            <Link to="/login">Log in</Link>
+            <Link to="/register" className="landing-nav-cta">Start a goal <ArrowRight size={15} /></Link>
+          </nav>
         </div>
       </header>
 
-      {/* ---------------------------------------------------------- hero */}
-      <section className="relative overflow-hidden">
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{ background: 'radial-gradient(ellipse at 50% 0%, rgba(124,58,237,0.10) 0%, transparent 60%)' }}
-        />
-        <div className="max-w-6xl mx-auto px-5 sm:px-6 py-12 lg:py-20 relative">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
-            <div>
-              <span
-                className="inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 mb-6"
-                style={{ background: '#f0ebff', border: '1px solid #ddd0ff', color: '#7c3aed', fontSize: '0.78rem', fontWeight: 700, fontFamily: 'Plus Jakarta Sans' }}
-              >
-                ⚡ Productivity, gamified
-              </span>
-
-              <h1
-                style={{
-                  fontFamily: 'Plus Jakarta Sans',
-                  fontWeight: 900,
-                  fontSize: 'clamp(2.1rem, 5.5vw, 3.4rem)',
-                  color: '#1a1635',
-                  lineHeight: 1.1,
-                  letterSpacing: '-0.03em',
-                }}
-              >
-                Turn your goals into{' '}
-                <span className="gradient-text">fun social challenges.</span>
-              </h1>
-
-              <p
-                className="mt-5 max-w-lg"
-                style={{ fontSize: '1.05rem', color: '#6b688f', lineHeight: 1.65 }}
-              >
-                Set goals, complete daily challenges, stay consistent, and improve together with your
-                friends. Your goals are more fun when you don't do them alone.
-              </p>
-
-              <div className="flex flex-col sm:flex-row gap-3 mt-8">
-                <Link
-                  to="/register"
-                  className="btn-primary flex items-center justify-center gap-2 px-6 py-3.5 text-sm"
-                >
-                  Get Started free <ArrowRight size={16} />
-                </Link>
-                <Link to="/login" className="btn-ghost flex items-center justify-center px-6 py-3.5 text-sm">
-                  Log In
-                </Link>
+      <main id="main-content">
+        <section className="landing-hero" id="momentum">
+          <div className="landing-shell">
+            <div className="landing-hero-copy">
+              <h1>Turn an intention into momentum you can feel.</h1>
+              <p>One Up shapes a realistic plan, keeps today clear, and lets the right people move forward with you.</p>
+              <div className="landing-hero-actions">
+                <Link to="/register" className="landing-primary-action">Build my first plan <ArrowRight size={17} /></Link>
+                <a href="#product-film" className="landing-secondary-action">Watch how it works</a>
               </div>
+            </div>
+            <ProductFilm />
+            <div className="landing-trust-line"><span><CheckCircle2 size={16} /> Free to start</span><span><LockKeyhole size={16} /> Private by default</span><span><Clock3 size={16} /> A useful first plan in minutes</span></div>
+          </div>
+        </section>
 
-              <div className="flex flex-wrap gap-x-6 gap-y-2 mt-7">
-                {['Free to start', 'No credit card', 'Private by default'].map((item) => (
-                  <span
-                    key={item}
-                    className="flex items-center gap-1.5"
-                    style={{ fontSize: '0.82rem', color: '#8b88b0' }}
-                  >
-                    <Check size={14} style={{ color: '#7c3aed' }} /> {item}
-                  </span>
+        <section className="landing-section landing-planning" id="how-it-works">
+          <div className="landing-shell landing-split-heading">
+            <SectionIntro eyebrow="01 · AI PLANNING" title="A plan that starts by listening." body="The coach asks about your constraints, pace, and definition of success. Then it shows the logic—not a magic answer." />
+            <p className="landing-aside-note">AI is useful here because it turns context into a plan you can inspect and change.</p>
+          </div>
+          <div className="landing-shell"><PlanningScene /></div>
+        </section>
+
+        <section className="landing-section landing-daily">
+          <div className="landing-shell">
+            <SectionIntro eyebrow="02 · THE DAILY LOOP" title="Today stays small. Progress keeps moving." body="One clear action meets you where you are. Complete it, share how it felt, and tomorrow adjusts without drama." align="center" />
+            <DailyLoopScene />
+          </div>
+        </section>
+
+<section className="landing-section landing-continuity">
+          <div className="landing-shell landing-continuity-layout">
+            <div className="landing-continuity-copy">
+              <SectionIntro eyebrow="04 · CONTINUITY" title="Pick up the same goal, wherever the day takes you." body="A quick action on your phone, a weekly glance on your tablet, the full plan on desktop. Try the example below: one check-in updates every view." />
+              <div className="landing-continuity-caption"><Route size={18} /><span><strong>One goal. The right amount of detail.</strong> Your latest progress travels with the plan.</span></div>
+            </div>
+            <ContinuityScene />
+          </div>
+        </section>
+
+        <section className="landing-section landing-social" id="together">
+          <div className="landing-shell">
+            <div className="landing-social-heading"><SectionIntro eyebrow="05 · TOGETHER" title="Accountability without the performance." body="Invite the people who help you keep going. Individual trails converge on a shared milestone—without turning every goal into a competition." /><p>Friends can encourage, check in, and move at their own pace.</p></div>
+            <SocialScene />
+          </div>
+        </section>
+
+        <section className="landing-section landing-progression">
+          <div className="landing-shell landing-progression-layout">
+            <SectionIntro eyebrow="06 · ADAPTIVE PROGRESSION" title="Grow the challenge, not the pressure." body="When your pattern changes, One Up suggests the smallest useful adjustment and explains why. You stay in control of the next step." />
+            <ProgressionScene />
+          </div>
+        </section>
+
+        <section className="landing-section landing-proof">
+          <div className="landing-shell">
+            <div className="landing-proof-heading"><SectionIntro eyebrow="07 · YOUR PLAN, YOUR CALL" title="A little guidance. The final say stays yours." body="Review a suggestion, protect a rest day, and choose who comes along. These examples show the controls—not customer results." /><span className="landing-honesty-badge"><ShieldCheck size={16} /> Product examples</span></div>
+            <div className="landing-proof-window">
+              <ProductChrome label="Your choices in practice" status="Example journey" />
+              <div className="landing-proof-rail" tabIndex={0} aria-label="Example product controls; scroll horizontally for more">
+                {proofEvents.map(({ icon: Icon, time, eyebrow, title, state, details }, index) => (
+                <article className={`landing-proof-event landing-proof-event--${index + 1}`} key={title}>
+                  <div className="landing-proof-event-head"><span className="mono">{time}</span><span>{eyebrow}</span></div>
+                  <div className="landing-proof-event-icon"><Icon size={21} /></div>
+                  <h3>{title}</h3>
+                  <span className="landing-proof-state"><i />{state}</span>
+                  <div className="landing-proof-details">
+                    {details.map((detail) => <p key={detail}><Check size={13} />{detail}</p>)}
+                  </div>
+                </article>
                 ))}
               </div>
             </div>
-
-            {/* ------------------------------------------ product preview */}
-            <div className="relative">
-              <div className="card shadow-card-lg p-5 animate-float" style={{ borderRadius: 20 }}>
-                <div className="flex items-center gap-3 mb-4">
-                  <div
-                    className="flex items-center justify-center rounded-xl"
-                    style={{ width: 44, height: 44, fontSize: 20, background: '#f0ebff', border: '1px solid #ddd0ff' }}
-                    aria-hidden="true"
-                  >
-                    🏋️
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 800, fontSize: '1rem', color: '#1a1635' }}>
-                      Get Fit
-                    </div>
-                    <div style={{ fontSize: '0.72rem', color: '#8b88b0' }}>Fitness · 🔒 Private</div>
-                  </div>
-                  <div className="text-right">
-                    <div style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 800, fontSize: '1.1rem', color: '#7c3aed' }}>
-                      33%
-                    </div>
-                    <div style={{ fontSize: '0.65rem', color: '#b8b5d5' }}>complete</div>
-                  </div>
-                </div>
-
-                <div className="progress-bar-track mb-5" style={{ height: 6 }}>
-                  <div className="progress-bar-fill" style={{ width: '33%' }} />
-                </div>
-
-                <div
-                  style={{ fontSize: '0.68rem', fontWeight: 700, color: '#8b88b0', letterSpacing: '0.06em', fontFamily: 'Plus Jakarta Sans', marginBottom: 8 }}
-                >
-                  TODAY'S TASKS
-                </div>
-                <div className="flex flex-col gap-1.5 mb-5">
-                  {[
-                    { title: 'Go to the gym', reward: 20, done: true },
-                    { title: 'Walk 8,000 steps', reward: 15, done: false },
-                    { title: 'Drink 2L of water', reward: 10, done: false },
-                  ].map((task) => (
-                    <div
-                      key={task.title}
-                      className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl"
-                      style={{ background: task.done ? '#f5f4ff' : '#fff', border: '1px solid #e8e6f5' }}
-                    >
-                      <span
-                        className="flex items-center justify-center rounded-full flex-shrink-0"
-                        style={{
-                          width: 20,
-                          height: 20,
-                          background: task.done ? 'linear-gradient(135deg, #7c3aed, #6d28d9)' : 'transparent',
-                          border: task.done ? 'none' : '2px solid #ddd0ff',
-                          color: '#fff',
-                        }}
-                        aria-hidden="true"
-                      >
-                        {task.done && <Check size={12} strokeWidth={3.5} />}
-                      </span>
-                      <span
-                        className="flex-1"
-                        style={{
-                          fontSize: '0.82rem',
-                          fontWeight: 600,
-                          color: task.done ? '#8b88b0' : '#1a1635',
-                          textDecoration: task.done ? 'line-through' : 'none',
-                          fontFamily: 'Plus Jakarta Sans',
-                        }}
-                      >
-                        {task.title}
-                      </span>
-                      <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#f59e0b' }}>
-                        +{task.reward}🪙
-                      </span>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="flex items-center gap-4 mb-5">
-                  <span style={{ fontSize: '0.78rem', color: '#f97316', fontWeight: 700 }}>
-                    🔥 12 day streak
-                  </span>
-                  <span style={{ fontSize: '0.78rem', color: '#f59e0b', fontWeight: 700 }}>
-                    🪙 145 today
-                  </span>
-                </div>
-
-                <div
-                  style={{ fontSize: '0.68rem', fontWeight: 700, color: '#8b88b0', letterSpacing: '0.06em', fontFamily: 'Plus Jakarta Sans', marginBottom: 8 }}
-                >
-                  LEADERBOARD
-                </div>
-                <div className="flex flex-col gap-1">
-                  {[
-                    { medal: '🥇', name: 'Alex', pct: 94, streak: 18, you: false },
-                    { medal: '🥈', name: 'You', pct: 68, streak: 12, you: true },
-                    { medal: '🥉', name: 'Maria', pct: 55, streak: 9, you: false },
-                  ].map((row) => (
-                    <div
-                      key={row.name}
-                      className="flex items-center gap-2.5 px-2.5 py-2 rounded-xl"
-                      style={{
-                        background: row.you ? '#f0ebff' : 'transparent',
-                        border: `1px solid ${row.you ? '#ddd0ff' : 'transparent'}`,
-                      }}
-                    >
-                      <span style={{ fontSize: 13 }}>{row.medal}</span>
-                      <span
-                        className="flex-1"
-                        style={{
-                          fontSize: '0.8rem',
-                          fontWeight: row.you ? 700 : 500,
-                          color: row.you ? '#7c3aed' : '#1a1635',
-                        }}
-                      >
-                        {row.name}
-                      </span>
-                      <span style={{ fontSize: '0.78rem', fontWeight: 700, color: row.you ? '#7c3aed' : '#8b88b0' }}>
-                        {row.pct}%
-                      </span>
-                      <span style={{ fontSize: 11, color: '#f97316' }}>🔥{row.streak}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* -------------------------------------------------- how it works */}
-      <section className="max-w-6xl mx-auto px-5 sm:px-6 py-14 lg:py-20">
-        <div className="text-center mb-12">
-          <h2
-            style={{
-              fontFamily: 'Plus Jakarta Sans',
-              fontWeight: 800,
-              fontSize: 'clamp(1.6rem, 3.5vw, 2.25rem)',
-              color: '#1a1635',
-              letterSpacing: '-0.02em',
-            }}
-          >
-            How it works
-          </h2>
-          <p className="mt-3" style={{ color: '#6b688f', fontSize: '1rem' }}>
-            Three steps, then just keep showing up.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          {STEPS.map(({ icon: Icon, title, body }, index) => (
-            <div key={title} className="card shadow-card p-6">
-              <div
-                className="flex items-center justify-center rounded-xl mb-4"
-                style={{
-                  width: 44,
-                  height: 44,
-                  background: 'linear-gradient(135deg, #7c3aed, #6d28d9)',
-                  boxShadow: '0 4px 12px rgba(124,58,237,0.3)',
-                }}
-              >
-                <Icon size={20} color="white" />
-              </div>
-              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#b8b5d5', fontFamily: 'Plus Jakarta Sans', letterSpacing: '0.06em' }}>
-                STEP {index + 1}
-              </div>
-              <h3
-                className="mt-1"
-                style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '1.05rem', color: '#1a1635' }}
-              >
-                {title}
-              </h3>
-              <p className="mt-2" style={{ fontSize: '0.88rem', color: '#6b688f', lineHeight: 1.6 }}>
-                {body}
-              </p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* ------------------------------------------------------ features */}
-      <section className="max-w-6xl mx-auto px-5 sm:px-6 pb-14 lg:pb-20">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {FEATURES.map((feature) => (
-            <div key={feature.title} className="card shadow-card p-5">
-              <div style={{ fontSize: 26 }} aria-hidden="true">
-                {feature.emoji}
-              </div>
-              <h3
-                className="mt-3"
-                style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '0.95rem', color: '#1a1635' }}
-              >
-                {feature.title}
-              </h3>
-              <p className="mt-1.5" style={{ fontSize: '0.83rem', color: '#6b688f', lineHeight: 1.55 }}>
-                {feature.body}
-              </p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* ----------------------------------------------------------- cta */}
-      <section className="max-w-6xl mx-auto px-5 sm:px-6 pb-16 lg:pb-24">
-        <div
-          className="rounded-3xl px-6 py-12 lg:py-16 text-center relative overflow-hidden"
-          style={{ background: 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 55%, #3b82f6 100%)' }}
-        >
-          <Trophy size={34} color="white" className="mx-auto mb-4 opacity-90" />
-          <h2
-            style={{
-              fontFamily: 'Plus Jakarta Sans',
-              fontWeight: 800,
-              fontSize: 'clamp(1.5rem, 3.5vw, 2.1rem)',
-              color: '#fff',
-              letterSpacing: '-0.02em',
-            }}
-          >
-            Your goals are waiting.
-          </h2>
-          <p
-            className="mt-3 max-w-md mx-auto"
-            style={{ color: 'rgba(255,255,255,0.85)', fontSize: '1rem', lineHeight: 1.6 }}
-          >
-            Start today, invite a friend tomorrow, and see how far you get.
-          </p>
-          <Link
-            to="/register"
-            className="inline-flex items-center gap-2 mt-7 px-7 py-3.5 rounded-xl"
-            style={{
-              background: '#fff',
-              color: '#7c3aed',
-              fontFamily: 'Plus Jakarta Sans',
-              fontWeight: 700,
-              fontSize: '0.9rem',
-            }}
-          >
-            Get Started free <ArrowRight size={16} />
-          </Link>
-        </div>
-      </section>
-
-      <footer className="max-w-6xl mx-auto px-5 sm:px-6 pb-10">
-        <div
-          className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-6"
-          style={{ borderTop: '1px solid #e8e6f5' }}
-        >
-          <div className="flex items-center gap-2">
-            <div
-              className="flex items-center justify-center rounded-lg"
-              style={{ width: 26, height: 26, background: 'linear-gradient(135deg, #7c3aed, #6d28d9)' }}
-            >
-              <Zap size={13} fill="white" color="white" />
-            </div>
-            <span style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '0.85rem', color: '#1a1635' }}>
-              One Up
-            </span>
+        <section className="landing-closing">
+          <div className="landing-shell landing-closing-inner">
+            <div className="landing-closing-mark"><UpMark size={84} light /><span className="landing-closing-trail" aria-hidden="true"><i /><i /><i /></span></div>
+            <div><h2>Start with the goal that keeps coming back.</h2><p>Tell One Up what you want, what gets in the way, and who you want beside you.</p></div>
+            <Link to="/register" className="landing-primary-action">Build my first plan <ArrowRight size={18} /></Link>
           </div>
-          <span style={{ fontSize: '0.78rem', color: '#b8b5d5' }}>
-            Turn your goals into fun social challenges.
-          </span>
-        </div>
+        </section>
+      </main>
+
+      <footer className="landing-footer">
+        <div className="landing-shell"><Link to="/" className="landing-brand"><UpMark size={30} /><span>One Up</span></Link><p>Shared momentum for goals that matter.</p><div><Link to="/login">Log in</Link><Link to="/register">Get started</Link></div></div>
       </footer>
     </div>
   );

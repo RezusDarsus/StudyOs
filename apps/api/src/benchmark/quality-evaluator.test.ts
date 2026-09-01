@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { assessPlanningSufficiency } from '../ai/interview-plan.js';
+﻿import { describe, expect, it } from 'vitest';
+import { planningSufficiencyForScoring } from './quality-evaluator.js';
 import { evaluateSemanticCase } from './semantic-validator.js';
 import { evaluateUsefulness, passesQualityGates, scoreInterviewQuality, scoreStructuralQuality } from './quality-evaluator.js';
 import { REAL_WORLD_FIXTURES } from './real-world-fixtures.js';
@@ -93,7 +93,7 @@ describe('real-world regression architecture', () => {
   it('contains every normal-user case and gives ambiguous goals only one or two questions', () => {
     expect(REAL_WORLD_FIXTURES).toHaveLength(27);
     for (const fixture of REAL_WORLD_FIXTURES) {
-      const sufficiency = assessPlanningSufficiency(fixture.prompt);
+      const sufficiency = planningSufficiencyForScoring(fixture.prompt);
       // A fixture's own declared range is the expectation: ambiguous goals get
       // one or two questions, detailed ones generate directly.
       expect(sufficiency.enough, fixture.prompt).toBe(fixture.questions.min === 0);
@@ -103,7 +103,7 @@ describe('real-world regression architecture', () => {
 
   it('allows a detailed 5 km request to generate with zero questions', () => {
     const fixture = REAL_WORLD_FIXTURES[15];
-    expect(assessPlanningSufficiency(fixture.prompt).enough).toBe(true);
+    expect(planningSufficiencyForScoring(fixture.prompt).enough).toBe(true);
     expect(scoreInterviewQuality(fixture.prompt, []).score).toBe(10);
   });
 

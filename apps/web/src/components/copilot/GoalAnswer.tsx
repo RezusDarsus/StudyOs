@@ -1,5 +1,6 @@
 import { Sparkles, TrendingDown, TrendingUp } from 'lucide-react';
-import type { GoalCopilotAnswer } from '../../lib/types';
+import type { GoalCopilotAnswer, StructuredRecommendation } from '../../lib/types';
+import { recommendationIdentity } from '../../lib/useGoalCopilot';
 
 /**
  * The Copilot's read on a live goal.
@@ -11,31 +12,36 @@ import type { GoalCopilotAnswer } from '../../lib/types';
 export default function GoalAnswer({
   result,
   compact = false,
+  onMarkUsed,
+  consumedIdentities,
 }: {
   result: GoalCopilotAnswer;
   compact?: boolean;
+  /** Stage 2: when provided, recommendation cards carry the durable "used" action. */
+  onMarkUsed?: (item: StructuredRecommendation) => void;
+  consumedIdentities?: ReadonlySet<string>;
 }) {
   return (
     <div>
       <div
         className="px-4 py-3.5 rounded-xl"
-        style={{ background: '#f0ebff', border: '1px solid #ddd0ff' }}
+        style={{ background: 'var(--surface-3)', border: '1px solid var(--hairline-strong)' }}
       >
         <div className="flex items-center gap-2 mb-2">
-          <Sparkles size={14} style={{ color: '#7c3aed' }} />
+          <Sparkles size={14} style={{ color: 'var(--text-muted)' }} />
           <span
             style={{
               fontSize: '0.72rem',
-              fontWeight: 700,
-              color: '#7c3aed',
-              fontFamily: 'Plus Jakarta Sans',
+              fontWeight: 500,
+              color: 'var(--text)',
+              fontFamily: 'var(--font-sans)',
               letterSpacing: '0.05em',
             }}
           >
             COPILOT
           </span>
         </div>
-        <p style={{ fontSize: '0.88rem', color: '#1a1635', lineHeight: 1.6 }}>
+        <p style={{ fontSize: '0.88rem', color: 'var(--text)', lineHeight: 1.6 }}>
           {result.analysis.explanation}
         </p>
       </div>
@@ -58,19 +64,19 @@ export default function GoalAnswer({
           <div
             key={stat.label}
             className="rounded-xl px-2 py-2.5 text-center"
-            style={{ background: '#f5f4ff', border: '1px solid #e8e6f5' }}
+            style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}
           >
             <div
               style={{
-                fontFamily: 'Plus Jakarta Sans',
-                fontWeight: 800,
+                fontFamily: 'var(--font-sans)',
+                fontWeight: 600,
                 fontSize: compact ? '0.88rem' : '0.95rem',
-                color: '#1a1635',
+                color: 'var(--text)',
               }}
             >
               {stat.value}
             </div>
-            <div style={{ fontSize: '0.65rem', color: '#8b88b0', marginTop: 2 }}>{stat.label}</div>
+            <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: 2 }}>{stat.label}</div>
           </div>
         ))}
       </div>}
@@ -80,10 +86,10 @@ export default function GoalAnswer({
           <div
             style={{
               fontSize: '0.72rem',
-              fontWeight: 700,
-              color: '#6b688f',
+              fontWeight: 500,
+              color: 'var(--text-body)',
               letterSpacing: '0.05em',
-              fontFamily: 'Plus Jakarta Sans',
+              fontFamily: 'var(--font-sans)',
               marginBottom: 8,
             }}
           >
@@ -94,21 +100,113 @@ export default function GoalAnswer({
               <div
                 key={i}
                 className="px-3.5 py-3 rounded-xl"
-                style={{ background: '#fff', border: '1px solid #e8e6f5' }}
+                style={{ background: 'var(--surface)', border: '1px solid var(--hairline)' }}
               >
-                <p style={{ fontSize: '0.85rem', color: '#1a1635', lineHeight: 1.5 }}>{s.summary}</p>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text)', lineHeight: 1.5 }}>{s.summary}</p>
                 {s.taskTitle && (
-                  <p style={{ fontSize: '0.72rem', color: '#b8b5d5', marginTop: 3 }}>
+                  <p style={{ fontSize: '0.72rem', color: 'var(--text-faint)', marginTop: 3 }}>
                     {s.taskTitle}
                   </p>
                 )}
               </div>
             ))}
           </div>
-          <p className="mt-3" style={{ fontSize: '0.75rem', color: '#b8b5d5', lineHeight: 1.5 }}>
+          <p className="mt-3" style={{ fontSize: '0.75rem', color: 'var(--text-faint)', lineHeight: 1.5 }}>
             These are suggestions only — nothing has changed. Edit the goal yourself if you want to
             apply one. Your past history is never rewritten.
           </p>
+        </div>
+      )}
+
+      {result.analysis.recommendations && result.analysis.recommendations.length > 0 && (
+        <div className="mt-4">
+          <div
+            style={{
+              fontSize: '0.72rem',
+              fontWeight: 500,
+              color: 'var(--text-body)',
+              letterSpacing: '0.05em',
+              fontFamily: 'var(--font-sans)',
+              marginBottom: 8,
+            }}
+          >
+            RECOMMENDATIONS
+          </div>
+          <div className="flex flex-col gap-2">
+            {/*
+             * Structured, domain-open entities. The tag renders the model's own
+             * entityType verbatim — the frontend has no list of kinds and must
+             * never switch on one. Presentation only: nothing here is saved,
+             * linked or actionable; persistence is a later stage.
+             */}
+            {result.analysis.recommendations.map((item, i) => (
+              <div
+                key={`${item.displayName}|${item.attribution ?? ''}|${i}`}
+                className="px-3.5 py-3 rounded-xl"
+                style={{ background: 'var(--surface)', border: '1px solid var(--hairline)' }}
+              >
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span
+                    className="rounded-md px-1.5 py-0.5"
+                    style={{
+                      fontSize: '0.65rem',
+                      color: 'var(--text-muted)',
+                      background: 'var(--surface-2)',
+                      border: '1px solid var(--hairline)',
+                      fontFamily: 'var(--font-sans)',
+                    }}
+                  >
+                    {item.entityType}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: '0.85rem',
+                      fontWeight: 500,
+                      color: 'var(--text)',
+                      fontFamily: 'var(--font-sans)',
+                    }}
+                  >
+                    {item.displayName}
+                  </span>
+                  {item.attribution && (
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                      · {item.attribution}
+                    </span>
+                  )}
+                </div>
+                {item.reason && (
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text)', marginTop: 5, lineHeight: 1.5 }}>
+                    {item.reason}
+                  </p>
+                )}
+                {onMarkUsed && (() => {
+                  const used = consumedIdentities?.has(recommendationIdentity(item)) ?? false;
+                  return (
+                    <div className="mt-2">
+                      <button
+                        type="button"
+                        disabled={used}
+                        onClick={() => onMarkUsed(item)}
+                        className="rounded-lg px-2.5 py-1"
+                        style={{
+                          fontSize: '0.72rem',
+                          color: used ? 'var(--text-muted)' : 'var(--text)',
+                          background: 'var(--surface-2)',
+                          border: '1px solid var(--hairline)',
+                          cursor: used ? 'default' : 'pointer',
+                        }}
+                      >
+                        {used ? 'Marked as used' : 'Mark as used'}
+                      </button>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-faint)', marginLeft: 6 }}>
+                        Saved to your history.
+                      </span>
+                    </div>
+                  );
+                })()}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -123,10 +221,10 @@ export default function GoalAnswer({
           <div
             style={{
               fontSize: '0.72rem',
-              fontWeight: 700,
-              color: '#6b688f',
+              fontWeight: 500,
+              color: 'var(--text-body)',
               letterSpacing: '0.05em',
-              fontFamily: 'Plus Jakarta Sans',
+              fontFamily: 'var(--font-sans)',
               marginBottom: 8,
             }}
           >
@@ -141,25 +239,25 @@ export default function GoalAnswer({
                 <div
                   key={proposal.planId}
                   className="px-3.5 py-3 rounded-xl"
-                  style={{ background: '#fff', border: '1px solid #e8e6f5' }}
+                  style={{ background: 'var(--surface)', border: '1px solid var(--hairline)' }}
                 >
                   <div className="flex items-center gap-1.5">
-                    <Icon size={13} style={{ color: '#7c3aed' }} aria-hidden="true" />
+                    <Icon size={13} style={{ color: 'var(--text-muted)' }} aria-hidden="true" />
                     <span
                       style={{
                         fontSize: '0.85rem',
-                        fontWeight: 700,
-                        color: '#1a1635',
-                        fontFamily: 'Plus Jakarta Sans',
+                        fontWeight: 500,
+                        color: 'var(--text)',
+                        fontFamily: 'var(--font-sans)',
                       }}
                     >
                       {proposal.taskTitle}
                     </span>
-                    <span style={{ fontSize: '0.72rem', color: '#8b88b0' }}>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
                       · {proposal.stageLabel}
                     </span>
                   </div>
-                  <p style={{ fontSize: '0.85rem', color: '#1a1635', marginTop: 5, lineHeight: 1.5 }}>
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text)', marginTop: 5, lineHeight: 1.5 }}>
                     The Copilot suggests {up ? 'stepping up' : 'dropping back'} a step.{' '}
                     {backed
                       ? 'Your numbers agree.'
@@ -167,7 +265,7 @@ export default function GoalAnswer({
                           proposal.reviewAction === 'STAY' ? 'staying put' : 'something else'
                         }.`}
                   </p>
-                  <p style={{ fontSize: '0.75rem', color: '#8b88b0', marginTop: 4, lineHeight: 1.5 }}>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.5 }}>
                     Nothing has moved. Open the goal’s build-up section to decide.
                   </p>
                 </div>

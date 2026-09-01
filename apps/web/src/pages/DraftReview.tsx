@@ -17,6 +17,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Badge, ErrorState, Modal, Skeleton, useAsync, useToast } from '../components/ui';
 import { ApiError, api } from '../lib/api';
 import { describeCopilotError } from '../lib/copilot-errors';
+import { newOperationId } from '../lib/operation-id';
 import { canSubmit } from '../lib/slash';
 import {
   CATEGORY_EMOJI,
@@ -39,7 +40,7 @@ export default function DraftReview() {
   const { push } = useToast();
 
   const { data, loading, error, reload, setData } = useAsync(
-    () => api.get<{ draft: GoalDraft }>(`/copilot/goal-drafts/${id}`),
+    () => api.get<{ draft: GoalDraft; assumptions?: string[] }>(`/copilot/goal-drafts/${id}`),
     [id],
   );
 
@@ -49,11 +50,13 @@ export default function DraftReview() {
   const [feedback, setFeedback] = useState<boolean | null>(null);
 
   const draft = data?.draft;
+  const assumptions = data?.assumptions ?? [];
 
   async function confirm() {
-    setBusy('confirm');
-    try {
-      const result = await api.post<{ goalId: string }>(`/copilot/goal-drafts/${id}/confirm`, {});
+    setBusy('confirm');    try {
+      const result = await api.post<{ goalId: string }>(`/copilot/goal-drafts/${id}/confirm`, {
+      operationId: newOperationId(),
+    });
       push('Goal created 🎉');
       navigate(`/app/goals/${result.goalId}`, { replace: true });
     } catch (err) {
@@ -109,16 +112,16 @@ export default function DraftReview() {
 
   if (loading) {
     return (
-      <div className="p-5 sm:p-6 lg:p-8 max-w-2xl mx-auto flex flex-col gap-4">
-        <Skeleton height={120} radius={16} />
-        <Skeleton height={220} radius={16} />
+      <div className="product-page draft-review-page flex flex-col gap-4">
+        <Skeleton height={120} radius={10} />
+        <Skeleton height={220} radius={10} />
       </div>
     );
   }
 
   if (error || !draft) {
     return (
-      <div className="p-5 sm:p-6 lg:p-8 max-w-2xl mx-auto">
+      <div className="product-page draft-review-page">
         <ErrorState message={error ?? 'That plan is not available'} onRetry={reload} />
       </div>
     );
@@ -130,36 +133,36 @@ export default function DraftReview() {
   }
 
   return (
-    <div className="p-5 sm:p-6 lg:p-8 max-w-2xl mx-auto">
+    <div className="product-page draft-review-page">
       <button
         onClick={() => navigate('/app/goals')}
         className="flex items-center gap-2 mb-5"
-        style={{ color: '#8b88b0', fontSize: '0.875rem', fontWeight: 500 }}
+        style={{ color: 'var(--text-muted)', fontSize: '0.875rem', fontWeight: 400 }}
       >
         <ArrowLeft size={15} /> Back to goals
       </button>
 
       <div className="flex items-center gap-2 mb-5">
-        <Sparkles size={18} style={{ color: '#7c3aed' }} />
+        <Sparkles size={18} style={{ color: 'var(--text-muted)' }} />
         <h1
           style={{
-            fontFamily: 'Plus Jakarta Sans',
-            fontWeight: 800,
+            fontFamily: 'var(--font-sans)',
+            fontWeight: 600,
             fontSize: 'clamp(1.3rem, 2.5vw, 1.65rem)',
-            color: '#1a1635',
+            color: 'var(--text)',
             letterSpacing: '-0.02em',
           }}
         >
-          Your personalised plan
+          Your plan, with the reasoning visible
         </h1>
       </div>
 
       {/* --------------------------------------------------------- goal */}
-      <div className="card shadow-card p-5 mb-4">
+      <div className="card draft-plan-hero p-5 mb-4">
         <div className="flex items-start gap-3.5">
           <span
             className="flex items-center justify-center rounded-2xl flex-shrink-0"
-            style={{ width: 50, height: 50, fontSize: 24, background: '#f0ebff', border: '1px solid #ddd0ff' }}
+            style={{ width: 50, height: 50, fontSize: 24, background: 'var(--surface-3)', border: '1px solid var(--hairline-strong)' }}
             aria-hidden="true"
           >
             {CATEGORY_EMOJI[draft.category]}
@@ -167,10 +170,10 @@ export default function DraftReview() {
           <div className="min-w-0 flex-1">
             <h2
               style={{
-                fontFamily: 'Plus Jakarta Sans',
-                fontWeight: 800,
+                fontFamily: 'var(--font-sans)',
+                fontWeight: 600,
                 fontSize: '1.2rem',
-                color: '#1a1635',
+                color: 'var(--text)',
                 lineHeight: 1.3,
               }}
             >
@@ -187,11 +190,11 @@ export default function DraftReview() {
                   onClick={() => void setVisibility(visibility)}
                   className="px-2.5 py-1 rounded-lg"
                   style={{
-                    border: `1px solid ${draft.visibility === visibility ? '#7c3aed' : '#e8e6f5'}`,
-                    background: draft.visibility === visibility ? '#f0ebff' : '#fff',
-                    color: draft.visibility === visibility ? '#7c3aed' : '#8b88b0',
+                    border: `1px solid ${draft.visibility === visibility ? 'var(--accent)' : 'var(--hairline)'}`,
+                    background: draft.visibility === visibility ? 'var(--surface-3)' : 'var(--surface)',
+                    color: draft.visibility === visibility ? 'var(--text)' : 'var(--text-muted)',
                     fontSize: '0.72rem',
-                    fontWeight: 700,
+                    fontWeight: 500,
                   }}
                 >
                   {visibility === 'PRIVATE' ? '🔒 Private' : '🌍 Public'}
@@ -202,7 +205,7 @@ export default function DraftReview() {
           </div>
         </div>
         {draft.description && (
-          <p className="mt-3.5" style={{ fontSize: '0.88rem', color: '#6b688f', lineHeight: 1.6 }}>
+          <p className="mt-3.5" style={{ fontSize: '0.88rem', color: 'var(--text-body)', lineHeight: 1.6 }}>
             {draft.description}
           </p>
         )}
@@ -212,29 +215,63 @@ export default function DraftReview() {
       <div
         className="rounded-2xl p-5 mb-4"
         style={{
-          background: 'linear-gradient(135deg, #f0ebff 0%, #eff6ff 100%)',
-          border: '1px solid #ddd0ff',
+          background: 'var(--surface-2)',
+          border: '1px solid var(--hairline-strong)',
         }}
       >
         <div
           style={{
             fontSize: '0.72rem',
-            fontWeight: 700,
-            color: '#6b688f',
+            fontWeight: 500,
+            color: 'var(--text-body)',
             letterSpacing: '0.06em',
-            fontFamily: 'Plus Jakarta Sans',
+            fontFamily: 'var(--font-sans)',
             marginBottom: 8,
           }}
         >
           WHY THIS PLAN FITS YOU
         </div>
-        <p style={{ fontSize: '0.9rem', color: '#1a1635', lineHeight: 1.65 }}>{draft.rationale}</p>
+        <p style={{ fontSize: '0.9rem', color: 'var(--text)', lineHeight: 1.65 }}>{draft.rationale}</p>
       </div>
+
+      {/* -------------------------------------------------- assumptions */}
+      {assumptions.length > 0 && (
+        <div
+          className="rounded-2xl p-5 mb-4"
+          style={{
+            background: 'var(--surface-2)',
+            border: '1px solid var(--hairline)',
+          }}
+        >
+          <div
+            style={{
+              fontSize: '0.72rem',
+              fontWeight: 500,
+              color: 'var(--text-body)',
+              letterSpacing: '0.06em',
+              fontFamily: 'var(--font-sans)',
+              marginBottom: 8,
+            }}
+          >
+            WHAT THE PLAN ASSUMES
+          </div>
+          <ul style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+            {assumptions.map((line, i) => (
+              <li
+                key={i}
+                style={{ fontSize: '0.82rem', color: 'var(--text-body)', lineHeight: 1.55, marginTop: i === 0 ? 0 : 6 }}
+              >
+                {line}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* -------------------------------------------------------- tasks */}
       <h3
         className="mb-3"
-        style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '1rem', color: '#1a1635' }}
+        style={{ fontFamily: 'var(--font-sans)', fontWeight: 500, fontSize: '1rem', color: 'var(--text)' }}
       >
         Your tasks
       </h3>
@@ -246,10 +283,10 @@ export default function DraftReview() {
               <div className="min-w-0 flex-1">
                 <div
                   style={{
-                    fontFamily: 'Plus Jakarta Sans',
-                    fontWeight: 700,
+                    fontFamily: 'var(--font-sans)',
+                    fontWeight: 500,
                     fontSize: '0.95rem',
-                    color: '#1a1635',
+                    color: 'var(--text)',
                   }}
                 >
                   {task.title}
@@ -257,14 +294,14 @@ export default function DraftReview() {
                 <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                   <Badge tone="primary">{describeDraftRecurrence(task)}</Badge>
                   {task.estimatedMinutes && (
-                    <span style={{ fontSize: '0.75rem', color: '#8b88b0' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                       {task.estimatedMinutes} min
                     </span>
                   )}
                   {task.preferredTime && (
                     <span
                       className="flex items-center gap-1"
-                      style={{ fontSize: '0.75rem', color: '#8b88b0' }}
+                      style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}
                     >
                       <Clock size={11} /> {task.preferredTime}
                     </span>
@@ -275,7 +312,7 @@ export default function DraftReview() {
                 onClick={() => setEditing(task)}
                 aria-label={`Edit ${task.title}`}
                 className="flex items-center justify-center rounded-lg flex-shrink-0"
-                style={{ width: 34, height: 34, color: '#8b88b0', border: '1px solid #e8e6f5' }}
+                style={{ width: 34, height: 34, color: 'var(--text-muted)', border: '1px solid var(--hairline)' }}
               >
                 <Pencil size={14} />
               </button>
@@ -286,19 +323,19 @@ export default function DraftReview() {
             {task.reason && (
               <div
                 className="mt-3 px-3 py-2.5 rounded-xl"
-                style={{ background: '#f5f4ff', border: '1px solid #e8e6f5' }}
+                style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}
               >
                 <span
                   style={{
                     fontSize: '0.7rem',
-                    fontWeight: 700,
-                    color: '#7c3aed',
-                    fontFamily: 'Plus Jakarta Sans',
+                    fontWeight: 500,
+                    color: 'var(--text)',
+                    fontFamily: 'var(--font-sans)',
                   }}
                 >
                   Why this?
                 </span>
-                <p style={{ fontSize: '0.8rem', color: '#4b4870', marginTop: 3, lineHeight: 1.5 }}>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-body)', marginTop: 3, lineHeight: 1.5 }}>
                   {task.reason}
                 </p>
               </div>
@@ -337,19 +374,19 @@ export default function DraftReview() {
       <button
         className="btn-ghost w-full py-2.5 text-sm flex items-center justify-center gap-2"
         onClick={discard}
-        style={{ color: '#c8253c' }}
+        style={{ color: 'var(--red)' }}
         disabled={busy !== null}
       >
         <Trash2 size={14} /> Discard
       </button>
 
-      <p className="text-center mt-4" style={{ fontSize: '0.75rem', color: '#b8b5d5' }}>
+      <p className="text-center mt-4" style={{ fontSize: '0.75rem', color: 'var(--text-faint)' }}>
         Nothing is created until you press Create Goal.
       </p>
 
       {/* ----------------------------------------------------- feedback */}
       <div className="flex items-center justify-center gap-3 mt-6">
-        <span style={{ fontSize: '0.8rem', color: '#8b88b0' }}>Was this plan useful?</span>
+        <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Was this plan useful?</span>
         <button
           onClick={() => rate(true)}
           aria-label="Yes, useful"
@@ -357,9 +394,9 @@ export default function DraftReview() {
           style={{
             width: 34,
             height: 34,
-            border: '1px solid #e8e6f5',
-            background: feedback === true ? '#f0ebff' : '#fff',
-            color: feedback === true ? '#7c3aed' : '#b8b5d5',
+            border: '1px solid var(--hairline)',
+            background: feedback === true ? 'var(--surface-3)' : 'var(--surface)',
+            color: feedback === true ? 'var(--text)' : 'var(--text-faint)',
           }}
         >
           <ThumbsUp size={14} />
@@ -371,9 +408,9 @@ export default function DraftReview() {
           style={{
             width: 34,
             height: 34,
-            border: '1px solid #e8e6f5',
-            background: feedback === false ? '#ffeef0' : '#fff',
-            color: feedback === false ? '#c8253c' : '#b8b5d5',
+            border: '1px solid var(--hairline)',
+            background: feedback === false ? 'var(--red-tint)' : 'var(--surface)',
+            color: feedback === false ? 'var(--red)' : 'var(--text-faint)',
           }}
         >
           <ThumbsDown size={14} />
@@ -417,15 +454,15 @@ function LadderPreview({ progression }: { progression: DraftProgression }) {
   return (
     <div
       className="mt-3 px-3 py-2.5 rounded-xl"
-      style={{ background: '#f5f4ff', border: '1px solid #e8e6f5' }}
+      style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}
     >
       <span
         className="inline-flex items-center gap-1.5"
         style={{
           fontSize: '0.7rem',
-          fontWeight: 700,
-          color: '#7c3aed',
-          fontFamily: 'Plus Jakarta Sans',
+          fontWeight: 500,
+          color: 'var(--text)',
+          fontFamily: 'var(--font-sans)',
         }}
       >
         <TrendingUp size={12} aria-hidden="true" />
@@ -435,15 +472,15 @@ function LadderPreview({ progression }: { progression: DraftProgression }) {
       <div className="flex items-center gap-1 mt-2 flex-wrap">
         {stages.map((stage, i) => (
           <Fragment key={i}>
-            {i > 0 && <ChevronRight size={12} style={{ color: '#b8b5d5' }} aria-hidden="true" />}
+            {i > 0 && <ChevronRight size={12} style={{ color: 'var(--text-faint)' }} aria-hidden="true" />}
             <span
               className="px-2 py-1 rounded-md"
               style={{
                 fontSize: '0.75rem',
-                fontWeight: 700,
-                background: i === 0 ? '#7c3aed' : '#fff',
-                color: i === 0 ? '#fff' : '#4b4870',
-                border: i === 0 ? '1px solid #7c3aed' : '1px solid #e8e6f5',
+                fontWeight: 500,
+                background: i === 0 ? 'var(--accent)' : 'var(--surface)',
+                color: i === 0 ? 'var(--accent-ink)' : 'var(--text-body)',
+                border: i === 0 ? '1px solid var(--accent)' : '1px solid var(--hairline)',
               }}
             >
               {formatTarget(stage.target, progression)}
@@ -452,7 +489,7 @@ function LadderPreview({ progression }: { progression: DraftProgression }) {
         ))}
       </div>
 
-      <p style={{ fontSize: '0.78rem', color: '#6b688f', marginTop: 8, lineHeight: 1.5 }}>
+      <p style={{ fontSize: '0.78rem', color: 'var(--text-body)', marginTop: 8, lineHeight: 1.5 }}>
         You start at {formatTarget(stages[0].target, progression)}. Each step holds for {holdText} and
         only moves up when you’re keeping up — never automatically.
       </p>
@@ -495,7 +532,7 @@ function CopilotEditModal({
         draft: GoalDraft;
         assistantMessage: string;
         applied: string[];
-      }>(`/copilot/goal-drafts/${draftId}/copilot-edit`, { message: message.trim() });
+      }>(`/copilot/goal-drafts/${draftId}/copilot-edit`, { message: message.trim(), operationId: newOperationId() });
       onUpdated(result.draft);
       setReply(result.assistantMessage);
       setApplied(result.applied ?? []);
@@ -512,11 +549,11 @@ function CopilotEditModal({
       {reply && (
         <div
           className="mb-4 px-3.5 py-3 rounded-xl"
-          style={{ background: '#f0ebff', border: '1px solid #ddd0ff', fontSize: '0.88rem', color: '#1a1635' }}
+          style={{ background: 'var(--surface-3)', border: '1px solid var(--hairline-strong)', fontSize: '0.88rem', color: 'var(--text)' }}
         >
           {reply}
           {applied.length > 0 && (
-            <ul className="mt-2.5" style={{ fontSize: '0.78rem', color: '#4b4870' }}>
+            <ul className="mt-2.5" style={{ fontSize: '0.78rem', color: 'var(--text-body)' }}>
               {applied.map((change, i) => (
                 <li key={i} style={{ marginTop: 2 }}>
                   ✓ {change}
@@ -534,11 +571,11 @@ function CopilotEditModal({
             onClick={() => setMessage(s)}
             className="px-3 py-1.5 rounded-full"
             style={{
-              background: '#f5f4ff',
-              border: '1px solid #e8e6f5',
-              color: '#6b688f',
+              background: 'var(--surface-2)',
+              border: '1px solid var(--hairline)',
+              color: 'var(--text-body)',
               fontSize: '0.75rem',
-              fontWeight: 600,
+              fontWeight: 500,
             }}
           >
             {s}
@@ -686,11 +723,11 @@ function TaskEditModal({
 
   const label = {
     fontSize: '0.8rem',
-    fontWeight: 700,
-    color: '#4b4870',
+    fontWeight: 500,
+    color: 'var(--text-body)',
     display: 'block',
     marginBottom: 6,
-    fontFamily: 'Plus Jakarta Sans',
+    fontFamily: 'var(--font-sans)',
   } as const;
 
   return (
@@ -700,7 +737,7 @@ function TaskEditModal({
       title="Edit task"
       footer={
         <>
-          <button className="btn-ghost px-4 py-2.5 text-sm" onClick={remove} style={{ color: '#c8253c' }}>
+          <button className="btn-ghost px-4 py-2.5 text-sm" onClick={remove} style={{ color: 'var(--red)' }}>
             Remove
           </button>
           <button className="btn-primary px-4 py-2.5 text-sm" onClick={save} disabled={busy}>
@@ -748,10 +785,10 @@ function TaskEditModal({
         onChange={(e) => setMinutes(e.target.value)}
         disabled={minutesSetByLadder}
         className="w-full px-4 py-3 text-sm"
-        style={minutesSetByLadder ? { background: '#f5f4ff', color: '#8b88b0' } : undefined}
+        style={minutesSetByLadder ? { background: 'var(--surface-2)', color: 'var(--text-muted)' } : undefined}
       />
       {minutesSetByLadder ? (
-        <p style={{ fontSize: '0.75rem', color: '#8b688f', margin: '6px 0 16px', lineHeight: 1.5 }}>
+        <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '6px 0 16px', lineHeight: 1.5 }}>
           Set by the build-up below — this is its first step.
         </p>
       ) : (
@@ -762,23 +799,23 @@ function TaskEditModal({
         <div
           className="px-3.5 py-3 rounded-xl mb-4"
           style={{
-            background: dropLadder ? '#fff' : '#f5f4ff',
-            border: `1px solid ${dropLadder ? '#e8e6f5' : '#ddd0ff'}`,
+            background: dropLadder ? 'var(--surface)' : 'var(--surface-2)',
+            border: `1px solid ${dropLadder ? 'var(--hairline)' : 'var(--hairline-strong)'}`,
           }}
         >
           <div
             className="flex items-center gap-1.5"
             style={{
               fontSize: '0.8rem',
-              fontWeight: 700,
-              color: dropLadder ? '#8b88b0' : '#1a1635',
-              fontFamily: 'Plus Jakarta Sans',
+              fontWeight: 500,
+              color: dropLadder ? 'var(--text-muted)' : 'var(--text)',
+              fontFamily: 'var(--font-sans)',
             }}
           >
             <TrendingUp size={13} aria-hidden="true" />
             Build-up: {describeDraftLadder(task.progression)}
           </div>
-          <p style={{ fontSize: '0.78rem', color: '#6b688f', marginTop: 4, lineHeight: 1.5 }}>
+          <p style={{ fontSize: '0.78rem', color: 'var(--text-body)', marginTop: 4, lineHeight: 1.5 }}>
             {dropLadder
               ? `Will be removed when you save. The task stays, at ${formatTarget(
                   task.progression.stages[0].target,
@@ -791,9 +828,9 @@ function TaskEditModal({
             className="mt-2"
             style={{
               fontSize: '0.78rem',
-              fontWeight: 700,
-              color: dropLadder ? '#7c3aed' : '#c8253c',
-              fontFamily: 'Plus Jakarta Sans',
+              fontWeight: 500,
+              color: dropLadder ? 'var(--green)' : 'var(--red)',
+              fontFamily: 'var(--font-sans)',
             }}
           >
             {dropLadder ? 'Keep the build-up' : 'Remove the build-up'}

@@ -81,16 +81,16 @@ export default function Friends() {
       <div className="mb-6">
         <h1
           style={{
-            fontFamily: 'Plus Jakarta Sans',
-            fontWeight: 800,
+            fontFamily: 'var(--font-sans)',
+            fontWeight: 600,
             fontSize: 'clamp(1.4rem, 2.5vw, 1.75rem)',
-            color: '#1a1635',
+            color: 'var(--text)',
             letterSpacing: '-0.02em',
           }}
         >
           Friends
         </h1>
-        <p style={{ color: '#8b88b0', fontSize: '0.9rem', marginTop: 4 }}>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: 4 }}>
           Productivity is better together.
         </p>
       </div>
@@ -99,7 +99,7 @@ export default function Friends() {
         <Search
           size={17}
           className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none"
-          style={{ color: '#b8b5d5' }}
+          style={{ color: 'var(--text-faint)' }}
         />
         <input
           value={query}
@@ -111,14 +111,14 @@ export default function Friends() {
       </form>
 
       {/* --------------------------------------------------- search results */}
-      {searching && <Skeleton height={70} radius={16} />}
+      {searching && <Skeleton height={70} radius={10} />}
       {results && !searching && (
         <section className="mb-7">
           <h2 className="mb-3" style={sectionTitle}>
             Search results
           </h2>
           {results.length === 0 ? (
-            <p style={{ fontSize: '0.85rem', color: '#8b88b0' }}>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
               Nobody matched that. Try their exact email address.
             </p>
           ) : (
@@ -130,7 +130,7 @@ export default function Friends() {
                     <div className="truncate" style={nameStyle}>
                       {user.name}
                     </div>
-                    <div style={{ fontSize: '0.72rem', color: '#b8b5d5' }}>Level {user.level}</div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-faint)' }}>Level {user.level}</div>
                   </div>
                   {user.state === 'NONE' && (
                     <button
@@ -174,8 +174,8 @@ export default function Friends() {
                 <div className="flex items-center gap-3 mb-3">
                   <Avatar emoji={invite.inviter.avatarEmoji} size={36} />
                   <div className="min-w-0">
-                    <div style={{ fontSize: '0.88rem', color: '#1a1635' }}>
-                      <strong style={{ fontFamily: 'Plus Jakarta Sans' }}>{invite.inviter.name}</strong>{' '}
+                    <div style={{ fontSize: '0.88rem', color: 'var(--text)' }}>
+                      <strong style={{ fontFamily: 'var(--font-sans)' }}>{invite.inviter.name}</strong>{' '}
                       invited you to
                     </div>
                     <div className="truncate" style={nameStyle}>
@@ -217,7 +217,7 @@ export default function Friends() {
                   <div className="truncate" style={nameStyle}>
                     {request.user.name}
                   </div>
-                  <div style={{ fontSize: '0.72rem', color: '#b8b5d5' }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-faint)' }}>
                     Level {request.user.level}
                   </div>
                 </div>
@@ -253,8 +253,8 @@ export default function Friends() {
 
         {friends.loading ? (
           <div className="flex flex-col gap-2">
-            <Skeleton height={70} radius={16} />
-            <Skeleton height={70} radius={16} />
+            <Skeleton height={70} radius={10} />
+            <Skeleton height={70} radius={10} />
           </div>
         ) : friends.error ? (
           <ErrorState message={friends.error} onRetry={friends.reload} />
@@ -270,13 +270,13 @@ export default function Friends() {
                     {friend.name}
                   </Link>
                   <div className="flex items-center gap-2.5 mt-1 flex-wrap">
-                    <span style={{ fontSize: '0.72rem', color: '#8b88b0' }}>Lv.{friend.level}</span>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Lv.{friend.level}</span>
                     {friend.currentStreak > 0 && (
-                      <span style={{ fontSize: '0.72rem', color: '#f97316', fontWeight: 700 }}>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-body)', fontWeight: 500 }}>
                         🔥 {friend.currentStreak}
                       </span>
                     )}
-                    <span style={{ fontSize: '0.72rem', color: '#7c3aed', fontWeight: 600 }}>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text)', fontWeight: 500 }}>
                       {friend.sharedGoals} shared
                     </span>
                   </div>
@@ -285,7 +285,7 @@ export default function Friends() {
                   aria-label={`Remove ${friend.name}`}
                   title="Remove friend"
                   className="flex items-center justify-center rounded-lg flex-shrink-0"
-                  style={{ width: 34, height: 34, color: '#b8b5d5', border: '1px solid #e8e6f5' }}
+                  style={{ width: 34, height: 34, color: 'var(--text-faint)', border: '1px solid var(--hairline)' }}
                   onClick={() => {
                     if (window.confirm(`Remove ${friend.name} from your friends?`)) {
                       act(() => api.del(`/friends/${friend.id}`), 'Friend removed');
@@ -310,15 +310,15 @@ export default function Friends() {
 }
 
 const sectionTitle = {
-  fontFamily: 'Plus Jakarta Sans',
-  fontWeight: 700,
+  fontFamily: 'var(--font-sans)',
+  fontWeight: 500,
   fontSize: '1rem',
-  color: '#1a1635',
+  color: 'var(--text)',
 } as const;
 
 const nameStyle = {
-  fontFamily: 'Plus Jakarta Sans',
-  fontWeight: 700,
+  fontFamily: 'var(--font-sans)',
+  fontWeight: 500,
   fontSize: '0.9rem',
-  color: '#1a1635',
+  color: 'var(--text)',
 } as const;

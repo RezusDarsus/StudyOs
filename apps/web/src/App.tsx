@@ -1,34 +1,36 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import AppShell from './components/AppShell';
-import { ToastProvider } from './components/ui';
+import { ToastProvider, UpMarker } from './components/ui';
 import { AuthProvider, useAuth } from './lib/auth';
-import Landing from './pages/Landing';
-import Auth from './pages/Auth';
-import Dashboard from './pages/Dashboard';
-import MyGoals from './pages/MyGoals';
-import CreateGoal from './pages/CreateGoal';
-import GoalDetail from './pages/GoalDetail';
-import Discover from './pages/Discover';
-import Friends from './pages/Friends';
-import Leaderboard from './pages/Leaderboard';
-import Notifications from './pages/Notifications';
-import Profile from './pages/Profile';
-import Rewards from './pages/Rewards';
-import JoinByCode from './pages/JoinByCode';
-import CreateGoalChoice from './pages/CreateGoalChoice';
-import CopilotInterview from './pages/CopilotInterview';
-import DraftReview from './pages/DraftReview';
+const Landing = lazy(() => import('./pages/Landing'));
+const Auth = lazy(() => import('./pages/Auth'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const MyGoals = lazy(() => import('./pages/MyGoals'));
+const CreateGoal = lazy(() => import('./pages/CreateGoal'));
+const GoalDetail = lazy(() => import('./pages/GoalDetail'));
+const Discover = lazy(() => import('./pages/Discover'));
+const Friends = lazy(() => import('./pages/Friends'));
+const Leaderboard = lazy(() => import('./pages/Leaderboard'));
+const Notifications = lazy(() => import('./pages/Notifications'));
+const Profile = lazy(() => import('./pages/Profile'));
+const Rewards = lazy(() => import('./pages/Rewards'));
+const JoinByCode = lazy(() => import('./pages/JoinByCode'));
+const CreateGoalChoice = lazy(() => import('./pages/CreateGoalChoice'));
+const CopilotInterview = lazy(() => import('./pages/CopilotInterview'));
+const DraftReview = lazy(() => import('./pages/DraftReview'));
+const ProductShowcase = lazy(() => import('./pages/ProductShowcase'));
 
 function FullPageSpinner() {
   return (
-    <div className="flex items-center justify-center h-screen" style={{ background: '#f5f4ff' }}>
+    <div className="flex items-center justify-center h-screen" style={{ background: 'var(--bg)' }}>
       <div
-        className="animate-float"
-        style={{ fontSize: 36 }}
+        className="app-loading-mark"
         role="status"
         aria-label="Loading"
       >
-        ⚡
+        <UpMarker size={40} />
+        <span>Loading your next step…</span>
       </div>
     </div>
   );
@@ -55,7 +57,10 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <ToastProvider>
-          <Routes>
+          <Suspense fallback={<FullPageSpinner />}><Routes>
+            {(window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost') && (
+              <Route path="/__showcase/product" element={<ProductShowcase />} />
+            )}
             <Route path="/" element={<RedirectIfAuthed><Landing /></RedirectIfAuthed>} />
             <Route path="/login" element={<RedirectIfAuthed><Auth mode="login" /></RedirectIfAuthed>} />
             <Route path="/register" element={<RedirectIfAuthed><Auth mode="register" /></RedirectIfAuthed>} />
@@ -83,7 +88,7 @@ export default function App() {
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+          </Routes></Suspense>
         </ToastProvider>
       </AuthProvider>
     </BrowserRouter>

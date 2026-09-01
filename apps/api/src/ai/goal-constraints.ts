@@ -1,4 +1,4 @@
-import { addDays, type DayString } from '../domain/dates.js';
+﻿import { addDays, type DayString } from '../domain/dates.js';
 import type { NormalizedTask } from './draft-validator.js';
 import { familyFor, meaningfulTokens } from './plan-quality.js';
 
@@ -23,16 +23,42 @@ export interface ExplicitGoalConstraints {
   requiresClarification: boolean;
 }
 
+import { getRuntimeKnowledge, portMemo } from './runtime-knowledge.js';
+
+// The one generic membership check mapping runtime roles to this mechanic enum.
+// The role SOURCES are runtime data (the pack carries the exact legacy regexes);
+// the closed role set is the mechanic.
+const SEMANTIC_TASK_ROLE_SOURCES: ReadonlyArray<{ role: SemanticTaskRole; source: string }> = [
+  { role: 'STRENGTH', source: '\\b(strength|resistance|weights?|lower-body|ankle strengthening)\\b' },
+  { role: 'TRAIL', source: '\\b(trail|technical terrain)\\b' },
+  { role: 'LONG_RUN', source: '\\blong\\s+run\\b' },
+  { role: 'FINANCE_TRANSFER', source: '\\b(save|saving|contribut|deposit|transfer|payment|pay(?:ment)?|budget review|bonus)\\b|[€$£]\\s*[\\d,]+|\\b(?:USD|EUR|GBP|GEL)\\b' },
+  { role: 'INTERVIEW_PREP', source: '\\b(interview prep|mock interview|interview practice)\\b' },
+];
+
+function isSemanticTaskRole(value: string): value is SemanticTaskRole {
+  return SEMANTIC_TASK_ROLE_SOURCES.some((definition) => definition.role === value);
+}
+
+function runtimeTaskRolePatterns(): Array<{ role: SemanticTaskRole; regex: RegExp }> {
+  return portMemo(getRuntimeKnowledge(), 'task-role-patterns', () =>
+    getRuntimeKnowledge()
+      .getLexicon('task-role')
+      .patterns.filter(({ entry }) => isSemanticTaskRole(entry.role ?? ''))
+      .map(({ entry, regex }) => ({ role: entry.role as SemanticTaskRole, regex })),
+  );
+}
+
 export type SemanticTaskRole = 'STRENGTH' | 'TRAIL' | 'LONG_RUN' | 'FINANCE_TRANSFER' | 'INTERVIEW_PREP';
 
 export function semanticTaskRoles(task: Pick<NormalizedTask, 'title' | 'description' | 'reason'>): Set<SemanticTaskRole> {
   const text = `${task.title} ${task.description} ${task.reason}`.toLowerCase();
   const roles = new Set<SemanticTaskRole>();
-  if (/\b(strength|resistance|weights?|lower-body|ankle strengthening)\b/.test(text)) roles.add('STRENGTH');
-  if (/\b(trail|technical terrain)\b/.test(text)) roles.add('TRAIL');
-  if (/\blong\s+run\b/.test(text)) roles.add('LONG_RUN');
-  if (/\b(save|saving|contribut|deposit|transfer|payment|pay(?:ment)?|budget review|bonus)\b|[€$£]\s*[\d,]+|\b(?:USD|EUR|GBP|GEL)\b/.test(text)) roles.add('FINANCE_TRANSFER');
-  if (/\b(interview prep|mock interview|interview practice)\b/.test(text)) roles.add('INTERVIEW_PREP');
+  // The role VOCABULARY is runtime data; the role names, the lowercased-text
+  // mechanic and the Set shape are core.
+  for (const { role, regex } of runtimeTaskRolePatterns()) {
+    if (regex.test(text)) roles.add(role);
+  }
   return roles;
 }
 
@@ -134,24 +160,26 @@ export function goalCoverageGaps(goalText: string, tasks: Array<Pick<NormalizedT
   return stemMatch || familyMatch ? [] : central;
 }
 
-const EXPLICIT_ACTIVITIES: Array<{ label: string; pattern: RegExp }> = [
-  { label: 'boxing', pattern: /\bbox(?:ing)?\b/i },
-  { label: 'gym', pattern: /\bgym\b/i },
-  { label: 'running', pattern: /\brun(?:ning)?\b/i },
-  { label: 'walking', pattern: /\bwalk(?:ing)?\b/i },
-  { label: 'swimming', pattern: /\bswim(?:ming)?\b/i },
-  { label: 'cycling', pattern: /\bcycl(?:e|ing)\b/i },
-  { label: 'yoga', pattern: /\byoga\b/i },
-  { label: 'pilates', pattern: /\bpilates\b/i },
-];
+/** The explicit-activity vocabulary, from the runtime port. Labels are open
+ *  RuntimeRoleIds on both the parse and the validation side. */
+function runtimeExplicitActivities(): Array<{ label: string; pattern: RegExp }> {
+  return portMemo(getRuntimeKnowledge(), 'explicit-activities', () =>
+    getRuntimeKnowledge()
+      .getLexicon('explicit-activity')
+      .patterns.map(({ entry, regex }) => ({ label: entry.role ?? '', pattern: regex })),
+  );
+}
 
 /** Activities explicitly joined with "and"/"plus" must all survive the draft. */
 export function explicitActivityCoverageGaps(
   goalText: string,
   tasks: Array<Pick<NormalizedTask, 'title' | 'description' | 'reason'>>,
 ): string[] {
+  // The activity VOCABULARY is runtime data; the connector mechanic, ordering
+  // and coverage invariant are core.
+  const activities = runtimeExplicitActivities();
   const opening = goalText.split('\n', 1)[0].split(/[.!?]/, 1)[0];
-  const hits = EXPLICIT_ACTIVITIES.flatMap((activity) => {
+  const hits = activities.flatMap((activity) => {
     const match = activity.pattern.exec(opening);
     return match ? [{ ...activity, start: match.index, end: match.index + match[0].length }] : [];
   }).sort((a, b) => a.start - b.start);
@@ -167,16 +195,11 @@ export function explicitActivityCoverageGaps(
   }
   const taskText = tasks.map((task) => `${task.title} ${task.description} ${task.reason}`).join('\n');
   return [...required].filter((label) => {
-    const activity = EXPLICIT_ACTIVITIES.find((candidate) => candidate.label === label)!;
+    const activity = activities.find((candidate) => candidate.label === label)!;
     return !activity.pattern.test(taskText);
   });
 }
 
-const DAYS: Record<string, number> = {
-  sunday: 0, sun: 0, monday: 1, mon: 1, tuesday: 2, tue: 2, tues: 2,
-  wednesday: 3, wed: 3, thursday: 4, thu: 4, thurs: 4,
-  friday: 5, fri: 5, saturday: 6, sat: 6,
-};
 const MONTHS: Record<string, number> = {
   january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
   july: 7, august: 8, september: 9, october: 10, november: 11, december: 12,
@@ -192,12 +215,6 @@ const WORD_ORDINALS: Record<string, number> = {
   'twenty-fourth': 24, 'twenty-fifth': 25, 'twenty-sixth': 26, 'twenty-seventh': 27,
   'twenty-eighth': 28, 'twenty-ninth': 29, thirtieth: 30, 'thirty-first': 31,
 };
-const DAY_ALT = 'sun(?:day)?|mon(?:day)?|tues?(?:day)?|wed(?:nesday)?|thurs?(?:day)?|fri(?:day)?|sat(?:urday)?';
-
-/** Weekday names (full and abbreviated) mentioned in free text, deduplicated. */
-export function mentionedDays(text: string): number[] {
-  return [...new Set([...text.toLowerCase().matchAll(new RegExp(`\\b(${DAY_ALT})\\b`, 'g'))].map((m) => DAYS[m[1]]))];
-}
 
 /**
  * Canonical weekday order: Monday-first, Sunday last (ISO convention).
@@ -243,230 +260,6 @@ function endOfPreviousMonth(month: number, year: number): DayString {
   return new Date(Date.UTC(year, month - 1, 0)).toISOString().slice(0, 10) as DayString;
 }
 
-export function parseExplicitGoalConstraints(text: string, today: DayString): ExplicitGoalConstraints {
-  const lower = text.toLowerCase();
-  const result: ExplicitGoalConstraints = {
-    excludedDays: [], requiredWeeklyRoles: [], requiredRoleDays: [], forbiddenActivities: [],
-    undefinedMetric:false, requiresClarification:false, prohibitConsecutiveEvenings:false,
-  };
-  const weeklyPattern=/\b(exactly\s+|at most\s+|no more than\s+|maximum (?:of )?)?(\d+|once|twice|thrice|one|two|three|four|five|six|seven)(?:\s+(?:different\s+)?(?:total\s+)?[^.!?]{0,28}?(?:sessions?|times?|blocks?|training days?|days?))?\s*(?:(?:each|a|per|every)\s+week|weekly)\b/g;
-  const weeklyMatches=[...lower.matchAll(weeklyPattern)];
-  if(weeklyMatches.length===1){
-    const value=numberOf(weeklyMatches[0][2]);
-    if(/at most|no more|maximum/.test(weeklyMatches[0][1]??'')) result.maxWeekly=value;
-    else result.exactWeekly=value;
-  } else if(weeklyMatches.length>1) {
-    // Coordinated per-activity clauses ("speaking twice per week and vocabulary
-    // three times per week") are separate commitments that sum to one plan
-    // total; first-match-wins used to read the whole week as the first number.
-    // A ceiling clause anywhere in the mix makes the combined total a ceiling.
-    const total=weeklyMatches.reduce((sum,match)=>sum+numberOf(match[2]),0);
-    if(weeklyMatches.some((match)=>/at most|no more|maximum/.test(match[1]??''))) result.maxWeekly=total;
-    else result.exactWeekly=total;
-  }
-  const scheduledBlocks = lower.match(/\bschedule\s+(\d+|one|two|three|four|five|six|seven)\s+[^.!?]{0,30}\bblocks?\b/);
-  if (result.exactWeekly === undefined && scheduledBlocks) result.exactWeekly=numberOf(scheduledBlocks[1]);
-  const statedBlocks = lower.match(/\b(?:usually|normally|reliably)?\s*(?:in|across|split (?:in|into|across))\s+(\d+|one|two|three|four|five|six|seven)\s+blocks?\b/);
-  if (statedBlocks) {
-    result.maxWeekly=numberOf(statedBlocks[1]);
-    result.preferredWeeklyBlocks=numberOf(statedBlocks[1]);
-  }
-  const authorityOverride=lower.match(/(?:(?:keep|maintain|stay at)\s+(?:exactly\s+)?|(?:reduce|set|change)[^.]{0,25}frequency\s+to\s+)(\d+|once|twice|one|two|three|four|five|six|seven)\s+(?:\d+[- ]minute\s+)?(?:sessions?|days?)/);
-  if(authorityOverride) result.exactWeekly=numberOf(authorityOverride[1]);
-  const answeredFrequency = lower.match(/"question":"[^"]*(?:how many|frequency)[^"]*(?:days|sessions?)[^"]*(?:per week|weekly)[^"]*","answer":(\d+)/);
-  if (answeredFrequency) result.exactWeekly=Number(answeredFrequency[1]);
-  if (/\badd(?:ed|ing)?\s+(?:exactly\s+)?(?:one|1)\s+weekly\b/.test(lower) && !answeredFrequency) {
-    // This is the executable delta the user accepted. A previous baseline is not
-    // present in a self-contained request, so never invent one and call the total
-    // four; encode precisely the single newly accepted weekly occurrence.
-    result.exactWeekly=1;
-  }
-  const onlyDays = lower.match(/(?:only (?:on )?|only days?[^.]*?(?:are|:)|([^.]*)\s+are the only days|can (?:ever )?[^.]*?only (?:on )?)([^.]+)/);
-  if (onlyDays) {
-    const days=mentionedDays(`${onlyDays[1] ?? ''} ${onlyDays[2] ?? ''}`);
-    if(days.length)result.allowedDays=days;
-  }
-  // "Monday and Wednesday are the only allowed days", "…are the only days
-  // available", "the only allowed days are Monday and Wednesday".
-  const onlyAllowedPre=lower.match(/([^.]+?)\s+are the only (?:allowed )?days(?:\s+available)?\b/);
-  if(onlyAllowedPre) {
-    const days=mentionedDays(onlyAllowedPre[1]);
-    if(days.length)result.allowedDays=result.allowedDays?.length?result.allowedDays:days;
-  }
-  const onlyAllowedPost=lower.match(/only (?:allowed )?days(?:\s+available)?\s+(?:are|:)\s*([^.]+)/);
-  if(onlyAllowedPost) {
-    const days=mentionedDays(onlyAllowedPost[1]);
-    if(days.length)result.allowedDays=result.allowedDays?.length?result.allowedDays:days;
-  }
-  const availableDays=lower.match(/(?:possible days?|available days?|may train|can train|can study)[^.]*?((?:sun|mon|tue|wed|thu|fri|sat)[^.]+)/);
-  const precedingPossibleDays=lower.match(/([^.]+?)\s+are (?:all )?(?:possible|available) days/);
-  const precedingAvailable=lower.match(/([^.]+?)\s+are (?:all )?available\b/);
-  if(!result.allowedDays?.length&&availableDays) result.allowedDays=mentionedDays(availableDays[1]);
-  if(!result.allowedDays?.length&&precedingPossibleDays) result.allowedDays=mentionedDays(precedingPossibleDays[1]);
-  if(!result.allowedDays?.length&&precedingAvailable) result.allowedDays=mentionedDays(precedingAvailable[1]);
-  const splitDays=lower.match(/split across\s+([^.]+)/);
-  if(!result.allowedDays?.length&&splitDays) result.allowedDays=mentionedDays(splitDays[1]);
-  // A named-weekday statement ("every Saturday", "on Tuesday and Thursday")
-  // says WHICH days the plan may use — it constrains allowedDays and never
-  // synthesizes a global exactWeekly. "I train every Saturday and want to get
-  // stronger" says nothing about the plan's total weekly sessions, and reading
-  // it as "exactly 1" used to clobber the whole schedule. Only plan-total
-  // wording ("three sessions total", "N times per week", "split across N
-  // blocks") sets exactWeekly — those regexes live above.
-  const addDaySet=(days:number[])=>{
-    if(days.length)result.allowedDays=[...new Set([...(result.allowedDays??[]),...days])];
-  };
-  const addNamedDays=(text:string)=>addDaySet(mentionedDays(text));
-  for(const match of lower.matchAll(new RegExp(`\\bevery\\s+((?:${DAY_ALT})(?:(?:\\s*,\\s*|\\s+(?:and|or)\\s+)(?:${DAY_ALT}))*)`,'g'))) addNamedDays(match[1]);
-  // "each <weekday>" works like "every <weekday>": "working three hours each
-  // Saturday" says which day the plan may use, nothing about the plan total.
-  for(const match of lower.matchAll(new RegExp(`\\beach\\s+((?:${DAY_ALT})(?:(?:\\s*,\\s*|\\s+(?:and|or)\\s+)(?:${DAY_ALT}))*)`,'g'))) addNamedDays(match[1]);
-  // A bare "on <day>" only widens the allowed set when several days are listed
-  // together ("Run on Tuesday and Thursday"), which reads as the available set
-  // rather than a note about one activity.
-  for(const match of lower.matchAll(new RegExp(`\\bon\\s+((?:${DAY_ALT})(?:\\s*(?:,|and|or)\\s*(?:${DAY_ALT}))+)`,'g'))) addNamedDays(match[1]);
-  // Availability sets stated without the word "days" ("I am available Monday
-  // and Wednesday", "I'm available Tue/Thu", "Available Mon/Wed/Fri", "I can
-  // train Monday, Tuesday and Sunday", "I am free Saturday") say which days
-  // the plan may use; like every/each clauses they widen the allowed set, and
-  // an "only available" phrasing still lands in the only-days path above first.
-  for(const match of lower.matchAll(new RegExp(`\\b(?:available|i\\s+am\\s+free|i\\s+can\\s+(?:train|work|practice))\\s+((?:${DAY_ALT})(?:(?:\\s*,\\s*|\\s*\\/\\s*|\\s+(?:and|or)\\s+)(?:${DAY_ALT}))*)`,'g'))) addNamedDays(match[1]);
-  // "Monday through Thursday" (also "Monday-Thursday", "Monday to Thursday")
-  // states an inclusive weekday range: every day between the endpoints is
-  // allowed, wrapping through Sunday when the range crosses the week boundary.
-  for(const match of lower.matchAll(new RegExp(`\\b(${DAY_ALT})\\s*(?:through|to|[-\\u2013\\u2014])\\s*(${DAY_ALT})\\b`,'g'))){
-    const range:number[]=[];
-    for(let day=DAYS[match[1]]; !range.includes(DAYS[match[2]]); day=(day+1)%7) range.push(day);
-    addDaySet(range);
-  }
-  // "every weekday" states the whole plan: all five weekdays.
-  if(/\bevery\s+weekday\b/.test(lower)&&result.exactWeekly===undefined&&result.maxWeekly===undefined) result.exactWeekly=5;
-  // "N different days" is a plan-total statement about the week ("I need three
-  // different workout days").
-  const differentDays=lower.match(new RegExp(`\\b(\\d+|${Object.keys(WORD_NUMBERS).filter((k)=>!/once|twice|thrice/.test(k)).join('|')})\\s+different\\s+(?:[a-z]+\\s+){0,2}days\\b`));
-  if(differentDays&&result.exactWeekly===undefined&&result.maxWeekly===undefined) result.exactWeekly=numberOf(differentDays[1]);
-  // A daily statement ("every morning", "daily") with no named weekday in the
-  // goal is the whole plan: every day of the week.
-  const dailyStatement=lower.match(/\bevery\s+(?!other\b|second\b|third\b|fourth\b|fifth\b)(?:day|morning|afternoon|evening|night)\b|\bdaily\b/);
-  if(dailyStatement&&result.exactWeekly===undefined&&result.maxWeekly===undefined&&mentionedDays(lower).length===0) result.exactWeekly=7;
-  const scheduledDays=mentionedDays(lower);
-  if(result.exactWeekly===undefined && result.maxWeekly===undefined && scheduledDays.length>1 && /\bfixed\b|\bone\s+[^.!?]{0,30}\bsession\b|\bsplit across\b/.test(lower)) {
-    result.exactWeekly=scheduledDays.length;
-    result.allowedDays??=scheduledDays;
-  }
-  if(/avoid scheduling every available hour/.test(lower)) result.maxWeekly=5;
-  // Calendar intent belongs to the user's opening statement. Interview question
-  // wording such as "how many Sundays per month?" must not reinterpret an
-  // explicit "every Sunday" goal as MONTHLY.
-  const openingText=lower.split('\n',1)[0];
-  const calendarAnswer=lower.match(/"answer":\s*"([^"}]*(?:monthly|month)[^"}]*)"/)?.[1]??'';
-  const calendarText=`${openingText} ${calendarAnswer}`;
-  const everyMonths = calendarText.match(/\bevery\s+(\d+|one|two|three|four|five|six|seven|second|third)\s+months?\b/);
-  const monthly = /\bmonthly\b|\bonce (?:a|per) month\b|\b(?:each|every|per) month\b/.test(calendarText);
-  if (everyMonths) {
-    const word = everyMonths[1];
-    result.calendarFrequency = { intervalMonths: word === 'second' ? 2 : word === 'third' ? 3 : numberOf(word) };
-  } else if (monthly) {
-    result.calendarFrequency = { intervalMonths: 1 };
-  }
-  if (result.calendarFrequency) {
-    // Digit ordinals, word ordinals, bare "on the 1st", and "last day of the
-    // month" all state which calendar day a monthly recurrence belongs on;
-    // statedDayOfMonth carries the shared precedence for parse and repair.
-    const stated=statedDayOfMonth(lower);
-    if(stated!==undefined) result.calendarFrequency.dayOfMonth=stated;
-    if (!/\b(?:per|each|every|a) week\b|\bweekly\b/.test(openingText)) result.exactWeekly=undefined;
-  }
-  for (const match of lower.matchAll(/(?:never|unavailable|exclude|not available)[^.]{0,35}\b(sun(?:day)?|mon(?:day)?|tues?(?:day)?|wed(?:nesday)?|thurs?(?:day)?|fri(?:day)?|sat(?:urday)?)\b/g)) result.excludedDays.push(DAYS[match[1]]);
-  for (const match of lower.matchAll(/\b(sun(?:day)?|mon(?:day)?|tues?(?:day)?|wed(?:nesday)?|thurs?(?:day)?|fri(?:day)?|sat(?:urday)?)\b[^.]{0,25}(?:is|are)\s+(?:unavailable|excluded|not available)/g)) result.excludedDays.push(DAYS[match[1]]);
-  result.excludedDays=canonicalWeekdayOrder(result.excludedDays);
-  if(result.allowedDays?.length) result.allowedDays=result.allowedDays.filter((day)=>!result.excludedDays.includes(day));
-  if (/\bweekdays?\b/.test(lower)) {
-    const weekdays = [1, 2, 3, 4, 5].filter((day) => !result.excludedDays.includes(day));
-    result.allowedDays = result.allowedDays?.length
-      ? result.allowedDays.filter((day) => weekdays.includes(day))
-      : weekdays;
-  }
-  if(result.allowedDays?.length) result.allowedDays=canonicalWeekdayOrder(result.allowedDays);
-  // A resolved frequency conflict outranks everything above it. The blocking
-  // question offers reduce / allow two sessions on one day / free up another
-  // day, and whichever the user picks is authoritative — otherwise the
-  // contradiction the question resolved would still dead-end generation. The
-  // answer is applied LAST, after every extraction and filter above (including
-  // the weekday-keyword filter, which the question text itself can trigger), so
-  // it can only widen or override the sets and never be clobbered by an
-  // earlier-stated "only days" clause.
-  const reduceAnswer = lower.match(new RegExp(`"answer":"[^"]*reduce[^"]{0,80}?(?:to\\s+)?(\\d+|${Object.keys(WORD_NUMBERS).filter((k)=>!/once|twice|thrice/.test(k)).join('|')})\\s+days?`));
-  if (reduceAnswer) result.exactWeekly=numberOf(reduceAnswer[1]);
-  if (/"answer":"[^"]*allow[^"]{0,40}two sessions? on (?:one|a|the same) day/.test(lower)) {
-    result.exactWeekly=result.allowedDays?.length ?? result.exactWeekly;
-  }
-  const addedDayAnswer = lower.match(new RegExp(`"answer":"[^"]*(?:make|add)[^"]{0,40}?\\b(${DAY_ALT})\\b[^"]{0,30}available`));
-  if (addedDayAnswer) {
-    result.allowedDays=canonicalWeekdayOrder([...(result.allowedDays??[]),DAYS[addedDayAnswer[1]]]);
-  }
-  // A correction-signal answer ("Actually, make it 3 days per week", "change to
-  // five sessions weekly", "Make it every weekday") is the user re-speaking the
-  // plan total: like the reduce/allow answers above it applies LAST and becomes
-  // authoritative, so a contradiction resolved through resolve_frequency_conflict
-  // lands here too. The signal words mirror CORRECTION_SIGNAL in
-  // frequency-conflict.ts — keep the two lists identical. A corrected total is
-  // exact, so any ceiling the goal stated is superseded with it.
-  const correctionSignal='actually|make it|change to|switch to|let\'s do|lets do|only do|reduce to|instead';
-  const correctedTotal=lower.match(new RegExp(`"answer":"[^"]*(?:${correctionSignal})[^"]{0,80}?\\b(\\d+|once|twice|thrice|one|two|three|four|five|six|seven)\\s+(?:different\\s+|total\\s+)?(?:days?|sessions?|times?)\\b`));
-  if(correctedTotal){ result.exactWeekly=numberOf(correctedTotal[1]); result.maxWeekly=undefined; }
-  if(new RegExp(`"answer":"[^"]*(?:${correctionSignal})[^"]{0,80}?\\bevery\\s+weekday\\b`).test(lower)){ result.exactWeekly=5; result.maxWeekly=undefined; }
-  const correctedDays=lower.match(new RegExp(`"answer":"[^"]*(?:${correctionSignal})[^"]{0,80}?\\b((?:${DAY_ALT})(?:\\s*(?:,|and|or)\\s*(?:${DAY_ALT}))+)\\b`));
-  if(correctedDays){ result.exactWeekly=mentionedDays(correctedDays[1]).length; result.maxWeekly=undefined; }
-  const minutes=lower.match(/(?:must be|no longer than|at most|maximum (?:of )?|may not exceed)\s+(\d+)\s*minutes?/);
-  if(minutes) result.maxMinutes=Number(minutes[1]);
-  const hours=lower.match(/(?:at most|only|maximum (?:of )?|can reliably (?:study|work|train)?|have|with|for)?\s*(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten)\s*hours?(?:\s+available)?\s*(?:each|a|per)?\s*(?:week|weekly)/);
-  if(hours) result.maxWeeklyMinutes=Math.round((WORD_NUMBERS[hours[1]]??({eight:8,nine:9,ten:10}[hours[1]] as number)??Number(hours[1]))*60);
-  const before=lower.match(/\bbefore\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(20\d{2})\b/);
-  if(before) result.deadline=endOfPreviousMonth(MONTHS[before[1]],Number(before[2]));
-  const by=lower.match(/\bby\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),?\s+(20\d{2})\b/);
-  if(by) result.deadline=`${by[3]}-${String(MONTHS[by[1]]).padStart(2,'0')}-${String(Number(by[2])).padStart(2,'0')}` as DayString;
-  const within=lower.match(/\b(?:within|in|over the next)\s+(\d+)\s+weeks?\b/);
-  if(within) result.deadline=addDays(today,Number(within[1])*7);
-  const cap=lower.match(/(?:cannot contribute more than|at most|contribute at most|monthly cap(?: is)?|capped at)\s*[€$£]?\s*([\d,]+)(?:\s*[€$£])?\s*(?:per month|monthly)/);
-  // A cap tied to a named range is part of a variable schedule, not a global
-  // ceiling. Treating the first range as global previously changed a later
-  // €700 allowance into €650.
-  if(cap&&!/\bfrom\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)|\bin\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)/.test(lower.slice(cap.index??0,(cap.index??0)+140))) {
-    result.monthlyMoneyCap=Number(cap[1].replace(/,/g,''));
-  }
-  result.undefinedMetric=/\b(?:twice as (?:creative|smart)|\d+% more productive|become[^.]{0,40}\bexpert\b)/.test(lower);
-  // Negative constraints: activities the user explicitly forbade. The lexicon is
-  // deliberately narrow — a missed "no swimming" is caught in review, but a
-  // false "forbidden" would reject honest plans.
-  for (const match of lower.matchAll(/\b(?:never|no|not|don't|do not|cannot|can't|avoid|without|quit|stop|zero)\s+(?:any\s+|more\s+)?(running|runs?|jogging|swimming|swims?|cycling|biking|smoking|drinking|alcohol|sugar|desserts?|snacking|fast food|junk food|gaming|gambling)\b/g)) result.forbiddenActivities.push(match[1]);
-  result.forbiddenActivities=[...new Set(result.forbiddenActivities)];
-  if (/\b(?:one|1)\b[^.!?]{0,35}\bstrength\b[^.!?]{0,25}\b(?:weekly|per week|session|day)\b|\bone of (?:the )?(?:three|3) weekly days must be strength\b/i.test(lower)) {
-    result.requiredWeeklyRoles.push({ role:'STRENGTH', minOccurrences:1 });
-  }
-  const roleDayPatterns: Array<[SemanticTaskRole, RegExp]> = [
-    ['TRAIL', /\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b[^.!?]{0,35}\btrail\b|\btrail\b[^.!?]{0,35}\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i],
-    ['LONG_RUN', /\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b[^.!?]{0,35}\blong run\b|\blong run\b[^.!?]{0,35}\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i],
-  ];
-  for (const [role, pattern] of roleDayPatterns) {
-    const match=lower.match(pattern);
-    const name=match?.[1]??match?.[2];
-    if(name) result.requiredRoleDays.push({role,days:[DAYS[name]]});
-  }
-  const painFree=lower.match(/(?:after|only after)\s+(\d+|one|two|three|four)\s+pain-free weeks?/);
-  const progressionPolicy = painFree || /repeated pain|sharp pain|approval|let me decide|my decision|decide when (?:to )?resume/.test(lower);
-  if (progressionPolicy) result.progressionPolicy = {
-    painFreeWeeks: painFree ? numberOf(painFree[1]) : undefined,
-    reduceOnRepeatedPain: /reduce after repeated pain/.test(lower),
-    pauseOnSharpPain: /pause for sharp pain/.test(lower),
-    approvalRequired: /(?:wait|require)[^.]{0,45}approval|let me decide|my decision|decide when (?:to )?resume/.test(lower),
-  };
-  result.prohibitConsecutiveEvenings=/never on consecutive evenings|no consecutive evenings/.test(lower);
-  const impossibleDays=!!result.exactWeekly && !!result.allowedDays?.length && result.exactWeekly>result.allowedDays.length;
-  result.requiresClarification=result.undefinedMetric||impossibleDays||/have not (?:defined|given|set)|not defined|without (?:a )?(?:baseline|metric)/.test(lower);
-  return result;
-}
-
 export function taskWeeklyFrequency(task: Pick<NormalizedTask,'recurrenceType'|'recurrenceConfig'>): number {
   if(task.recurrenceType==='EVERY_DAY') return 7;
   if(task.recurrenceType==='SPECIFIC_WEEKDAYS') return task.recurrenceConfig.weekdays?.length??0;
@@ -475,12 +268,15 @@ export function taskWeeklyFrequency(task: Pick<NormalizedTask,'recurrenceType'|'
   return 0;
 }
 
-/** Every money amount a task states directly or via an AMOUNT ladder. */
+/** Every money amount a task states directly or via an AMOUNT ladder. Both
+ *  the symbol form (€500 / 500€) and the word form (500 EUR / EUR 500) count —
+ *  the same two shapes the role lexicon and the benchmark scorer recognize. */
 export function taskMoneyAmounts(task: Pick<NormalizedTask,'title'|'description'|'reason'|'progression'>): number[] {
   const text=`${task.title} ${task.description} ${task.reason}`;
-  const direct=[...text.matchAll(/[€$£]\s*([\d,]+)|([\d,]+)\s*[€$£]/g)].map((m)=>Number((m[1]??m[2]).replace(/,/g,'')));
+  const symbol=[...text.matchAll(/[€$£]\s*([\d,]+)|([\d,]+)\s*[€$£]/g)].map((m)=>Number((m[1]??m[2]).replace(/,/g,'')));
+  const word=[...text.matchAll(/\b([\d,]+)\s*(?:USD|EUR|GBP|GEL)\b|\b(?:USD|EUR|GBP|GEL)\s*([\d,]+)\b/gi)].map((m)=>Number((m[1]??m[2]).replace(/,/g,'')));
   const ladder=task.progression?.metricType==='AMOUNT'?task.progression.stages.map((s)=>s.target):[];
-  return [...direct,...ladder];
+  return [...new Set([...symbol,...word,...ladder])];
 }
 
 export function explicitConstraintErrors(
@@ -552,31 +348,3 @@ export function explicitConstraintErrors(
   return [...new Set(errors)];
 }
 
-/**
- * The parsed constraints, read back as plain sentences.
- *
- * The draft repair prompt includes this list, so a rejection is accompanied by
- * the exact contract the replacement plan has to satisfy instead of only the
- * sentence that failed.
- */
-export function describeExplicitConstraints(constraints: ExplicitGoalConstraints): string[] {
-  const lines:string[]=[];
-  if (constraints.exactWeekly!==undefined) lines.push(`exactly ${constraints.exactWeekly} total sessions per week`);
-  if (constraints.maxWeekly!==undefined) lines.push(`at most ${constraints.maxWeekly} total sessions per week`);
-  if (constraints.allowedDays?.length) lines.push(`only these weekdays may be used: ${constraints.allowedDays.map((day)=>['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][day]).join(', ')}`);
-  if (constraints.excludedDays.length) lines.push(`these weekdays are excluded: ${constraints.excludedDays.map((day)=>['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][day]).join(', ')}`);
-  if (constraints.maxMinutes!==undefined) lines.push(`no session may exceed ${constraints.maxMinutes} minutes`);
-  if (constraints.maxWeeklyMinutes!==undefined) lines.push(`no more than ${constraints.maxWeeklyMinutes} minutes of work per week in total`);
-  if (constraints.deadline) lines.push(`the deadline is ${constraints.deadline}`);
-  if (constraints.monthlyMoneyCap!==undefined) lines.push(`no monthly contribution may exceed ${constraints.monthlyMoneyCap}`);
-  if (constraints.calendarFrequency) {
-    lines.push(constraints.calendarFrequency.dayOfMonth!==undefined
-      ? `the calendar-month cadence must stay a monthly recurrence on day ${constraints.calendarFrequency.dayOfMonth} of the month`
-      : 'the calendar-month cadence must stay a monthly recurrence');
-  }
-  for (const requirement of constraints.requiredWeeklyRoles) lines.push(`${requirement.role} must appear at least ${requirement.minOccurrences} time(s) per week`);
-  for (const requirement of constraints.requiredRoleDays) lines.push(`${requirement.role} must be scheduled on ${requirement.days.map((day)=>['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][day]).join(', ')}`);
-  if (constraints.prohibitConsecutiveEvenings) lines.push('sessions must not land on consecutive evenings');
-  if (constraints.undefinedMetric) lines.push('the success metric is undefined; do not invent a numeric target');
-  return lines;
-}

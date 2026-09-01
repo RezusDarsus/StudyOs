@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { GOAL_CATEGORY, PROGRESSION_METRIC, RECURRENCE_TYPE, TARGET_TYPE } from '../domain/enums.js';
 import { isDayString } from '../domain/dates.js';
+import { requirementFragmentSchema } from './requirements/extract-schema.js';
 
 // Everything the model returns is parsed through these. The backend enums stay
 // authoritative — the model can only pick from what Phase 1 already supports, so
@@ -112,6 +113,17 @@ export const interviewResponseSchema = z
   });
 export type InterviewResponse = z.infer<typeof interviewResponseSchema>;
 
+/**
+ * Stage 5: the same interview response plus the
+ * structure-aware requirement channel. Legacy consumers keep the base schema;
+ * the flag-ON interview turn parses through this one, so a turn cannot touch
+ * the AST without carrying evidence for every atom.
+ */
+export const interviewResponseSchemaAst = interviewResponseSchema.and(
+  z.object({ requirements: requirementFragmentSchema }),
+);
+export type InterviewResponseAst = z.infer<typeof interviewResponseSchemaAst>;
+
 // ---------------------------------------------------------------- goal draft
 
 const dayString = z
@@ -130,6 +142,8 @@ export const draftRecurrenceSchema = z.object({
   intervalDays: z.number().int().min(1).max(90).optional(),
   dayOfMonth: z.union([z.number().int().min(1).max(31), z.literal('LAST')]).optional(),
   intervalMonths: z.number().int().min(1).max(120).optional(),
+  /** YYYY-MM strings — set by the validator from the AST contract, or the model. */
+  excludedMonths: z.array(z.string().regex(/^\d{4}-(?:0[1-9]|1[0-2])$/)).max(24).optional(),
 });
 
 /**
@@ -273,6 +287,35 @@ export type PreferenceExtraction = z.infer<typeof preferenceExtractionSchema>;
 
 // --------------------------------------------------------- progress analysis
 
+/**
+ * One concrete, domain-open recommendation: something a user could look for.
+ *
+ * The core Copilot knows nothing about books, manga, courses or restaurants —
+ * `entityType` is runtime data, an open set the model fills in its own words.
+ * Only the identifier hygiene (lowercase, short, no spaces) is enforced, because
+ * the value is destined to become a key in later stages. Attribution is
+ * deliberately free-form ("author", "studio", "instructor" — whoever made it),
+ * so no attribution kind is hardcoded either.
+ */
+export const recommendationItemSchema = z.object({
+  entityType: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .max(40)
+    .regex(/^[a-z][a-z0-9_-]*$/, 'entityType must be a short lowercase identifier'),
+  /** The item's name, as a user would search for it. */
+  displayName: z.string().trim().min(1).max(200),
+  /** Who created, performs or publishes it — absent when not applicable. */
+  attribution: z.string().trim().min(1).max(200).nullish(),
+  /** One short sentence on why it fits this user. */
+  reason: z.string().trim().min(1).max(300).nullish(),
+});
+export type RecommendationItem = z.infer<typeof recommendationItemSchema>;
+
+/** Hard output bound for one turn's recommendations — a mechanic, not a rule about content. */
+export const MAX_RECOMMENDATIONS = 12;
+
 export const progressAnalysisSchema = z.object({
   /** Plain-language explanation grounded in the supplied statistics. */
   explanation: z.string().trim().min(1).max(800),
@@ -281,6 +324,13 @@ export const progressAnalysisSchema = z.object({
       z.object({
         summary: z.string().trim().min(1).max(200),
         taskTitle: z.string().trim().max(120).nullish(),
+        /**
+         * Stage 4: a stable server-owned reference to the task, supplied in the
+         * prompt. Optional — the executor's title resolver remains for model
+         * answers that name the task instead. Validated against the goal's
+         * tasks before any proposal is recorded; a model cannot invent one.
+         */
+        taskId: z.string().trim().max(60).nullish(),
         proposedRecurrence: draftRecurrenceSchema.nullish(),
         proposedMinutes: z.number().int().min(1).max(600).nullish(),
         /**
@@ -293,5 +343,26 @@ export const progressAnalysisSchema = z.object({
     )
     .max(4)
     .default([]),
+  /**
+   * Structured content recommendations. Owned by `recommendations` alone:
+   * schedule and progression proposals live in `suggestions` and the two are
+   * never mixed. Additive and tolerated on every path so legacy clients and
+   * prompts keep parsing; only the flag-on ADVICE contract (V7 below) *demands*
+   * the accompanying self-report field.
+   */
+  recommendations: z.array(recommendationItemSchema).max(MAX_RECOMMENDATIONS).nullish(),
+  /** The model's self-report: the user asked for concrete items. Nullish only outside V7. */
+  recommendsItems: z.boolean().nullish(),
 });
 export type ProgressAnalysis = z.infer<typeof progressAnalysisSchema>;
+
+/**
+ * The ADVICE-turn contract.
+ * Tightens the tolerant base schema: the self-report stops being optional, so
+ * "recommends nothing but did not say so" is a parse failure that chatJson's
+ * schema repair gets to fix before semantic validation ever runs.
+ */
+export const progressAnalysisSchemaV7 = progressAnalysisSchema.extend({
+  recommendsItems: z.boolean(),
+});
+export type ProgressAnalysisV7 = z.infer<typeof progressAnalysisSchemaV7>;

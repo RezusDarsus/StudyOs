@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { getRuntimeKnowledge, portMemo } from './runtime-knowledge.js';
 import { chatJson } from './client.js';
 import { PROMPT_VERSIONS, intentSystemPrompt } from './prompts.js';
 
@@ -102,17 +103,29 @@ const PRODUCT_HELP_RULES: Array<[RegExp, number]> = [
  * GOAL_QUESTION — status questions about the user's own goal or progress.
  * Classified by pattern regardless of context; the caller decides what a goal
  * question means when there is no goal in view.
+ *
+ * The topic nouns in the last rule (workout/gym/run/class) are runtime data
+ * (the port); the structural frame, the product nouns (task, day, session,
+ * streak, goal) and every other rule are core.
  */
-const GOAL_QUESTION_RULES: Array<[RegExp, number]> = [
+const GOAL_QUESTION_CORE: Array<[RegExp, number]> = [
   [/\bhow (?:am|are|have) i (?:doing|going|progressing|been doing)\b/, 0.9],
   [/\bam i (?:on track|behind|ahead|on pace|falling behind|doing)\b/, 0.9],
   [/\bwhy am i\b[^.?!]{0,40}\b(?:behind|failing|struggling|losing|falling|not)\b/, 0.9],
   [/\bwhat(?:'s| is) my progress\b/, 0.85],
   [/\bwhen (?:is|are|do|does)\b[^.?!]{0,30}\bmy (?:next|upcoming|following)\b/, 0.9],
   [/\b(?:did|have|do) i\b[^.?!]{0,30}\b(?:complete|completed|finish|finished|miss|missed|hit|meet|met|do|done|skip|skipped)\b/, 0.85],
-  // Past-tense report: "I missed my workout yesterday." Not a new goal.
-  [/\bi (?:missed|skipped|forgot|failed|broke)\b[^.?!]{0,40}\b(?:my|the|a|workout|task|day|session|gym|streak|goal|run|class)\b/, 0.85],
 ];
+
+function goalQuestionRules(): Array<[RegExp, number]> {
+  return portMemo(getRuntimeKnowledge(), 'goal-question-rules', () => {
+    const alternation = getRuntimeKnowledge().getLexicon('missed-activity-noun').alternation ?? '(?!x)x';
+    return [
+      ...GOAL_QUESTION_CORE,
+      [new RegExp(`\\bi (?:missed|skipped|forgot|failed|broke)\\b[^.?!]{0,40}\\b(?:my|the|a|${alternation})\\b`), 0.85],
+    ];
+  });
+}
 
 /** MODIFY_GOAL — explicit edit phrasing over something the user already has. */
 const MODIFY_GOAL_RULES: Array<[RegExp, number]> = [
@@ -145,7 +158,9 @@ const GENERAL_ADVICE =
  */
 const CREATE_INFORMATIONAL =
   /\bi (?:want|need|would like|'d like) (?:to )?(?:know|understand|find out|check|see|ask|hear|clarify)\b/;
-const CREATE_COMMITMENT: Array<[RegExp, number]> = [
+// The activity-verb alternation in the last rule is runtime data (the port);
+// the commitment frames are core. Exported for the parity tests.
+export const CREATE_COMMITMENT: Array<[RegExp, number]> = [
   [/\bi (?:really )?(?:want|need|plan|intend|hope|decided|commit|committed|choose) to\b/, 0.98],
   [/\bi want\b/, 0.95],
   [/\bi need\b/, 0.95],
@@ -154,41 +169,55 @@ const CREATE_COMMITMENT: Array<[RegExp, number]> = [
   [/\bmy goal is\b/, 0.95],
   [/\bhelp me\b/, 0.95],
   [/\bi (?:will|'?ll)\b/, 0.9],
-  [/\bi can\b[^.?!]{0,60}\b(?:study|train|practice|save|contribute|spend|work|give|commit|dedicate|exercise|go|do)\b/, 0.9],
 ];
+
+function createCommitmentRules(): Array<[RegExp, number]> {
+  return portMemo(getRuntimeKnowledge(), 'create-commitment-rules', () => {
+    const verbs = getRuntimeKnowledge().getLexicon('commitment-activity-verb').alternation ?? '(?!x)x';
+    return [
+      ...CREATE_COMMITMENT,
+      [new RegExp(`\\bi can\\b[^.?!]{0,60}\\b(?:${verbs})\\b`), 0.9],
+    ];
+  });
+}
 
 /**
  * R2 — imperative + activity. Bare goal statements ("learn Java", "save for a
  * trip", "read 20 pages a day") are a leading activity verb with something
- * after it. The verbs are a closed list; a lone verb or gibberish matches
- * nothing.
+ * after it. The verb LIST is runtime data (the port); the imperative frame
+ * (prefix, suffix forms, the required following word) is core.
  */
-const CREATE_VERBS = [
-  'learn', 'read', 'save', 'sleep', 'prepare', 'run', 'go', 'get', 'build', 'find',
-  'start', 'cook', 'improve', 'wake', 'stop', 'spend', 'organize', 'organise',
-  'study', 'walk', 'reduce', 'practice', 'practise', 'lose', 'become', 'train',
-  'apply', 'complete', 'meditate', 'create', 'generate', 'schedule', 'implement',
-  'design', 'plan', 'use', 'make', 'set', 'track', 'log', 'quit', 'cut', 'gain',
-  'write', 'draw', 'play', 'eat', 'drink', 'exercise', 'budget', 'be', 'repeat',
-  'pause', 'resume', 'increase', 'recommend', 'guarantee', 'limit', 'avoid',
-  'stretch', 'lift', 'swim', 'cycle', 'hike', 'journal', 'invest', 'finish', 'give',
-];
-const CREATE_IMPERATIVE = new RegExp(
-  `^(?:please\\s+)?(?:${CREATE_VERBS.join('|')})(?:s|es|ed|ing)?\\s+\\S`,
-);
+function createImperative(): RegExp {
+  return portMemo(getRuntimeKnowledge(), 'create-imperative', () => {
+    const verbs = getRuntimeKnowledge().getLexicon('create-verb').alternation ?? '(?!x)x';
+    return new RegExp(`^(?:please\\s+)?(?:${verbs})(?:s|es|ed|ing)?\\s+\\S`);
+  });
+}
 
 /**
  * R3 — goal management phrasing. Accepting, rejecting or pausing a schedule is
  * still goal-directed intent (the benchmark's authority-talk cases live here),
- * and refusing to plan around it would strand the user.
+ * and refusing to plan around it would strand the user. The training/workout
+ * nouns in the third rule are runtime data; the product nouns (sessions, plan,
+ * schedule, goal) stay core.
  */
-const CREATE_MANAGEMENT: Array<[RegExp, number]> = [
+const CREATE_MANAGEMENT_CORE: Array<[RegExp, number]> = [
   [/\bkeep my (?:current )?(?:schedule|plan|streak|goal|routine|sessions?)\b/, 0.92],
   [/\b(?:reject|accept|approve|veto)\b[^.?!]{0,60}\b(?:increase|decrease|change|proposal|proposed|schedule|session|addition|reduction)\b/, 0.92],
-  [/\b(?:pause|resume|halt)\b[^.?!]{0,30}\b(?:training|workouts?|sessions?|plan|schedule|goal)\b/, 0.92],
   [/\b(?:progress|stay|reduce|advance|pause)\b[^.?!]{0,60}\b(?:recommendation|approve|approval)\b/, 0.92],
   [/\brecommend whether\b/, 0.85],
 ];
+
+function createManagementRules(): Array<[RegExp, number]> {
+  return portMemo(getRuntimeKnowledge(), 'create-management-rules', () => {
+    const training = getRuntimeKnowledge().getLexicon('training-noun').patterns[0]?.entry.phrase ?? '(?!x)x';
+    return [
+      ...CREATE_MANAGEMENT_CORE.slice(0, 2),
+      [new RegExp(`\\b(?:pause|resume|halt)\\b[^.?!]{0,30}\\b(?:${training}|sessions?|plan|schedule|goal)\\b`), 0.92],
+      ...CREATE_MANAGEMENT_CORE.slice(2),
+    ];
+  });
+}
 
 /**
  * R4 — explicit goal-object creation. "create a goal that…", "before creating a
@@ -227,7 +256,7 @@ export function classifyIntentDeterministic(
     if (pattern.test(lowered)) return { intent: 'PRODUCT_HELP', confidence, method: 'deterministic' };
   }
 
-  for (const [pattern, base] of GOAL_QUESTION_RULES) {
+  for (const [pattern, base] of goalQuestionRules()) {
     if (pattern.test(lowered)) {
       // A goal on screen makes a status question unambiguous; without one the
       // pattern alone still decides — the caller owns the context policy.
@@ -248,13 +277,13 @@ export function classifyIntentDeterministic(
   const endsWithQuestion = /\?\s*$/.test(text.trim());
   if (!endsWithQuestion && !QUESTION_STARTERS.has(firstWord(text))) {
     if (!CREATE_INFORMATIONAL.test(lowered)) {
-      for (const [pattern, confidence] of CREATE_COMMITMENT) {
+      for (const [pattern, confidence] of createCommitmentRules()) {
         if (pattern.test(lowered)) return { intent: 'CREATE_GOAL', confidence, method: 'deterministic' };
       }
-      if (CREATE_IMPERATIVE.test(lowered)) {
+      if (createImperative().test(lowered)) {
         return { intent: 'CREATE_GOAL', confidence: 0.9, method: 'deterministic' };
       }
-      for (const [pattern, confidence] of CREATE_MANAGEMENT) {
+      for (const [pattern, confidence] of createManagementRules()) {
         if (pattern.test(lowered)) return { intent: 'CREATE_GOAL', confidence, method: 'deterministic' };
       }
       if (CREATE_OBJECT.test(lowered)) {

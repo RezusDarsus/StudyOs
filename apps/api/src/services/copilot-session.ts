@@ -1,4 +1,4 @@
-import type { CopilotSession } from '@prisma/client';
+﻿import type { CopilotSession } from '@prisma/client';
 import { chatJson } from '../ai/client.js';
 import { AiProviderError } from '../ai/provider.js';
 import {
@@ -7,22 +7,16 @@ import {
   interviewUserPrompt,
 } from '../ai/prompts.js';
 import {
-  interviewResponseSchema,
   type CopilotQuestion,
-  type InterviewResponse,
 } from '../ai/schemas.js';
+import { interviewResponseSchemaAst, type InterviewResponseAst } from '../ai/schemas.js';
+import { requirementFragmentSchema } from '../ai/requirements/extract-schema.js';
 import {
   promoteMultiSelect,
   ensureCustomAnswer,
-  assessPlanningSufficiency,
-  questionBudget,
-  essentialFallbackQuestion,
-  questionDomainMismatch,
   questionTopic,
-  redundancyReason,
   type QuestionTopic,
 } from '../ai/interview-plan.js';
-import { evaluatePlanReadiness, type PlanReadiness, type PlanningDimension } from '../ai/readiness.js';
 import {
   applyModelExtraction,
   createContext,
@@ -31,27 +25,38 @@ import {
   inferredValues,
   literalAnswers,
   parseContext,
+  parseRequirementState,
   recordAnswer,
   serializeContext,
   toPlainObject,
 } from '../ai/context.js';
+import { classifyIntentDeterministic, PRODUCT_HELP_STUB } from '../ai/intent-router.js';
+import {
+  emptyRequirementState,
+  estimateRemainingAskable,
+  evaluateAstReadiness,
+  ingestExtraction,
+  markExtractionFailed,
+  toPlanReadiness,
+  deterministicGapResolution,
+  type PlanReadiness,
+  type RequirementState,
+} from '../ai/requirements/index.js';
+import type { RequirementFragment } from '../ai/requirements/extract-schema.js';
 import { memoryGateCategory } from '../ai/category.js';
 import { badRequest, forbidden, notFound } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
 import { getPreferencesForPrompt } from './preferences.js';
 import { recordEvent } from './copilot-analytics.js';
-import { parseExplicitGoalConstraints } from '../ai/goal-constraints.js';
-import { RESOLVE_FREQUENCY_CONFLICT_ID, withCorrectionSignal } from '../ai/frequency-conflict.js';
-import { classifyIntentDeterministic, PRODUCT_HELP_STUB } from '../ai/intent-router.js';
-import { todayIn } from '../domain/dates.js';
+import { REQUIREMENT_AST_EXTRACTION_INSTRUCTIONS } from '../ai/prompts.js';
 
 // Interview limits are enforced by the backend, not by trusting the model to
 // stop. A chatty model cannot trap the user in an endless questionnaire.
 //
-// The limit that binds is the per-request budget from ai/interview-plan.ts, which is
-// smaller for someone who already said what they want. This is the absolute ceiling
-// on top of it — a backstop against a future budget being widened by mistake, not
-// something a normal run ever reaches.
+// HARD_MAX_QUESTIONS is the absolute ceiling — the only question-count rule
+// in the system. Readiness is never a function of the count (the AST gate
+// owns it); the cap exists so a user who keeps answering without ever
+// satisfying the gate is not trapped forever.
 export const HARD_MAX_QUESTIONS = 10;
 
 const SESSION_TTL_HOURS = 48;
@@ -73,6 +78,23 @@ export interface InterviewTurn {
   readiness: PlanReadiness;
   /** Bumped on every applied turn; a generate request quotes it to prove freshness. */
   revision: number;
+  /** Stage 5: a HIGH gap remains and the budget allows one more question. */
+  shouldAsk?: boolean;
+  /** Rev.3/Rev.4: the server-owned force policy — same predicate as the
+   * accepted-force rule in the generate route. The client never decides. */
+  canForce?: boolean;
+  /** Rev.3 (R1): true when the current turn's extraction failed — the state
+   * is stale; generation is refused until the next successful ingest. */
+  extractionFailed?: boolean;
+  /** Stage 5: compact AST state summary for the client. */
+  requirements?: {
+    ready: boolean;
+    shouldAsk: boolean;
+    activeRecords: number;
+    conflicts: Array<{ kind: string; description: string }>;
+    pending: number;
+    missing: string[];
+  };
 }
 
 function safeParse(raw: string): { id?: string; prompt?: string } | null {
@@ -160,22 +182,48 @@ export function askedTopics(messages: SessionMessage[]): QuestionTopic[] {
   return topics;
 }
 
-/** Which question subject settles which readiness dimension. */
-const DIMENSION_TOPIC: Record<PlanningDimension, QuestionTopic> = {
-  DESIRED_OUTCOME: 'TARGET',
-  WEEKLY_CAPACITY: 'FREQUENCY',
-  TIMEFRAME: 'DEADLINE',
-  BASELINE: 'EXPERIENCE',
-  CONSTRAINTS: 'CONSTRAINT',
-  PREFERENCES: 'FORMAT',
-};
+// -------------------------------------------------------------- Stage 5 (AST)
+
+/** The interview turn number of a session: 0 for the opening, N after N answers. */
+function astGroundingFor(
+  session: { initialGoalText: string; questionCount: number },
+  answer?: { questionId: string; text: string },
+): { turn: number; message?: string; answer?: { questionId: string; text: string }; at: string } {
+  const at = new Date().toISOString();
+  if (session.questionCount === 0) {
+    return { turn: 0, message: session.initialGoalText, at };
+  }
+  return { turn: session.questionCount, answer, at };
+}
+
+/** Compact AST summary for API payloads. */
+function requirementsSummary(
+  state: RequirementState,
+  questionCount: number,
+): NonNullable<InterviewTurn['requirements']> {
+  const readiness = evaluateAstReadiness(state, {
+    questionCount,
+    maxQuestions: HARD_MAX_QUESTIONS,
+  });
+  return {
+    ready: readiness.ready,
+    shouldAsk: readiness.shouldAsk,
+    activeRecords: state.records.filter((r) => r.status === 'ACTIVE').length,
+    conflicts: readiness.conflicts.map((c) => ({ kind: c.kind, description: c.description })),
+    pending: readiness.pending.length,
+    missing: readiness.missing,
+  };
+}
+
+function appendRequirementsInstructions(systemPrompt: string): string {
+  return `${systemPrompt}\n\n${REQUIREMENT_AST_EXTRACTION_INSTRUCTIONS}`;
+}
 
 /**
- * The readiness gate for a stored session.
- *
- * The same evaluation applyTurn enforces, computed on demand — the session
- * snapshot and the generate route must agree with the interview about whether
- * there is enough to plan from.
+ * The readiness gate for a stored session — Stage-6 canonical: derived from
+ * the authoritative AST (ACTIVE atoms only), never from question counting or
+ * re-parsed prose. The session snapshot and the generate route share this,
+ * so the gates can never disagree.
  */
 export function sessionReadiness(session: {
   initialGoalText: string;
@@ -183,17 +231,41 @@ export function sessionReadiness(session: {
   messages: SessionMessage[];
   questionCount: number;
 }): PlanReadiness {
-  return evaluatePlanReadiness({
-    goalText: session.initialGoalText,
-    context: toPlainObject(parseContext(session.structuredContext, session.initialGoalText)),
-    answeredTopics: askedTopics(session.messages),
+  const state = parseRequirementState(session.structuredContext);
+  const ast = evaluateAstReadiness(state, {
     questionCount: session.questionCount,
+    maxQuestions: HARD_MAX_QUESTIONS,
   });
+  return toPlanReadiness(ast);
+}
+
+/**
+ * Canonical byte form of a requirement state for equality checks:
+ * object keys sorted deterministically, so two parses of the same payload
+ * compare equal regardless of property insertion order.
+ */
+function canonicalState(state: RequirementState): string {
+  const sortDeep = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(sortDeep);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+          .map(([k, v]) => [k, sortDeep(v)]),
+      );
+    }
+    return value;
+  };
+  return JSON.stringify(sortDeep(state));
 }
 
 async function runInterviewTurn(
   session: CopilotSession & { messages: SessionMessage[] },
-): Promise<{ result: InterviewResponse; preferences: Array<{ key: string; value: string }> }> {
+): Promise<{
+  result: InterviewResponseAst | null;
+  preferences: Array<{ key: string; value: string }>;
+  providerFailed: boolean;
+}> {
   const context = parseContext(session.structuredContext, session.initialGoalText);
   const asked = parseJson<string[]>(session.askedQuestionIds, []);
 
@@ -202,236 +274,152 @@ async function runInterviewTurn(
   const gate = memoryGateCategory(session.initialGoalText, session.category);
   const preferences = await getPreferencesForPrompt(session.userId, gate.category);
 
-  // Quote the model the same budget applyTurn will hold it to. It is only advice
-  // either way, but advice that contradicts the enforcement produces a model that
-  // asks a fifth question and a backend that throws it away.
-  const budget = questionBudget(session.initialGoalText);
+  const systemPrompt = appendRequirementsInstructions(
+    interviewSystemPrompt({
+      questionCount: session.questionCount,
+      minQuestions: 0,
+      maxQuestions: HARD_MAX_QUESTIONS,
+      settled: [],
+    }),
+  );
 
-  let result: InterviewResponse;
   try {
-    result = await chatJson(
+    const result = (await chatJson(
       {
-      purpose: 'INTERVIEW',
-      promptVersion: PROMPT_VERSIONS.interview,
-      userId: session.userId,
-      sessionId: session.id,
-      // Interview turns are simple; reasoning would only add latency.
-      thinking: false,
-      temperature: 0.4,
-      maxTokens: 900,
-      // Measured: median 2.9s, p90 7.6s, p99 18.5s. A 20s cap sat exactly on p99
-      // and killed calls that were about to succeed; 25s still catches a genuine
-      // hang (the observed outlier was 44s) without clipping the tail.
-      // This is an interactive button, so never leave it spinning through two
-      // minute-long attempts. Normal responses finish well inside this budget;
-      // a provider outage falls back to a plan the user can edit.
-      timeoutMs: 6_000,
-      retryTransient: false,
-      messages: [
-        {
-          role: 'system',
-          content: interviewSystemPrompt({
-            questionCount: session.questionCount,
-            minQuestions: budget.min,
-            maxQuestions: budget.max,
-            settled: budget.stated,
-          }),
-        },
-        {
-          role: 'user',
-          content: interviewUserPrompt({
-            initialGoal: session.initialGoalText,
-            context: toPlainObject(context),
-            askedQuestionIds: asked,
-            answered: answeredPairs(session.messages),
-            transcript: session.messages.slice(-TRANSCRIPT_WINDOW),
-            knownPreferences: preferences,
-          }),
-        },
-      ],
+        purpose: 'INTERVIEW',
+        promptVersion: PROMPT_VERSIONS.interview,
+        userId: session.userId,
+        sessionId: session.id,
+        // Interview turns are simple; reasoning would only add latency.
+        thinking: false,
+        temperature: 0.4,
+        maxTokens: 1400,
+        // Measured: median 2.9s, p90 7.6s, p99 18.5s. A 20s cap sat exactly on
+        // p99 and killed calls that were about to succeed; 25s still catches a
+        // genuine hang (the observed outlier was 44s) without clipping the
+        // tail. This is an interactive button, so never leave it spinning
+        // through two minute-long attempts.
+        timeoutMs: 6_000,
+        retryTransient: false,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          {
+            role: 'user',
+            content: interviewUserPrompt({
+              initialGoal: session.initialGoalText,
+              context: toPlainObject(context),
+              askedQuestionIds: asked,
+              answered: answeredPairs(session.messages),
+              transcript: session.messages.slice(-TRANSCRIPT_WINDOW),
+              knownPreferences: preferences,
+            }),
+          },
+        ],
       },
-      interviewResponseSchema,
-    );
+      interviewResponseSchemaAst,
+      // Model budget: one extraction/gap call, at most ONE schema repair. No
+      // uncontrolled model loops.
+      { maxAttempts: 2 },
+    )) as InterviewResponseAst;
+    return { result, preferences, providerFailed: false };
   } catch (err) {
+    // R1 containment: an extraction failure is surfaced as the typed provider
+    // error it is (after the bounded budget). The caller marks the state stale
+    // and never concludes from the pre-turn AST.
     if (!(err instanceof AiProviderError) || !['BAD_RESPONSE', 'TIMEOUT'].includes(err.kind)) throw err;
-    const priorTopics = askedTopics(session.messages);
-    const sufficiency = assessPlanningSufficiency(session.initialGoalText, priorTopics);
-    if (sufficiency.enough) {
-      result = {
-          state: 'READY_TO_GENERATE',
-          assistantMessage: "That's enough to build a conservative plan.",
-          question: null,
-          category: session.category as InterviewResponse['category'],
-        };
-    } else {
-      const fallbackQuestion = essentialFallbackQuestion(
-        session.initialGoalText,
-        [...budget.stated, ...priorTopics],
-        sufficiency.highestImpactMissing,
-      );
-      result = {
-          state: 'NEEDS_MORE_INFORMATION',
-          assistantMessage: fallbackQuestion.prompt,
-          question: fallbackQuestion,
-          category: session.category as InterviewResponse['category'],
-        };
-    }
+    return { result: null, preferences, providerFailed: true };
   }
-  return { result, preferences };
 }
 
 /**
- * Apply the model's turn to the session, enforcing the backend's own limits on
- * how the interview may progress.
+ * The one turn applier: deterministic merge of the extraction fragment into
+ * the RequirementState, the AST gate, deterministic question selection, and
+ * persistence. `response === null` (or `extractionFailed`) marks a failed
+ * extraction — the state is stale for generation until the next successful
+ * ingest (R1).
  */
 async function applyTurn(
   session: CopilotSession & { messages: SessionMessage[] },
-  result: InterviewResponse,
-  injectedPreferences: Array<{ key: string; value: string }> = [],
+  input: {
+    /** The full model response, or null when extraction failed. */
+    response: InterviewResponseAst | null;
+    injectedPreferences?: Array<{ key: string; value: string }>;
+    currentAnswer?: { questionId: string; text: string };
+    /** Force the stale path even when a fragment exists (deterministic-only turn). */
+    extractionFailed?: boolean;
+    assistantMessageOverride?: string;
+  },
 ): Promise<InterviewTurn> {
   const context = parseContext(session.structuredContext, session.initialGoalText);
   applyModelExtraction(
     context,
-    result.extractedContext as Record<string, unknown> | undefined,
-    injectedPreferences,
-    (result.corrections ?? {}) as Record<string, unknown>,
+    input.response?.extractedContext as Record<string, unknown> | undefined,
+    input.injectedPreferences ?? [],
+    (input.response?.corrections ?? {}) as Record<string, unknown>,
   );
   const asked = parseJson<string[]>(session.askedQuestionIds, []);
 
-  let question = result.question ?? null;
-  let state = result.state;
+  // Deterministic merge: atoms, groups, pending ambiguities and grounded
+  // unmodeled evidence — the single source of planning truth. meta marks the
+  // state fresh or stale (R1).
+  const existing = parseRequirementState(session.structuredContext);
+  const grounding = astGroundingFor(session, input.currentAnswer);
+  let requirementState: RequirementState;
+  if (input.response === null || input.extractionFailed) {
+    requirementState = markExtractionFailed(existing);
+  } else {
+    requirementState = ingestExtraction(existing, input.response.requirements, grounding).state;
+  }
+  context.requirements = requirementState;
 
-  // How much interview this request has earned. Someone who opened with "read 20
-  // pages every evening on weekdays" gets a plan, not a questionnaire.
-  const budget = questionBudget(session.initialGoalText);
-  const priorTopics = askedTopics(session.messages);
-  // The readiness gate, computed from the user's own words and answers so far.
-  // This is the product decision layer, independent of what the model claims.
-  const readiness = evaluatePlanReadiness({
-    goalText: session.initialGoalText,
-    context: toPlainObject(context),
-    answeredTopics: priorTopics,
+  // ---- AST gate (the only decision layer)
+  const astReadiness = evaluateAstReadiness(requirementState, {
     questionCount: session.questionCount,
+    maxQuestions: HARD_MAX_QUESTIONS,
   });
-  // Detailed prompts generate directly even when the model tries to pad the
-  // interview — but only when the gate agrees there is enough to plan from.
-  if (session.questionCount === 0 && readiness.ready) {
+  const readiness = toPlanReadiness(astReadiness);
+
+  let question: CopilotQuestion | null = null;
+  let state: 'INTERVIEWING' | 'READY_TO_GENERATE' = 'INTERVIEWING';
+  let assistantMessage = input.assistantMessageOverride ?? input.response?.assistantMessage ?? '';
+
+  if (input.response === null || input.extractionFailed) {
+    // R1: a failed extraction can never conclude. The pending question is
+    // re-presented; a generate request is refused until a successful ingest.
+    question = pendingQuestion(session);
+    state = 'INTERVIEWING';
+    assistantMessage =
+      input.assistantMessageOverride ??
+      "I couldn't process that just now — your answer is saved. Try again in a moment.";
+  } else if (session.questionCount >= HARD_MAX_QUESTIONS) {
+    // The absolute ceiling terminates the interview no matter what.
+    question = null;
+    state = 'READY_TO_GENERATE';
+  } else if (astReadiness.conflicts.length || astReadiness.pending.length || !astReadiness.ready) {
+    // BLOCKING: the deterministic question for the top blocker replaces
+    // whatever the model asked — a generic question cannot resolve it.
+    question = astReadiness.nextQuestion;
+    state = 'INTERVIEWING';
+    assistantMessage = question?.prompt ?? assistantMessage;
+  } else if (astReadiness.shouldAsk) {
+    // ready AND a HIGH gap AND budget left: keep asking — with the
+    // deterministic gap question, so the next answer is guaranteed to fill
+    // the highest-value gap.
+    question = astReadiness.nextQuestion;
+    state = 'INTERVIEWING';
+    assistantMessage = question?.prompt ?? assistantMessage;
+  } else {
     question = null;
     state = 'READY_TO_GENERATE';
   }
-  if (question && questionDomainMismatch(question, session.initialGoalText)) {
-    question = null;
-    state = 'READY_TO_GENERATE';
-  }
 
-  // For a small set of logically blocking ambiguities, the first question must
-  // address the blocker. A generic preference question cannot resolve it.
-  let forcedBlockingQuestion = false;
-  const text = session.initialGoalText.toLowerCase();
-  const currencyTokens=[...new Set([
-    ...[...session.initialGoalText.matchAll(/\b(USD|EUR|GBP|GEL)\b/gi)].map((match)=>match[1].toUpperCase()),
-    ...(session.initialGoalText.includes('$')?['USD']:[]),
-    ...(session.initialGoalText.includes('€')?['EUR']:[]),
-    ...(session.initialGoalText.includes('£')?['GBP']:[]),
-  ])];
-  if (session.questionCount===0 && currencyTokens.length>1) {
-    question={
-      id:'exchange_rate_assumption',type:'FREE_TEXT',optional:false,
-      prompt:`What ${currencyTokens.join('/')} exchange rate should the plan use as a changeable planning assumption?`,
-      allowCustomAnswer:true,
-    };
-    state='NEEDS_MORE_INFORMATION';
-    forcedBlockingQuestion=true;
-  } else if (budget.requiresClarification && session.questionCount === 0) {
-    // The deterministic conflict detector — requested weekly days exceeding the
-    // named/allowed days — is the general trigger. A contradiction no preference
-    // question can resolve must be the first thing asked about, regardless of
-    // how the goal happened to word it.
-    const conflict = parseExplicitGoalConstraints(text, todayIn('UTC'));
-    if (conflict.exactWeekly !== undefined && conflict.allowedDays?.length
-        && conflict.exactWeekly > conflict.allowedDays.length) {
-      question = {
-        id: 'resolve_frequency_conflict', type: 'FREE_TEXT', optional: false,
-        prompt: `You asked for ${conflict.exactWeekly} different days in the week, but only ${conflict.allowedDays.length} day(s) are available. Would you like to reduce the frequency, allow two sessions on one day, or make another weekday available?`,
-        allowCustomAnswer: true,
-      };
-      state = 'NEEDS_MORE_INFORMATION';
-      forcedBlockingQuestion = true;
-    } else if (/budget/.test(text) && /contractor/.test(text) && /move out|occupied/.test(text)) {
-      question = {
-        id: 'resolve_remodel_decisions', type: 'FREE_TEXT', optional: false,
-        prompt: 'What budget, contractor status, and move-out or occupied-home constraints should the remodel plan use?',
-        allowCustomAnswer: true,
-      };
-      state = 'NEEDS_MORE_INFORMATION';
-      forcedBlockingQuestion = true;
-    }
-  }
-
-  // The model does not get to ask the same thing twice — and "the same thing" means
-  // the same subject, not the same id. Three runs of "which days suit you?" under
-  // three fresh ids is what the id check alone let through, and the user answered
-  // them differently each time, so the plan was built on a contradiction.
-  const redundant = question && !forcedBlockingQuestion
-    ? redundancyReason(question, {
-        askedIds: asked,
-        askedTopics: priorTopics,
-        stated: budget.stated,
-      })
-    : null;
-  if (redundant) question = null;
-
-  // The model does not get to declare the interview finished before the
-  // readiness gate agrees. What it may not end, the gate downgrades — and the
-  // hard cap below still absolutely terminates the interview, so a user who
-  // keeps answering without ever satisfying the gate is not trapped forever.
-  if (state === 'READY_TO_GENERATE' && !readiness.ready) {
-    state = 'NEEDS_MORE_INFORMATION';
-  }
-  if (session.questionCount >= Math.min(budget.max, HARD_MAX_QUESTIONS)) {
-    state = 'READY_TO_GENERATE';
-    question = null;
-  }
-  let fallbackQuestionInjected = false;
-  if (!question && state === 'NEEDS_MORE_INFORMATION') {
-    if (!readiness.ready) {
-      // Aim the deterministic fallback at the first unsatisfied blocking
-      // dimension, so the next answer is one that actually unblocks planning.
-      const firstMissing = readiness.missing[0] ?? null;
-      question = essentialFallbackQuestion(
-        session.initialGoalText,
-        [...budget.stated, ...priorTopics],
-        firstMissing ? DIMENSION_TOPIC[firstMissing] : null,
-      );
-      fallbackQuestionInjected = true;
-    } else {
-      state = 'READY_TO_GENERATE';
-    }
-  }
-
-  // Let the user give every answer that is true for them. The model is asked to do
-  // this itself and does not reliably: "what time of day do you read?" came back as
-  // a radio group, forcing someone who reads morning *and* night to discard half
-  // their answer.
-  if (question) question = promoteMultiSelect(question);
-  // And never trapped by the options it did offer — every single-select can be
-  // answered in the user's own words, whatever the model claimed.
-  if (question) question = ensureCustomAnswer(question);
-
+  const status = state === 'READY_TO_GENERATE' ? 'READY_TO_GENERATE' : 'INTERVIEWING';
   const nextCount = question ? session.questionCount + 1 : session.questionCount;
   const nextAsked = question ? [...asked, question.id] : asked;
-  const status = state === 'READY_TO_GENERATE' ? 'READY_TO_GENERATE' : 'INTERVIEWING';
 
-  // A suppressed question must not leave its message behind. Without this the user
-  // saw the question text with nothing to answer it with. Questions can be
-  // suppressed for several reasons (redundancy, readiness, domain mismatch or the
-  // question cap), so key this off the final question rather than one reason.
-  const questionWasSuppressed = result.question !== null && question === null;
-  const assistantMessage = fallbackQuestionInjected
-    ? question?.prompt ?? 'I need a little more detail before I can make this plan genuinely useful.'
-    : questionWasSuppressed && state === 'READY_TO_GENERATE'
-    ? "That's everything I need."
-    : result.assistantMessage;
+  if (!assistantMessage) {
+    assistantMessage = question?.prompt ?? "That's everything I need.";
+  }
 
   await prisma.copilotMessage.create({
     data: {
@@ -449,7 +437,7 @@ async function applyTurn(
       structuredContext: serializeContext(context),
       askedQuestionIds: JSON.stringify(nextAsked),
       questionCount: nextCount,
-      category: result.category ?? session.category,
+      category: input.response?.category ?? session.category,
       // Every applied turn moves the interview on. A generate request that
       // quotes an older revision is planning from a picture that no longer
       // exists, and is refused for exactly that reason.
@@ -457,23 +445,49 @@ async function applyTurn(
     },
   });
 
+  // Rev.4: the progress estimate counts the distinct askable clarifications
+  // remaining (conflict + pending + blocking/HIGH gap ids), clamped to the
+  // remaining HARD_MAX budget. Purely presentational — never readiness.
+  const remaining = estimateRemainingAskable(astReadiness, nextCount, HARD_MAX_QUESTIONS);
+  const estimatedTotal = question ? nextCount + remaining : nextCount;
+
   return {
     sessionId: updated.id,
     status: updated.status,
     assistantMessage,
     question,
     questionCount: nextCount,
-    // The budget's ceiling, which is now actually enforced, so "3 of ~5" can no
-    // longer become 9. Ending early is a pleasant surprise; a bar that moves its own
-    // goalpost upward is the thing being fixed. With nothing outstanding the total is
-    // what was asked, which lets the bar finish rather than stall short.
-    estimatedTotal: question ? budget.max : nextCount,
+    estimatedTotal,
     context: toPlainObject(context),
     provenance: describeProvenance(context),
     canGenerate: status === 'READY_TO_GENERATE',
     readiness,
     revision: updated.revision,
+    shouldAsk: astReadiness.shouldAsk,
+    canForce: canForceGenerate(updated, requirementState),
+    extractionFailed: input.response === null || input.extractionFailed === true,
+    requirements: requirementsSummary(requirementState, nextCount),
   };
+}
+
+/**
+ * The single force-generation policy (Rev.3 §A3 / Rev.4 §B2): the SAME
+ * predicate for the returned `canForce` and the accepted-force rule in the
+ * generate route. Force is only for the safely-incomplete class — never for
+ * stale state, unresolved conflicts, pending resolutions or load-bearing
+ * quarantines. Post-claim safety/feasibility/contract gates always run.
+ */
+export function canForceGenerate(
+  session: { questionCount: number; status: string },
+  requirementState: RequirementState,
+): boolean {
+  if (session.status === 'READY_TO_GENERATE') return false; // nothing to force
+  if (session.questionCount < 2) return false; // anti-impulse floor
+  if (requirementState.meta?.lastTurnExtraction === 'failed') return false; // R1
+  return evaluateAstReadiness(requirementState, {
+    questionCount: session.questionCount,
+    maxQuestions: HARD_MAX_QUESTIONS,
+  }).forceEligible;
 }
 
 /**
@@ -498,42 +512,16 @@ function pendingQuestion(
   }
 }
 
-/**
- * A turn that changed nothing.
- *
- * Used by the interruption path: the transcript, the question count and the
- * revision are untouched, the pending question is handed back exactly as it
- * was, and the assistant message is the interruption reply. A generate request
- * quoting the pre-interruption revision stays valid, because nothing moved.
- */
-function interruptionTurn(
-  session: CopilotSession & { messages: SessionMessage[] },
-  question: CopilotQuestion,
-  assistantMessage: string,
-): InterviewTurn {
-  const context = parseContext(session.structuredContext, session.initialGoalText);
-  return {
-    sessionId: session.id,
-    status: session.status,
-    assistantMessage,
-    question,
-    questionCount: session.questionCount,
-    estimatedTotal: questionBudget(session.initialGoalText).max,
-    context: toPlainObject(context),
-    provenance: describeProvenance(context),
-    canGenerate: session.status === 'READY_TO_GENERATE',
-    readiness: sessionReadiness(session),
-    revision: session.revision,
-  };
-}
-
 export async function startSession(userId: string, goalText: string): Promise<InterviewTurn> {
   const session = await prisma.copilotSession.create({
     data: {
       userId,
       initialGoalText: goalText.trim(),
       // goalIntent is written once here and is not rewritable by anything later.
-      structuredContext: serializeContext(createContext(goalText.trim())),
+      structuredContext: serializeContext({
+        ...createContext(goalText.trim()),
+        requirements: emptyRequirementState(),
+      }),
       expiresAt: new Date(Date.now() + SESSION_TTL_HOURS * 3600_000),
       messages: { create: { role: 'user', content: goalText.trim() } },
     },
@@ -542,13 +530,17 @@ export async function startSession(userId: string, goalText: string): Promise<In
 
   await recordEvent({ userId, type: 'SESSION_STARTED', sessionId: session.id });
 
-  try {
-    const { result, preferences } = await runInterviewTurn(session);
-    return applyTurn(session, result, preferences);
-  } catch (err) {
-    if (!(err instanceof AiProviderError) || err.kind === 'AUTH') throw err;
-    return applyTurn(session, unavailableFallback());
+  const { result, preferences, providerFailed } = await runInterviewTurn(session);
+  if (providerFailed || result === null) {
+    // R1: typed provider failure — the session exists with the goal text
+    // recorded (answers-saved), the state is stale, nothing is concluded.
+    return applyTurn(session, {
+      response: null,
+      extractionFailed: true,
+      injectedPreferences: preferences,
+    });
   }
+  return applyTurn(session, { response: result, injectedPreferences: preferences });
 }
 
 export async function answerQuestion(
@@ -565,8 +557,8 @@ export async function answerQuestion(
   // answer is expected ("What happens if I miss one?") must not consume the
   // turn and kill the interview. The deterministic classifier decides, the
   // pending question is returned untouched, and the honest reply says real
-  // product answers are coming. Only PRODUCT_HELP interrupts — a status
-  // question is still a legitimate free-text answer.
+  // product answers are coming. Nothing is written, nothing is ingested, and
+  // the revision does not move.
   const pending = pendingQuestion(session);
   if (
     !input.skipped &&
@@ -574,7 +566,28 @@ export async function answerQuestion(
     typeof input.answer === 'string' &&
     classifyIntentDeterministic(input.answer).intent === 'PRODUCT_HELP'
   ) {
-    return interruptionTurn(session, pending, PRODUCT_HELP_STUB);
+    const context = parseContext(session.structuredContext, session.initialGoalText);
+    return {
+      sessionId: session.id,
+      status: session.status,
+      assistantMessage: PRODUCT_HELP_STUB,
+      question: pending,
+      questionCount: session.questionCount,
+      estimatedTotal: session.questionCount + estimateRemainingAskable(
+        evaluateAstReadiness(parseRequirementState(session.structuredContext), {
+          questionCount: session.questionCount,
+          maxQuestions: HARD_MAX_QUESTIONS,
+        }),
+        session.questionCount,
+        HARD_MAX_QUESTIONS,
+      ),
+      context: toPlainObject(context),
+      provenance: describeProvenance(context),
+      canGenerate: session.status === 'READY_TO_GENERATE',
+      readiness: sessionReadiness(session),
+      revision: session.revision,
+      canForce: canForceGenerate(session, parseRequirementState(session.structuredContext)),
+    };
   }
 
   const answerText = input.skipped ? '(skipped)' : formatAnswer(input.answer);
@@ -599,19 +612,42 @@ export async function answerQuestion(
       .map((m) => (m.structuredPayload ? safeParse(m.structuredPayload) : null))
       .find((p) => p?.id === input.questionId);
 
-    // A frequency-conflict resolution is stored with the correction signal its
-    // words imply ("3" → "Make it 3 days per week"): the transcript keeps the
-    // raw answer, but the recorded value must read as the deliberate
-    // re-schedule it is, so the contradiction detector accepts it and
-    // parseExplicitGoalConstraints applies it answer-last as the plan total.
     recordAnswer(context, {
       key: input.questionId,
       questionId: input.questionId,
       question: askedQuestion?.prompt,
-      value: input.questionId === RESOLVE_FREQUENCY_CONFLICT_ID
-        ? withCorrectionSignal(input.answer)
-        : input.answer,
+      value: input.answer,
     });
+
+    // Deterministic GapResolution (Rev.3): a structured answer to one of the
+    // three registered gap questions is parsed and ingested WITHOUT a model —
+    // its resolution contract is the parser. This is the current turn's
+    // authoritative ingest; the model turn (if it runs) re-affirms it.
+    const pendingForAnswer = [...session.messages]
+      .reverse()
+      .map((m) => (m.structuredPayload ? safeParse(m.structuredPayload) : null))
+      .find((p) => p?.id === input.questionId);
+    const resolution = deterministicGapResolution(input.questionId, input.answer);
+    if (resolution && pendingForAnswer) {
+      const state = parseRequirementState(session.structuredContext);
+      const { state: next } = ingestExtraction(
+        state,
+        requirementFragmentSchema.parse({
+          atoms: [{
+            property: resolution.property,
+            scope: resolution.scope,
+            relation: resolution.relation,
+            value: resolution.value,
+            strength: 'REQUIRED',
+            source: 'stated',
+            evidence: answerText,
+          }],
+        }),
+        astGroundingFor(session, { questionId: input.questionId, text: answerText }),
+      );
+      context.requirements = next;
+    }
+
     await prisma.copilotSession.update({
       where: { id: session.id },
       data: { structuredContext: serializeContext(context) },
@@ -625,27 +661,41 @@ export async function answerQuestion(
 
   await recordEvent({ userId, type: 'QUESTION_ANSWERED', sessionId: session.id });
 
-  try {
-    const { result, preferences } = await runInterviewTurn(refreshed);
-    return applyTurn(refreshed, result, preferences);
-  } catch (err) {
-    if (!(err instanceof AiProviderError) || err.kind === 'AUTH') throw err;
-    return applyTurn(refreshed, unavailableFallback());
+  const { result, preferences, providerFailed } = await runInterviewTurn(refreshed);
+  const groundingAnswer = { questionId: input.questionId, text: input.skipped ? '' : answerText };
+
+  if (providerFailed || result === null) {
+    // R1: the extraction failed after the bounded budget. The current turn is
+    // still "processed" when its answer was deterministically ingested above —
+    // the gate may run on that state. Otherwise the state is stale: no
+    // conclusion, pending question re-presented, typed retryable failure.
+    // The comparison is on the STORED BYTES, never on object identity: a
+    // fresh parse of the same payload would make !== always true.
+    const stateNow = parseRequirementState(refreshed.structuredContext);
+    const deterministicallyIngested = stateNow.meta?.lastTurnExtraction === 'ok' &&
+      JSON.stringify(canonicalState(stateNow)) !==
+        JSON.stringify(canonicalState(parseRequirementState(session.structuredContext)));
+    if (deterministicallyIngested) {
+      return applyTurn(refreshed, {
+        response: null,
+        extractionFailed: false,
+        currentAnswer: groundingAnswer,
+        assistantMessageOverride:
+          "That's recorded — the service hiccuped on my end, but your answer is in.",
+      });
+    }
+    return applyTurn(refreshed, {
+      response: null,
+      extractionFailed: true,
+      currentAnswer: groundingAnswer,
+    });
   }
+  return applyTurn(refreshed, {
+    response: result,
+    injectedPreferences: preferences,
+    currentAnswer: groundingAnswer,
+  });
 }
-
-function unavailableFallback(): InterviewResponse {
-  return {
-    state: 'READY_TO_GENERATE',
-    assistantMessage:
-      'I have enough to create a simple starting plan. You can edit every detail before creating it.',
-    question: null,
-    extractedContext: {},
-    corrections: {},
-    category: null,
-  };
-}
-
 /** Human-readable rendering of a structured answer, for the transcript. */
 export function formatAnswer(answer: unknown): string {
   if (Array.isArray(answer)) return answer.map((a) => String(a)).join(', ');

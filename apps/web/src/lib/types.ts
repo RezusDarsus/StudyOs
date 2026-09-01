@@ -644,6 +644,23 @@ export interface CopilotProgressionProposal {
   applied: boolean;
 }
 
+/**
+ * One structured, domain-open recommendation. The entityType set is runtime
+ * data — anything the model names (book, pottery_class, software_tool, …) —
+ * and the frontend never switches on it. Mirrors the API's
+ * recommendationItemSchema.
+ */
+export interface StructuredRecommendation {
+  /** Short lowercase label for what kind of thing it is, in the model's own words. */
+  entityType: string;
+  /** The item's name, as a user would search for it. */
+  displayName: string;
+  /** Who created, performs or publishes it, when applicable. */
+  attribution?: string;
+  /** One short sentence on why it fits this user. */
+  reason?: string;
+}
+
 export interface GoalCopilotAnswer {
   // PRODUCT_HELP marks the honest coming-soon stub: the explanation renders,
   // the stat cards do not, because no statistics were read for it.
@@ -657,8 +674,41 @@ export interface GoalCopilotAnswer {
     currentStreak: number;
     mostMissedTasks: Array<{ title: string; missRate: number; scheduled: number }>;
   };
-  analysis: { explanation: string; suggestions: ProgressSuggestion[] };
+  analysis: {
+    explanation: string;
+    suggestions: ProgressSuggestion[];
+    /** Content recommendations — canonical structured data, absent on legacy responses. */
+    recommendations?: StructuredRecommendation[];
+    /** Stage 2, `required` write mode only: the durable history was committed. */
+    historyPersisted?: boolean;
+  };
   progressionProposals: CopilotProgressionProposal[];
+}
+
+/** Folded durable state for one recommended item, as the mutation API answers. */
+export interface RecommendationFacets {
+  hasBeenRecommended: boolean;
+  hasBeenShown: boolean;
+  saved: boolean;
+  consumed: boolean;
+  excluded: boolean;
+  liked: boolean;
+  disliked: boolean;
+}
+
+/** The response of POST /api/recommendations/events (Stage 2, Stage 4 adds replay). */
+export interface RecommendationActionResult {
+  event: {
+    id: string;
+    entityType: string;
+    displayName: string;
+    attribution?: string | null;
+    eventKind: string;
+    occurredAt: string;
+  };
+  facets: RecommendationFacets;
+  /** Stage 4: the idempotency claim replayed a committed execution. */
+  replayed: boolean;
 }
 
 /**

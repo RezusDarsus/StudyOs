@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { assessFeasibility } from './feasibility.js';
 import { validateAndNormalizeDraft, DraftValidationError } from './draft-validator.js';
 import { addDays, todayIn } from '../domain/dates.js';
+import { installRuntimeContent } from '../runtime-content.js';
+
+// The quality-noun lexicon is runtime data: the port must exist before the
+// gate reads it (the same explicit bootstrap the server runs).
+installRuntimeContent();
 
 // The feasibility gate refuses the two unplannable goal shapes: a quantified
 // jump in a quality that has no unit, and an outcome with no metric at all.

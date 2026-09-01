@@ -38,11 +38,11 @@ const TARGETS: Array<{ type: TargetType; title: string; example: string; needsVa
 
 const labelStyle = {
   fontSize: '0.8rem',
-  fontWeight: 700,
-  color: '#4b4870',
+  fontWeight: 500,
+  color: 'var(--text-body)',
   display: 'block',
   marginBottom: 6,
-  fontFamily: 'Plus Jakarta Sans',
+  fontFamily: 'var(--font-sans)',
 } as const;
 
 const newTask = (): DraftTask => ({
@@ -142,11 +142,11 @@ export default function CreateGoal() {
   }
 
   return (
-    <div className="p-5 sm:p-6 lg:p-8 max-w-2xl mx-auto">
+    <div className="product-page manual-goal-page">
       <button
         onClick={() => (step === 0 ? navigate('/app/goals') : setStep(step - 1))}
         className="flex items-center gap-2 mb-5"
-        style={{ color: '#8b88b0', fontSize: '0.875rem', fontWeight: 500 }}
+        style={{ color: 'var(--text-muted)', fontSize: '0.875rem', fontWeight: 400 }}
       >
         <ArrowLeft size={15} /> {step === 0 ? 'Back to goals' : STEPS[step - 1]}
       </button>
@@ -159,7 +159,7 @@ export default function CreateGoal() {
               style={{
                 height: 4,
                 borderRadius: 999,
-                background: i <= step ? 'linear-gradient(90deg, #7c3aed, #a855f7)' : '#ede9f8',
+                background: i <= step ? 'var(--accent)' : 'var(--surface-3)',
                 transition: 'background .3s',
               }}
             />
@@ -167,9 +167,9 @@ export default function CreateGoal() {
               className="hidden sm:block mt-1.5"
               style={{
                 fontSize: 11,
-                fontWeight: 700,
-                fontFamily: 'Plus Jakarta Sans',
-                color: i <= step ? '#7c3aed' : '#b8b5d5',
+                fontWeight: 500,
+                fontFamily: 'var(--font-sans)',
+                color: i <= step ? 'var(--text)' : 'var(--text-faint)',
               }}
             >
               {label}
@@ -182,10 +182,10 @@ export default function CreateGoal() {
         {/* ------------------------------------------------ step 1: goal */}
         {step === 0 && (
           <>
-            <h1 style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 800, fontSize: '1.4rem', color: '#1a1635', letterSpacing: '-0.02em' }}>
+            <h1 style={{ fontFamily: 'var(--font-sans)', fontWeight: 600, fontSize: '1.4rem', color: 'var(--text)', letterSpacing: '-0.02em' }}>
               What do you want to achieve?
             </h1>
-            <p style={{ color: '#8b88b0', fontSize: '0.875rem', marginTop: 4, marginBottom: 22 }}>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: 4, marginBottom: 22 }}>
               Give it a name you'll recognise at a glance.
             </p>
 
@@ -222,12 +222,12 @@ export default function CreateGoal() {
                   aria-pressed={category === key}
                   className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-left"
                   style={{
-                    background: category === key ? '#f0ebff' : '#fdfcff',
-                    border: `1.5px solid ${category === key ? '#7c3aed' : '#e8e6f5'}`,
+                    background: category === key ? 'var(--surface-3)' : 'var(--surface-2)',
+                    border: `1px solid ${category === key ? 'var(--accent)' : 'var(--hairline)'}`,
                     fontSize: '0.82rem',
-                    fontWeight: 600,
-                    color: category === key ? '#7c3aed' : '#4b4870',
-                    fontFamily: 'Plus Jakarta Sans',
+                    fontWeight: 500,
+                    color: category === key ? 'var(--text)' : 'var(--text-body)',
+                    fontFamily: 'var(--font-sans)',
                   }}
                 >
                   <span aria-hidden="true">{CATEGORY_EMOJI[key]}</span>
@@ -241,10 +241,10 @@ export default function CreateGoal() {
         {/* ---------------------------------------------- step 2: target */}
         {step === 1 && (
           <>
-            <h1 style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 800, fontSize: '1.4rem', color: '#1a1635', letterSpacing: '-0.02em' }}>
+            <h1 style={{ fontFamily: 'var(--font-sans)', fontWeight: 600, fontSize: '1.4rem', color: 'var(--text)', letterSpacing: '-0.02em' }}>
               How will you measure it?
             </h1>
-            <p style={{ color: '#8b88b0', fontSize: '0.875rem', marginTop: 4, marginBottom: 22 }}>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: 4, marginBottom: 22 }}>
               Pick the shape that fits what you're going for.
             </p>
 
@@ -256,8 +256,8 @@ export default function CreateGoal() {
                   aria-pressed={targetType === t.type}
                   className="flex items-center gap-3 px-4 py-3.5 rounded-xl text-left"
                   style={{
-                    background: targetType === t.type ? '#f0ebff' : '#fdfcff',
-                    border: `1.5px solid ${targetType === t.type ? '#7c3aed' : '#e8e6f5'}`,
+                    background: targetType === t.type ? 'var(--surface-3)' : 'var(--surface-2)',
+                    border: `1px solid ${targetType === t.type ? 'var(--accent)' : 'var(--hairline)'}`,
                   }}
                 >
                   <span
@@ -265,19 +265,19 @@ export default function CreateGoal() {
                     style={{
                       width: 20,
                       height: 20,
-                      border: targetType === t.type ? 'none' : '2px solid #ddd0ff',
-                      background: targetType === t.type ? '#7c3aed' : 'transparent',
-                      color: '#fff',
+                      border: targetType === t.type ? 'none' : '2px solid var(--hairline-strong)',
+                      background: targetType === t.type ? 'var(--accent)' : 'transparent',
+                      color: 'var(--accent-ink)',
                     }}
                     aria-hidden="true"
                   >
                     {targetType === t.type && <Check size={12} strokeWidth={3.5} />}
                   </span>
                   <span className="flex-1">
-                    <span className="block" style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '0.9rem', color: '#1a1635' }}>
+                    <span className="block" style={{ fontFamily: 'var(--font-sans)', fontWeight: 500, fontSize: '0.9rem', color: 'var(--text)' }}>
                       {t.title}
                     </span>
-                    <span className="block" style={{ fontSize: '0.78rem', color: '#8b88b0', marginTop: 1 }}>
+                    <span className="block" style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: 1 }}>
                       {t.example}
                     </span>
                   </span>
@@ -320,10 +320,10 @@ export default function CreateGoal() {
         {/* --------------------------------------------- step 3: privacy */}
         {step === 2 && (
           <>
-            <h1 style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 800, fontSize: '1.4rem', color: '#1a1635', letterSpacing: '-0.02em' }}>
+            <h1 style={{ fontFamily: 'var(--font-sans)', fontWeight: 600, fontSize: '1.4rem', color: 'var(--text)', letterSpacing: '-0.02em' }}>
               Who can see this?
             </h1>
-            <p style={{ color: '#8b88b0', fontSize: '0.875rem', marginTop: 4, marginBottom: 22 }}>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: 4, marginBottom: 22 }}>
               You can change this later.
             </p>
 
@@ -348,8 +348,8 @@ export default function CreateGoal() {
                   aria-pressed={visibility === value}
                   className="flex items-start gap-3.5 px-4 py-4 rounded-xl text-left"
                   style={{
-                    background: visibility === value ? '#f0ebff' : '#fdfcff',
-                    border: `1.5px solid ${visibility === value ? '#7c3aed' : '#e8e6f5'}`,
+                    background: visibility === value ? 'var(--surface-3)' : 'var(--surface-2)',
+                    border: `1px solid ${visibility === value ? 'var(--accent)' : 'var(--hairline)'}`,
                   }}
                 >
                   <span
@@ -357,17 +357,17 @@ export default function CreateGoal() {
                     style={{
                       width: 40,
                       height: 40,
-                      background: visibility === value ? '#7c3aed' : '#f5f4ff',
-                      color: visibility === value ? '#fff' : '#8b88b0',
+                      background: visibility === value ? 'var(--accent)' : 'var(--surface-2)',
+                      color: visibility === value ? 'var(--accent-ink)' : 'var(--text-muted)',
                     }}
                   >
                     <Icon size={18} />
                   </span>
                   <span className="flex-1">
-                    <span className="block" style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '0.95rem', color: '#1a1635' }}>
+                    <span className="block" style={{ fontFamily: 'var(--font-sans)', fontWeight: 500, fontSize: '0.95rem', color: 'var(--text)' }}>
                       {t}
                     </span>
-                    <span className="block" style={{ fontSize: '0.8rem', color: '#6b688f', marginTop: 2, lineHeight: 1.5 }}>
+                    <span className="block" style={{ fontSize: '0.8rem', color: 'var(--text-body)', marginTop: 2, lineHeight: 1.5 }}>
                       {body}
                     </span>
                   </span>
@@ -380,10 +380,10 @@ export default function CreateGoal() {
         {/* ----------------------------------------------- step 4: tasks */}
         {step === 3 && (
           <>
-            <h1 style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 800, fontSize: '1.4rem', color: '#1a1635', letterSpacing: '-0.02em' }}>
+            <h1 style={{ fontFamily: 'var(--font-sans)', fontWeight: 600, fontSize: '1.4rem', color: 'var(--text)', letterSpacing: '-0.02em' }}>
               What will you actually do?
             </h1>
-            <p style={{ color: '#8b88b0', fontSize: '0.875rem', marginTop: 4, marginBottom: 22 }}>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: 4, marginBottom: 22 }}>
               These become your daily tasks. Small and repeatable beats ambitious.
             </p>
 
@@ -405,7 +405,7 @@ export default function CreateGoal() {
             <button
               onClick={() => setTasks([...tasks, newTask()])}
               className="w-full mt-3 py-3.5 rounded-xl flex items-center justify-center gap-2"
-              style={{ border: '1.5px dashed #ddd0ff', background: '#fdfcff', color: '#8b88b0', fontWeight: 700, fontSize: '0.85rem', fontFamily: 'Plus Jakarta Sans' }}
+              style={{ border: '1px dashed var(--hairline-strong)', background: 'var(--surface-2)', color: 'var(--text-muted)', fontWeight: 500, fontSize: '0.85rem', fontFamily: 'var(--font-sans)' }}
             >
               <Plus size={15} /> Add another task
             </button>
@@ -415,27 +415,27 @@ export default function CreateGoal() {
         {/* ---------------------------------------------- step 5: review */}
         {step === 4 && (
           <>
-            <h1 style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 800, fontSize: '1.4rem', color: '#1a1635', letterSpacing: '-0.02em' }}>
+            <h1 style={{ fontFamily: 'var(--font-sans)', fontWeight: 600, fontSize: '1.4rem', color: 'var(--text)', letterSpacing: '-0.02em' }}>
               Ready to activate?
             </h1>
-            <p style={{ color: '#8b88b0', fontSize: '0.875rem', marginTop: 4, marginBottom: 22 }}>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: 4, marginBottom: 22 }}>
               Your first tasks appear on Home as soon as you create this.
             </p>
 
-            <div className="rounded-xl p-4 mb-4" style={{ background: '#f5f4ff', border: '1px solid #e8e6f5' }}>
+            <div className="rounded-xl p-4 mb-4" style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}>
               <div className="flex items-center gap-3 mb-3">
                 <span style={{ fontSize: 24 }} aria-hidden="true">{CATEGORY_EMOJI[category]}</span>
                 <div className="min-w-0">
-                  <div className="truncate" style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 800, fontSize: '1.05rem', color: '#1a1635' }}>
+                  <div className="truncate" style={{ fontFamily: 'var(--font-sans)', fontWeight: 600, fontSize: '1.05rem', color: 'var(--text)' }}>
                     {title || 'Untitled goal'}
                   </div>
-                  <div style={{ fontSize: '0.78rem', color: '#8b88b0' }}>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
                     {CATEGORY_LABEL[category]} · {visibility === 'PRIVATE' ? '🔒 Private' : '🌍 Public'}
                   </div>
                 </div>
               </div>
               {description && (
-                <p style={{ fontSize: '0.83rem', color: '#6b688f', lineHeight: 1.55 }}>{description}</p>
+                <p style={{ fontSize: '0.83rem', color: 'var(--text-body)', lineHeight: 1.55 }}>{description}</p>
               )}
             </div>
 
@@ -444,18 +444,18 @@ export default function CreateGoal() {
                 <div
                   key={task.key}
                   className="flex items-center gap-3 px-3.5 py-3 rounded-xl"
-                  style={{ background: '#fff', border: '1px solid #e8e6f5' }}
+                  style={{ background: 'var(--surface)', border: '1px solid var(--hairline)' }}
                 >
                   <span
                     className="rounded-full flex-shrink-0"
-                    style={{ width: 20, height: 20, border: '2px solid #ddd0ff' }}
+                    style={{ width: 20, height: 20, border: '2px solid var(--hairline-strong)' }}
                     aria-hidden="true"
                   />
                   <span className="flex-1 min-w-0">
-                    <span className="block truncate" style={{ fontSize: '0.88rem', fontWeight: 600, color: '#1a1635', fontFamily: 'Plus Jakarta Sans' }}>
+                    <span className="block truncate" style={{ fontSize: '0.88rem', fontWeight: 500, color: 'var(--text)', fontFamily: 'var(--font-sans)' }}>
                       {task.title}
                     </span>
-                    <span className="block" style={{ fontSize: '0.72rem', color: '#b8b5d5' }}>
+                    <span className="block" style={{ fontSize: '0.72rem', color: 'var(--text-faint)' }}>
                       {describeRecurrence({
                         recurrenceType: task.recurrenceType,
                         recurrenceConfig: buildRecurrenceConfig(task),
@@ -463,7 +463,7 @@ export default function CreateGoal() {
                       {task.reminderTime ? ` · ${task.reminderTime}` : ''}
                     </span>
                   </span>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#f59e0b' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 500, color: 'var(--text-muted)' }}>
                     +{task.reward}🪙
                   </span>
                 </div>
@@ -473,7 +473,7 @@ export default function CreateGoal() {
             {error && (
               <div
                 className="mt-4 px-4 py-3 rounded-xl"
-                style={{ background: '#ffeef0', border: '1px solid #ffd3d9', color: '#c8253c', fontSize: '0.85rem', fontWeight: 600 }}
+                style={{ background: 'var(--red-tint)', border: '1px solid var(--red-line)', color: 'var(--red)', fontSize: '0.85rem', fontWeight: 500 }}
                 role="alert"
               >
                 {error}
@@ -538,7 +538,7 @@ function TaskEditor({
   ];
 
   return (
-    <fieldset className="rounded-xl p-4" style={{ background: '#fdfcff', border: '1px solid #e8e6f5' }}>
+    <fieldset className="rounded-xl p-4" style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}>
       <legend className="sr-only">Task {index + 1}</legend>
       <div className="flex items-center gap-2 mb-3">
         <label className="sr-only" htmlFor={`task-title-${index}`}>Task {index + 1} name</label>
@@ -555,7 +555,7 @@ function TaskEditor({
             onClick={onRemove}
             aria-label={`Remove task ${index + 1}`}
             className="flex items-center justify-center rounded-lg flex-shrink-0"
-            style={{ width: 38, height: 38, color: '#b8b5d5', border: '1px solid #e8e6f5', background: '#fff' }}
+            style={{ width: 38, height: 38, color: 'var(--text-faint)', border: '1px solid var(--hairline)', background: 'var(--surface)' }}
           >
             <Trash2 size={15} />
           </button>
@@ -612,12 +612,12 @@ function TaskEditor({
                   style={{
                     width: 42,
                     height: 38,
-                    background: on ? '#f0ebff' : '#fff',
-                    border: `1.5px solid ${on ? '#7c3aed' : '#e8e6f5'}`,
-                    color: on ? '#7c3aed' : '#8b88b0',
-                    fontWeight: 700,
+                    background: on ? 'var(--surface-3)' : 'var(--surface)',
+                    border: `1px solid ${on ? 'var(--accent)' : 'var(--hairline)'}`,
+                    color: on ? 'var(--text)' : 'var(--text-muted)',
+                    fontWeight: 500,
                     fontSize: '0.75rem',
-                    fontFamily: 'Plus Jakarta Sans',
+                    fontFamily: 'var(--font-sans)',
                   }}
                 >
                   {label}
@@ -639,7 +639,7 @@ function TaskEditor({
             onChange={(e) => onChange({ timesPerWeek: Number(e.target.value) })}
             className="w-full px-3 py-2.5 text-sm"
           />
-          <p style={{ fontSize: '0.72rem', color: '#b8b5d5', marginTop: 6 }}>
+          <p style={{ fontSize: '0.72rem', color: 'var(--text-faint)', marginTop: 6 }}>
             Do it on any days you like — it only counts against you if the week runs short.
           </p>
         </div>
@@ -691,7 +691,7 @@ function TaskEditor({
             style={{ border: 'none', background: 'transparent', padding: 0 }}
             aria-label="Reward coins"
           />
-          <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f59e0b', minWidth: 52 }}>
+          <span style={{ fontSize: '0.8rem', fontWeight: 500, color: 'var(--text-muted)', minWidth: 52 }}>
             +{task.reward}🪙
           </span>
         </div>

@@ -31,6 +31,9 @@ describe('describeCopilotError', () => {
     expect(describeCopilotError(serverError('DRAFT_INVALID'))).toBe(
       "Copilot couldn't create a valid plan from this attempt. Try generating again.",
     );
+    expect(describeCopilotError(serverError('RECOMMENDATIONS_INVALID'))).toBe(
+      "Copilot couldn't format its recommendations just now. Try again.",
+    );
     expect(describeCopilotError(serverError('COPILOT_DISABLED'))).toBe(
       'The Copilot is not configured on this server. You can still create goals manually.',
     );

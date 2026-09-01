@@ -114,32 +114,32 @@ function QuickAction({
     <button
       onClick={onClick}
       className="w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-left"
-      style={{ background: '#fff', border: '1px solid #e8e6f5', minHeight: 44 }}
+      style={{ background: 'var(--surface)', border: '1px solid var(--hairline)', minHeight: 44 }}
     >
       <span
         className="flex items-center justify-center rounded-lg flex-shrink-0"
-        style={{ width: 32, height: 32, background: '#f0ebff' }}
+        style={{ width: 32, height: 32, background: 'var(--surface-3)' }}
         aria-hidden="true"
       >
-        <Icon size={16} style={{ color: '#7c3aed' }} />
+        <Icon size={16} style={{ color: 'var(--text-muted)' }} />
       </span>
       <span className="min-w-0 flex-1">
         <span
           className="block"
           style={{
-            fontFamily: 'Plus Jakarta Sans',
-            fontWeight: 700,
+            fontFamily: 'var(--font-sans)',
+            fontWeight: 500,
             fontSize: '0.85rem',
-            color: '#1a1635',
+            color: 'var(--text)',
           }}
         >
           {label}
         </span>
-        <span className="block truncate" style={{ fontSize: '0.72rem', color: '#8b88b0' }}>
+        <span className="block truncate" style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
           {hint}
         </span>
       </span>
-      <ChevronRight size={14} style={{ color: '#b8b5d5', flexShrink: 0 }} />
+      <ChevronRight size={14} style={{ color: 'var(--text-faint)', flexShrink: 0 }} />
     </button>
   );
 }
@@ -158,7 +158,7 @@ function WidgetHome({
 
   return (
     <div className="flex flex-col gap-2.5">
-      <p style={{ fontSize: '0.88rem', color: '#4b4870', lineHeight: 1.6 }}>
+      <p style={{ fontSize: '0.88rem', color: 'var(--text-body)', lineHeight: 1.6 }}>
         I can help you turn something you want into a plan you'll actually keep. What are we working
         on?
       </p>
@@ -193,10 +193,10 @@ function WidgetHome({
           <div
             style={{
               fontSize: '0.7rem',
-              fontWeight: 700,
-              color: '#6b688f',
+              fontWeight: 500,
+              color: 'var(--text-body)',
               letterSpacing: '0.05em',
-              fontFamily: 'Plus Jakarta Sans',
+              fontFamily: 'var(--font-sans)',
               marginTop: 6,
             }}
           >
@@ -207,15 +207,15 @@ function WidgetHome({
               key={session.id}
               onClick={() => onResume(session.id)}
               className="w-full text-left px-3.5 py-2.5 rounded-xl"
-              style={{ background: '#f5f4ff', border: '1px solid #e8e6f5', minHeight: 44 }}
+              style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)', minHeight: 44 }}
             >
               <span
                 className="block truncate"
-                style={{ fontSize: '0.82rem', fontWeight: 600, color: '#1a1635' }}
+                style={{ fontSize: '0.82rem', fontWeight: 500, color: 'var(--text)' }}
               >
                 {session.initialGoalText}
               </span>
-              <span style={{ fontSize: '0.7rem', color: '#8b88b0' }}>
+              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                 {session.questionCount} {session.questionCount === 1 ? 'answer' : 'answers'} in
               </span>
             </button>
@@ -246,11 +246,11 @@ function ClarificationCard({
   onAskQuestion(): void;
 }) {
   const chip = {
-    background: '#f5f4ff',
-    border: '1px solid #e8e6f5',
-    color: '#6b688f',
+    background: 'var(--surface-2)',
+    border: '1px solid var(--hairline)',
+    color: 'var(--text-body)',
     fontSize: '0.75rem',
-    fontWeight: 600,
+    fontWeight: 500,
     minHeight: 32,
   } as const;
   return (
@@ -260,8 +260,8 @@ function ClarificationCard({
           <div
             className="px-3.5 py-2.5 rounded-2xl"
             style={{
-              background: '#7c3aed',
-              color: '#fff',
+              background: 'var(--surface-3)',
+              color: 'var(--text)',
               fontSize: '0.88rem',
               lineHeight: 1.55,
               borderBottomRightRadius: 6,
@@ -271,7 +271,7 @@ function ClarificationCard({
           </div>
         </div>
       )}
-      <p style={{ fontSize: '0.88rem', color: '#4b4870', lineHeight: 1.6 }}>
+      <p style={{ fontSize: '0.88rem', color: 'var(--text-body)', lineHeight: 1.6 }}>
         {clarification.text}
       </p>
       <div className="flex flex-wrap gap-2">
@@ -290,9 +290,9 @@ function ClarificationCard({
 
 function HelpView() {
   return (
-    <div className="flex flex-col gap-3.5" style={{ fontSize: '0.85rem', color: '#4b4870', lineHeight: 1.6 }}>
+    <div className="flex flex-col gap-3.5" style={{ fontSize: '0.85rem', color: 'var(--text-body)', lineHeight: 1.6 }}>
       <div>
-        <strong style={{ color: '#1a1635' }}>What I can do</strong>
+        <strong style={{ color: 'var(--text)' }}>What I can do</strong>
         <ul className="mt-1.5 flex flex-col gap-1" style={{ paddingLeft: 18, listStyle: 'disc' }}>
           <li>Ask a few questions and draft a goal with tasks and a schedule</li>
           <li>Explain how a goal is going, using your real completion numbers</li>
@@ -300,7 +300,7 @@ function HelpView() {
         </ul>
       </div>
       <div>
-        <strong style={{ color: '#1a1635' }}>What I won't do</strong>
+        <strong style={{ color: 'var(--text)' }}>What I won't do</strong>
         <ul className="mt-1.5 flex flex-col gap-1" style={{ paddingLeft: 18, listStyle: 'disc' }}>
           <li>Change a goal, a reminder or your coins without you confirming it</li>
           <li>Rewrite days that have already happened</li>
@@ -308,7 +308,7 @@ function HelpView() {
         </ul>
       </div>
       <div>
-        <strong style={{ color: '#1a1635' }}>Account & support</strong>
+        <strong style={{ color: 'var(--text)' }}>Account & support</strong>
         <ul className="mt-1.5 flex flex-col gap-1" style={{ paddingLeft: 18, listStyle: 'disc' }}>
           <li>Log out from the exit icon in the header (mobile) or the sidebar (desktop)</li>
           <li>Profile contains your personal settings and Copilot memory controls</li>
@@ -316,18 +316,18 @@ function HelpView() {
         </ul>
       </div>
       <div>
-        <strong style={{ color: '#1a1635' }}>Shortcuts</strong>
+        <strong style={{ color: 'var(--text)' }}>Shortcuts</strong>
         <ul className="mt-1.5 flex flex-col gap-1" style={{ paddingLeft: 18, listStyle: 'disc' }}>
           {SLASH_COMMANDS.map((command) => (
             <li key={command}>
-              <code style={{ fontFamily: 'monospace', color: '#7c3aed' }}>/{command}</code>
+              <code style={{ fontFamily: 'monospace', color: 'var(--text)' }}>/{command}</code>
               {command === 'help' && ' — this screen'}
               {command === 'new' && ' — start a fresh goal'}
               {command === 'clear' && ' — clear this conversation'}
             </li>
           ))}
         </ul>
-        <p className="mt-2" style={{ fontSize: '0.78rem', color: '#8b88b0' }}>
+        <p className="mt-2" style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
           Anything else you type is just a message — slashes in words like "5/7 days" are safe.
         </p>
       </div>
@@ -358,8 +358,8 @@ function GoalChat({
     <>
       <div className="flex-1 overflow-y-auto px-4 py-4" aria-live="polite">
         {copilot.entries.length === 0 && !copilot.busy && (
-          <p style={{ fontSize: '0.85rem', color: '#4b4870', lineHeight: 1.6 }}>
-            Ask me anything about <strong style={{ color: '#1a1635' }}>{goalTitle}</strong>. I'll look
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-body)', lineHeight: 1.6 }}>
+            Ask me anything about <strong style={{ color: 'var(--text)' }}>{goalTitle}</strong>. I'll look
             at your actual completions before answering.
           </p>
         )}
@@ -371,8 +371,8 @@ function GoalChat({
                 <div
                   className="px-3.5 py-2.5 rounded-2xl"
                   style={{
-                    background: '#7c3aed',
-                    color: '#fff',
+                    background: 'var(--surface-3)',
+                    color: 'var(--text)',
                     fontSize: '0.88rem',
                     lineHeight: 1.55,
                     borderBottomRightRadius: 6,
@@ -381,13 +381,18 @@ function GoalChat({
                   {entry.question}
                 </div>
               </div>
-              <GoalAnswer result={entry.answer} compact />
+              <GoalAnswer
+                result={entry.answer}
+                compact
+                onMarkUsed={(item) => void copilot.markConsumed(item)}
+                consumedIdentities={copilot.consumedIdentities}
+              />
             </div>
           ))}
         </div>
 
         {copilot.busy && (
-          <p className="mt-4" style={{ fontSize: '0.82rem', color: '#8b88b0' }}>
+          <p className="mt-4" style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
             Looking at your progress…
           </p>
         )}
@@ -400,11 +405,11 @@ function GoalChat({
                 onClick={() => copilot.ask(q)}
                 className="px-3 py-1.5 rounded-full"
                 style={{
-                  background: '#f5f4ff',
-                  border: '1px solid #e8e6f5',
-                  color: '#6b688f',
+                  background: 'var(--surface-2)',
+                  border: '1px solid var(--hairline)',
+                  color: 'var(--text-body)',
                   fontSize: '0.75rem',
-                  fontWeight: 600,
+                  fontWeight: 500,
                   minHeight: 32,
                 }}
               >
@@ -416,7 +421,7 @@ function GoalChat({
         <div ref={endRef} />
       </div>
 
-      <div className="px-4 py-3" style={{ borderTop: '1px solid #e8e6f5', background: '#fff' }}>
+      <div className="px-4 py-3" style={{ borderTop: '1px solid var(--hairline)', background: 'var(--surface)' }}>
         <WidgetInput
           placeholder="Ask about this goal…"
           disabled={copilot.busy}
@@ -514,16 +519,17 @@ export default function CopilotWidget({
         onClick={onOpen}
         aria-label="Open One Up Copilot"
         aria-expanded={false}
-        className="copilot-fab fixed rounded-full flex items-center justify-center z-[90] animate-bounce-in"
+        className="copilot-fab fixed rounded-full flex items-center justify-center z-[90] animate-resolve-in"
         style={{
           width: 56,
           height: 56,
-          background: 'linear-gradient(135deg, #7c3aed, #6d28d9)',
-          boxShadow: '0 8px 24px rgba(124,58,237,0.45)',
-          border: 'none',
+          background: 'var(--accent)',
+          // A ring, not a drop shadow: this system has none. The Teal Deep
+          // outline is what lifts the button off whatever it floats over.
+          border: '1px solid var(--accent-line)',
         }}
       >
-        <Sparkles size={24} color="white" />
+        <Sparkles size={24} color="var(--accent-ink)" />
       </button>
     );
   }
@@ -547,41 +553,40 @@ export default function CopilotWidget({
       aria-label="One Up Copilot"
       className="copilot-panel fixed z-[90] flex flex-col animate-slide-up"
       style={{
-        background: '#fff',
-        border: '1px solid #e8e6f5',
-        boxShadow: '0 -8px 40px rgba(26,22,53,0.18)',
+        background: 'var(--surface)',
+        border: '1px solid var(--hairline-strong)',
         outline: 'none',
       }}
     >
       {/* header */}
       <div
         className="flex items-center gap-2.5 px-4 py-3 flex-shrink-0"
-        style={{ borderBottom: '1px solid #e8e6f5' }}
+        style={{ borderBottom: '1px solid var(--hairline)' }}
       >
         {target.view !== 'home' && (
           <button
             onClick={() => onChangeTarget({ view: 'home' })}
             aria-label="Back to Copilot home"
             className="flex items-center justify-center rounded-lg flex-shrink-0"
-            style={{ width: 32, height: 32, color: '#6b688f' }}
+            style={{ width: 32, height: 32, color: 'var(--text-body)' }}
           >
             <ArrowLeft size={17} />
           </button>
         )}
         <span
           className="flex items-center justify-center rounded-xl flex-shrink-0"
-          style={{ width: 32, height: 32, background: 'linear-gradient(135deg, #7c3aed, #6d28d9)' }}
+          style={{ width: 32, height: 32, background: 'var(--accent)' }}
           aria-hidden="true"
         >
-          <Sparkles size={16} color="white" />
+          <Sparkles size={16} color="var(--accent-ink)" />
         </span>
         <span
           className="flex-1 min-w-0 truncate"
           style={{
-            fontFamily: 'Plus Jakarta Sans',
-            fontWeight: 800,
+            fontFamily: 'var(--font-sans)',
+            fontWeight: 600,
             fontSize: '0.95rem',
-            color: '#1a1635',
+            color: 'var(--text)',
           }}
         >
           {heading}
@@ -590,7 +595,7 @@ export default function CopilotWidget({
           onClick={onClose}
           aria-label="Close Copilot"
           className="flex items-center justify-center rounded-lg flex-shrink-0"
-          style={{ width: 32, height: 32, color: '#6b688f' }}
+          style={{ width: 32, height: 32, color: 'var(--text-body)' }}
         >
           <X size={18} />
         </button>
@@ -610,14 +615,14 @@ export default function CopilotWidget({
         </div>
       ) : target.view === 'home' ? (
         <>
-          <div className="flex-1 overflow-y-auto px-4 py-4" style={{ background: '#fafaff' }}>
+          <div className="flex-1 overflow-y-auto px-4 py-4" style={{ background: 'var(--surface-2)' }}>
             <WidgetHome
               pageGoal={pageGoal}
               onChangeTarget={onChangeTarget}
               onResume={(sessionId) => onChangeTarget({ view: 'create', sessionId })}
             />
           </div>
-          <div className="px-4 py-3" style={{ borderTop: '1px solid #e8e6f5' }}>
+          <div className="px-4 py-3" style={{ borderTop: '1px solid var(--hairline)' }}>
             <WidgetInput
               placeholder="Tell me a goal, or type /help"
               disabled={interview.busy}
@@ -631,7 +636,7 @@ export default function CopilotWidget({
         <>
           <div
             className="flex-1 overflow-y-auto flex flex-col"
-            style={{ background: '#fafaff', minHeight: 0 }}
+            style={{ background: 'var(--surface-2)', minHeight: 0 }}
           >
             {interview.clarification ? (
               <ClarificationCard
@@ -647,12 +652,12 @@ export default function CopilotWidget({
                 <DraftPreview draft={interview.draft} onOpenFull={openFullPlan} />
               </div>
             ) : interview.phase === 'RESUMING' ? (
-              <p className="px-4 py-4" style={{ fontSize: '0.85rem', color: '#8b88b0' }}>
+              <p className="px-4 py-4" style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
                 Reopening your conversation…
               </p>
             ) : interview.phase === 'OPENING' ? (
               <div className="px-4 py-4">
-                <p style={{ fontSize: '0.88rem', color: '#4b4870', lineHeight: 1.6 }}>
+                <p style={{ fontSize: '0.88rem', color: 'var(--text-body)', lineHeight: 1.6 }}>
                   What would you like to achieve? Say it however you like — the more detail you give,
                   the fewer questions I need to ask.
                 </p>
@@ -663,11 +668,11 @@ export default function CopilotWidget({
                       onClick={() => startInterview(`I want to ${example.toLowerCase()}`)}
                       className="px-3 py-1.5 rounded-full"
                       style={{
-                        background: '#f5f4ff',
-                        border: '1px solid #e8e6f5',
-                        color: '#6b688f',
+                        background: 'var(--surface-2)',
+                        border: '1px solid var(--hairline)',
+                        color: 'var(--text-body)',
                         fontSize: '0.75rem',
-                        fontWeight: 600,
+                        fontWeight: 500,
                         minHeight: 32,
                       }}
                     >
@@ -683,7 +688,7 @@ export default function CopilotWidget({
                   <div className="progress-bar-track flex-1" style={{ height: 4 }}>
                     <div className="progress-bar-fill" style={{ width: `${interview.progress}%` }} />
                   </div>
-                  <span style={{ fontSize: '0.68rem', color: '#8b88b0', fontWeight: 600 }}>
+                  <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 500 }}>
                     {interviewPhaseLabel(interview.phase, interview.turn)}
                   </span>
                 </div>
@@ -697,7 +702,7 @@ export default function CopilotWidget({
           </div>
 
           {/* answer area */}
-          <div className="flex-shrink-0" style={{ borderTop: '1px solid #e8e6f5', background: '#fff' }}>
+          <div className="flex-shrink-0" style={{ borderTop: '1px solid var(--hairline)', background: 'var(--surface)' }}>
             {interview.question ? (
               <QuestionInput
                 question={interview.question}

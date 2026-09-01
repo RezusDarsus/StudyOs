@@ -56,6 +56,8 @@ export const EXPORT_ORDER = [
   'UserPreference',
   'AiCallLog',
   'CopilotEvent',
+  'RecommendationEvent',
+  'CapabilityExecution',
 ] as const;
 
 export type ExportModel = (typeof EXPORT_ORDER)[number];

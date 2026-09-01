@@ -1,23 +1,23 @@
 import { useState, type FormEvent } from 'react';
-import { ArrowLeft, ArrowRight, Eye, EyeOff, Zap } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Eye, EyeOff } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ApiError, api } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { Modal } from '../components/ui';
+import { Modal, UpMarker } from '../components/ui';
 
 const labelStyle = {
   fontSize: '0.8rem',
-  fontWeight: 700,
-  color: '#4b4870',
+  fontWeight: 500,
+  color: 'var(--text-body)',
   display: 'block',
   marginBottom: 6,
-  fontFamily: 'Plus Jakarta Sans',
+  fontFamily: 'var(--font-sans)',
 } as const;
 
 function FieldError({ message }: { message?: string }) {
   if (!message) return null;
   return (
-    <p className="mt-1.5" style={{ fontSize: '0.75rem', color: '#c8253c', fontWeight: 600 }} role="alert">
+    <p className="mt-1.5" style={{ fontSize: '0.75rem', color: 'var(--red)', fontWeight: 500 }} role="alert">
       {message}
     </p>
   );
@@ -71,59 +71,55 @@ export default function Auth({ mode }: { mode: 'login' | 'register' }) {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4 py-10" style={{ background: '#f5f4ff' }}>
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{ background: 'radial-gradient(ellipse at 50% 0%, rgba(124,58,237,0.07) 0%, transparent 60%)' }}
-      />
-
-      <div className="w-full max-w-md relative">
+    <div className="auth-page" style={{ background: 'var(--bg)' }}>
+      <aside className="auth-story" aria-label="One Up introduction">
+        <Link to="/" className="landing-brand"><UpMarker size={36} /><span>One Up</span></Link>
+        <div className="auth-story-copy"><p className="product-eyebrow">A LITTLE EVERY DAY</p><h2>Big intentions.<br />Small, steady steps.</h2><p>A place for the goals that matter to you—and the people who help you keep going.</p></div>
+        <Link to="/#product-film" className="landing-secondary-action">See how a goal becomes a plan →</Link>
+        <p className="auth-story-note">Your pace. Your people. Your next move.</p>
+      </aside>
+      <div className="auth-form-column w-full max-w-md relative">
         <Link
           to="/"
           className="flex items-center gap-2 mb-6"
-          style={{ color: '#8b88b0', fontSize: '0.875rem', fontWeight: 500 }}
+          style={{ color: 'var(--text-muted)', fontSize: '0.875rem', fontWeight: 400 }}
         >
           <ArrowLeft size={15} /> Back to home
         </Link>
 
-        <form onSubmit={onSubmit} className="rounded-2xl p-8 bg-white shadow-card-lg" style={{ border: '1px solid #e8e6f5' }} noValidate>
+        <form
+          onSubmit={onSubmit}
+          className="auth-form rounded-2xl p-8"
+          style={{ background: 'var(--surface)', border: '1px solid var(--hairline)' }}
+          noValidate
+        >
           <div className="flex items-center gap-2.5 mb-8">
-            <div
-              className="flex items-center justify-center rounded-xl"
-              style={{
-                width: 36,
-                height: 36,
-                background: 'linear-gradient(135deg, #7c3aed, #6d28d9)',
-                boxShadow: '0 4px 12px rgba(124,58,237,0.35)',
-              }}
-            >
-              <Zap size={18} fill="white" color="white" />
-            </div>
-            <span style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 800, fontSize: '1.1rem', color: '#1a1635' }}>
+            <UpMarker size={36} />
+            <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 600, fontSize: '1.1rem', color: 'var(--text)' }}>
               One Up
             </span>
           </div>
 
           <h1
             style={{
-              fontFamily: 'Plus Jakarta Sans',
-              fontWeight: 800,
-              fontSize: '1.55rem',
-              color: '#1a1635',
+              fontFamily: 'var(--font-display)',
+              fontWeight: 500,
+              fontSize: 'clamp(2rem, 5vw, 2.5rem)',
+              color: 'var(--text)',
               marginBottom: 5,
               letterSpacing: '-0.02em',
             }}
           >
-            {isLogin ? 'Welcome back!' : 'Start achieving your goals.'}
+            {isLogin ? 'Your next step awaits.' : 'Make room for your goal.'}
           </h1>
-          <p style={{ color: '#8b88b0', fontSize: '0.875rem', marginBottom: '1.75rem' }}>
-            {isLogin ? "Let's pick up where you left off." : 'Create your free account and start today.'}
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.75rem' }}>
+            {isLogin ? 'Log in to pick up where you left off.' : 'One goal. A realistic plan. A little progress every day.'}
           </p>
 
           {formError && (
             <div
               className="mb-4 px-4 py-3 rounded-xl"
-              style={{ background: '#ffeef0', border: '1px solid #ffd3d9', color: '#c8253c', fontSize: '0.85rem', fontWeight: 600 }}
+              style={{ background: 'var(--red-tint)', border: '1px solid var(--red-line)', color: 'var(--red)', fontSize: '0.85rem', fontWeight: 500 }}
               role="alert"
             >
               {formError}
@@ -189,8 +185,8 @@ export default function Auth({ mode }: { mode: 'login' | 'register' }) {
                 <button
                   type="button"
                   onClick={() => setShowPass(!showPass)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2"
-                  style={{ color: '#b8b5d5' }}
+                  className="auth-password-toggle absolute right-1 top-1/2 -translate-y-1/2"
+                  style={{ color: 'var(--text-faint)' }}
                   aria-label={showPass ? 'Hide password' : 'Show password'}
                 >
                   {showPass ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -198,7 +194,7 @@ export default function Auth({ mode }: { mode: 'login' | 'register' }) {
               </div>
               <FieldError message={fields.password?.[0]} />
               {!isLogin && !fields.password && (
-                <p id="password-hint" className="mt-1.5" style={{ fontSize: '0.72rem', color: '#b8b5d5' }}>
+                <p id="password-hint" className="mt-1.5" style={{ fontSize: '0.72rem', color: 'var(--text-faint)' }}>
                   At least 8 characters, including a letter and a number.
                 </p>
               )}
@@ -230,7 +226,7 @@ export default function Auth({ mode }: { mode: 'login' | 'register' }) {
                   type="button"
                   onClick={() => setForgotOpen(true)}
                   className="text-sm"
-                  style={{ color: '#7c3aed', fontWeight: 700, fontFamily: 'Plus Jakarta Sans' }}
+                  style={{ color: 'var(--text)', fontWeight: 500, fontFamily: 'var(--font-sans)' }}
                 >
                   Forgot password?
                 </button>
@@ -248,11 +244,11 @@ export default function Auth({ mode }: { mode: 'login' | 'register' }) {
             </button>
           </div>
 
-          <p className="text-center mt-5" style={{ fontSize: '0.85rem', color: '#8b88b0' }}>
+          <p className="text-center mt-5" style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
             {isLogin ? "Don't have an account? " : 'Already have an account? '}
             <Link
               to={isLogin ? '/register' : '/login'}
-              style={{ color: '#7c3aed', fontWeight: 700, fontFamily: 'Plus Jakarta Sans' }}
+              style={{ color: 'var(--text)', fontWeight: 500, fontFamily: 'var(--font-sans)' }}
             >
               {isLogin ? 'Sign up free' : 'Log in'}
             </Link>
@@ -260,7 +256,7 @@ export default function Auth({ mode }: { mode: 'login' | 'register' }) {
         </form>
 
         {!isLogin && (
-          <p className="text-center mt-4" style={{ fontSize: '0.75rem', color: '#b8b5d5' }}>
+          <p className="text-center mt-4" style={{ fontSize: '0.75rem', color: 'var(--text-faint)' }}>
             By creating an account, you agree to our Terms of Service and Privacy Policy.
           </p>
         )}
@@ -308,7 +304,7 @@ function ForgotPasswordModal({ open, onClose }: { open: boolean; onClose: () => 
       }
     >
       {sent ? (
-        <p style={{ fontSize: '0.9rem', color: '#4b4870', lineHeight: 1.6 }}>
+        <p style={{ fontSize: '0.9rem', color: 'var(--text-body)', lineHeight: 1.6 }}>
           If an account exists for <strong>{email}</strong>, a reset link is on its way. Check your
           inbox and spam folder.
         </p>

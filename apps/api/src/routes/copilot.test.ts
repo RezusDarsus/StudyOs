@@ -1,5 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
-import { buildAssumptions, routeNewSessionRequest } from './copilot.js';
+﻿import { describe, expect, it, vi } from 'vitest';
+import {
+  buildAssumptions,
+  goalCopilotHistorySchema,
+  routeNewSessionRequest,
+  toUserFacing,
+} from './copilot.js';
 import {
   applyMemoryHints,
   applyModelExtraction,
@@ -9,7 +14,10 @@ import {
   serializeContext,
 } from '../ai/context.js';
 import type { CopilotIntentResult } from '../ai/intent-router.js';
-import type { PlanReadiness } from '../ai/readiness.js';
+import type { PlanReadiness } from '../ai/requirements/coverage.js';
+import { RecommendationValidationError } from '../services/copilot-recommendations.js';
+import { RecommendationHistoryUnavailableError } from '../services/recommendation-history.js';
+import { HttpError } from '../lib/errors.js';
 
 // These run entirely offline: the helper is pure, so no route or provider is
 // exercised — only what it is told to read.
@@ -162,5 +170,77 @@ describe('routeNewSessionRequest', () => {
       create: true,
     });
     expect(fallback).not.toHaveBeenCalled();
+  });
+});
+
+describe('goalCopilotHistorySchema (Stage 1 structured history)', () => {
+  it('parses a pre-Stage-1 payload with no recommendations field', () => {
+    const parsed = goalCopilotHistorySchema.parse([
+      { role: 'user', content: 'which book u can suggest' },
+      { role: 'assistant', content: 'Try "The Example" by John Smith.' },
+    ]);
+    expect(parsed).toHaveLength(2);
+    expect(parsed[0].recommendations).toBeUndefined();
+  });
+
+  it('accepts and normalizes mirrored structured recommendations', () => {
+    const parsed = goalCopilotHistorySchema.parse([
+      {
+        role: 'assistant',
+        content: 'A class that fits your schedule.',
+        recommendations: [
+          {
+            entityType: 'Pottery_Class',
+            displayName: '  Wheel Throwing for Beginners  ',
+            attribution: 'Clay House Studio',
+          },
+        ],
+      },
+    ]);
+    expect(parsed[0].recommendations?.[0]).toMatchObject({
+      entityType: 'pottery_class',
+      displayName: 'Wheel Throwing for Beginners',
+    });
+  });
+
+  it('rejects malformed items and oversized arrays', () => {
+    expect(() =>
+      goalCopilotHistorySchema.parse([{ role: 'assistant', content: 'x', recommendations: [{ entityType: 'x' }] }]),
+    ).toThrow();
+    expect(() =>
+      goalCopilotHistorySchema.parse(
+        Array.from({ length: 9 }, (_, i) => ({ role: 'user' as const, content: `m${i}` })),
+      ),
+    ).toThrow();
+  });
+});
+
+describe('toUserFacing (Stage 1 typed recommendation failure)', () => {
+  it('maps RecommendationValidationError to a retryable 503 RECOMMENDATIONS_INVALID', () => {
+    let mapped: unknown;
+    try {
+      toUserFacing(new RecommendationValidationError(['every item repeated']));
+    } catch (err) {
+      mapped = err;
+    }
+    expect(mapped).toBeInstanceOf(HttpError);
+    const httpError = mapped as HttpError;
+    expect(httpError.statusCode).toBe(503);
+    expect(httpError.code).toBe('RECOMMENDATIONS_INVALID');
+    expect(httpError.message).toMatch(/Try again/);
+  });
+
+  it('maps RecommendationHistoryUnavailableError to a retryable 503 (Stage 2, required writes)', () => {
+    let mapped: unknown;
+    try {
+      toUserFacing(new RecommendationHistoryUnavailableError(new Error('database down')));
+    } catch (err) {
+      mapped = err;
+    }
+    expect(mapped).toBeInstanceOf(HttpError);
+    const httpError = mapped as HttpError;
+    expect(httpError.statusCode).toBe(503);
+    expect(httpError.code).toBe('RECOMMENDATION_HISTORY_UNAVAILABLE');
+    expect(httpError.message).toMatch(/Try again/);
   });
 });

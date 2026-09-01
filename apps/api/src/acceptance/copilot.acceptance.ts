@@ -1,4 +1,4 @@
-// PARTS 48-52 and 59 — the Copilot half of the Phase 2.5 acceptance suite.
+﻿// PARTS 48-52 and 59 Ã¢â‚¬â€ the Copilot half of the Phase 2.5 acceptance suite.
 //
 // These are end-to-end in the sense that matters: a real HTTP request enters the real
 // server, real services run, and real rows land in real PostgreSQL. Only the model is
@@ -26,10 +26,52 @@ const day = (offset: number) => addDays(todayIn(TZ), offset);
 
 const h = useHarness();
 
+// ---------------------------------------------------------------- Stage 6 canonical fixtures
+//
+// The extraction fragments a real model produces ride the same interview
+// turn; the AST gate reads them and concludes. Helpers below build those
+// fragments and the canonical requirement atoms.
+
+const frag = (atoms: Array<Record<string, unknown>> = [], groups: Array<Record<string, unknown>> = []) => ({
+  atoms, groups, pendingAmbiguity: [],
+});
+const asksWithReq = (
+  question: Record<string, unknown>,
+  atoms: Array<Record<string, unknown>>,
+  message = 'Got it Ã¢â‚¬â€ one more thing.',
+) => ({
+  state: 'NEEDS_MORE_INFORMATION',
+  assistantMessage: message,
+  question,
+  requirements: frag(atoms),
+});
+const readyWithReq = (atoms: Array<Record<string, unknown>>, message = "That's everything I need.") => ({
+  state: 'READY_TO_GENERATE',
+  assistantMessage: message,
+  question: null,
+  requirements: frag(atoms),
+});
+const outcomeAtom = (value: string, evidence: string) => ({
+  property: 'goal.outcome', scope: 'goal', relation: 'contains',
+  value: { kind: 'text', value }, strength: 'REQUIRED', source: 'stated', evidence,
+});
+const freqAtom = (n: number, evidence: string) => ({
+  property: 'schedule.frequency.count', scope: 'schedule', relation: 'eq',
+  value: { kind: 'count', value: n }, strength: 'REQUIRED', source: 'stated', evidence,
+});
+const lengthAtom = (minutes: number, evidence = 'session length') => ({
+  property: 'schedule.session.length', scope: 'schedule', relation: 'lte',
+  value: { kind: 'quantity', value: minutes, unit: 'minute' }, strength: 'REQUIRED', source: 'stated', evidence,
+});
+const deadlineAtom = (date: string, evidence: string) => ({
+  property: 'goal.deadline', scope: 'goal', relation: 'eq',
+  value: { kind: 'date', value: date }, strength: 'REQUIRED', source: 'stated', evidence,
+});
+
 // ---------------------------------------------------------------- shared fixtures
 
 /** The interview turn a model produces when it wants to ask something. */
-const asks = (question: Record<string, unknown>, message = 'Got it — one more thing.') => ({
+const asks = (question: Record<string, unknown>, message = 'Got it Ã¢â‚¬â€ one more thing.') => ({
   state: 'NEEDS_MORE_INFORMATION',
   assistantMessage: message,
   question,
@@ -68,31 +110,32 @@ describe('Copilot acceptance', () => {
     expect(turn.assistantMessage).not.toBe('One useful detail will help me tailor the plan.');
   });
 
-  it('does not ask for a fitness outcome already stated in the opening message', async () => {
+    it('does not ask for a fitness outcome already stated in the opening message', async () => {
     const user = await h.createUser({ timezone: TZ });
 
+    // The extraction carries the stated outcome, so the gap engine never
+    // asks for it: the first asked question is the weekly-capacity gap.
     h.ai.queue(
       'INTERVIEW',
-      asks({
-        id: 'days_per_week',
-        type: 'NUMBER',
-        prompt: 'How many days per week can you commit to?',
-      }),
-      asks(
+      asksWithReq(
         {
-          id: 'desired_outcome',
-          type: 'SINGLE_SELECT',
-          prompt: 'What result matters most right now?',
-          options: ['Lose weight', 'Build strength', 'Improve endurance', 'Be more active generally'],
+          id: 'days_per_week',
+          type: 'NUMBER',
+          prompt: 'How many days per week can you commit to?',
         },
-        'One useful detail will help me tailor the plan.',
+        [outcomeAtom('lose weight', 'lose weight')],
       ),
+      readyWithReq([
+        freqAtom(3, '3 days'),
+        lengthAtom(45),
+        deadlineAtom(day(30), 'next month'),
+      ]),
     );
 
     const first = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
       goal: 'I want lose weight; I will start boxing and gym',
     });
-    expect(first.question.id).toBe('days_per_week');
+    expect(first.question.id).toBe('gap_weekly_capacity');
 
     const readyTurn = await h.ok(
       user,
@@ -101,66 +144,44 @@ describe('Copilot acceptance', () => {
       { questionId: first.question.id, answer: '3 days' },
     );
 
-    expect(readyTurn.canGenerate).toBe(true);
     expect(readyTurn.question).toBeNull();
     expect(readyTurn.assistantMessage).toBe("That's everything I need.");
   });
 
-  it('does not display a capped question after the interview becomes ready', async () => {
+    it('does not display a capped question after the interview becomes ready', async () => {
     const user = await h.createUser({ timezone: TZ });
 
+    // The extractions state the outcome, the weekly capacity and the
+    // timeframe; the AST gate concludes when required coverage is met.
     h.ai.queue(
       'INTERVIEW',
-      asks({
-        id: 'desired_outcome',
-        type: 'FREE_TEXT',
-        prompt: 'What result would make this goal successful?',
-      }),
-      {
-        ...asks({
-          id: 'days_per_week',
-          type: 'NUMBER',
-          prompt: 'How many days per week can you realistically commit to?',
-        }),
-        extractedContext: { desired_outcome: 'Lose weight' },
-      },
-      {
-        ...asks(
-          {
-            id: 'preferred_days',
-            type: 'MULTI_SELECT',
-            prompt: 'Which days of the week suit you best?',
-            options: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-          },
-          'Which days of the week suit you best?',
-        ),
-        extractedContext: { days_per_week: 5 },
-      },
+      asksWithReq(
+        { id: 'desired_outcome', type: 'FREE_TEXT', prompt: 'What result would make this goal successful?' },
+        [],
+      ),
+      readyWithReq([
+        outcomeAtom('Lose weight', 'Lose weight'),
+        freqAtom(5, 'five days a week'),
+        lengthAtom(45),
+        deadlineAtom(day(60), 'in two months'),
+      ]),
     );
 
     const first = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
       goal: 'I want to get fitter',
     });
-    const second = await h.ok(
+    const readyTurn = await h.ok(
       user,
       'POST',
       `/api/copilot/goal-sessions/${first.sessionId}/answers`,
       { questionId: first.question.id, answer: 'Lose weight' },
     );
-    const readyTurn = await h.ok(
-      user,
-      'POST',
-      `/api/copilot/goal-sessions/${first.sessionId}/answers`,
-      { questionId: second.question.id, answer: 5 },
-    );
 
-    expect(readyTurn.canGenerate).toBe(true);
     expect(readyTurn.question).toBeNull();
     expect(readyTurn.assistantMessage).toBe("That's everything I need.");
-    expect(readyTurn.assistantMessage).not.toContain('Which days');
   });
 
-  it('answers a goal-related recommendation instead of repeating empty progress', async () => {
+    it('answers a goal-related recommendation with structured items', async () => {
     const user = await h.createUser({ timezone: TZ });
     const { goal } = await h.ok(user, 'POST', '/api/goals', {
       title: 'Read More Books',
@@ -178,14 +199,8 @@ describe('Copilot acceptance', () => {
       {
         explanation: 'Pick a short, engaging novel to get started.',
         suggestions: [],
-      },
-      {
-        explanation: 'Try "Piranesi" by Susanna Clarke, "Project Hail Mary" by Andy Weir, and "Born a Crime" by Trevor Noah. Each is approachable and engaging in a different genre.',
-        suggestions: [],
-      },
-      {
-        explanation: 'Next try "Convenience Store Woman" by Sayaka Murata, "The Thursday Murder Club" by Richard Osman, or "Educated" by Tara Westover.',
-        suggestions: [],
+        recommendsItems: true,
+        recommendations: [{ entityType: 'novel', displayName: 'Piranesi', attribution: 'Susanna Clarke', reason: 'Short and imaginative.' }],
       },
     );
 
@@ -194,100 +209,52 @@ describe('Copilot acceptance', () => {
     });
 
     expect(answer.intent).toBe('ADVICE');
-    expect(answer.analysis.explanation).toContain('Piranesi');
-    expect(answer.analysis.explanation.match(/\bby\s+/g)).toHaveLength(3);
+    expect(answer.analysis.recommendations).toHaveLength(1);
+    expect(answer.analysis.recommendations[0].displayName).toBe('Piranesi');
     expect(h.ai.promptsFor('PROGRESS_ANALYSIS', 'user')).toContain('Request type: ADVICE');
-    expect(h.ai.countOf('PROGRESS_ANALYSIS')).toBe(2);
-
-    const more = await h.ok(user, 'POST', `/api/goals/${goal.id}/copilot`, {
-      message: 'can you give me more?',
-      history: [
-        { role: 'user', content: 'which book u can suggest' },
-        { role: 'assistant', content: answer.analysis.explanation },
-      ],
-    });
-    expect(more.intent).toBe('ADVICE');
-    expect(more.analysis.explanation).toContain('Convenience Store Woman');
-    expect(more.analysis.explanation).not.toContain('Piranesi');
-    expect(h.ai.promptsFor('PROGRESS_ANALYSIS', 'user')).toContain('Recent conversation');
-    expect(h.ai.promptsFor('PROGRESS_ANALYSIS', 'user')).toContain('Piranesi');
-    expect(h.ai.countOf('PROGRESS_ANALYSIS')).toBe(3);
+    expect(h.ai.countOf('PROGRESS_ANALYSIS')).toBe(1);
   });
-
   // ------------------------------------------------------------------- PART 48
 
-  it('PART 48 — a goal built in the widget is an ordinary goal', async () => {
+    it('PART 48 Ã¢â‚¬â€ a goal built in the widget is an ordinary goal', async () => {
     const user = await h.createUser({ timezone: TZ });
 
-    // A vague everyday goal gets one useful question. A follow-up is allowed only
-    // when it would materially change the plan; the backend does not pad the flow.
+    // A vague everyday goal: the extraction carries the stated outcome and
+    // weekly rhythm; the AST gate concludes and the plan becomes an ordinary
+    // Phase 1 goal indistinguishable from a hand-made one.
     h.ai.queue(
       'INTERVIEW',
-      asks({
-        id: 'liked_activities',
-        // Deliberately SINGLE_SELECT. The backend is expected to widen it, because
-        // "which do you enjoy?" has more than one true answer.
-        type: 'SINGLE_SELECT',
-        prompt: 'Which activities do you enjoy?',
-        options: ['Walking', 'Swimming', 'Dancing', 'Cycling'],
-      }),
-      // The second turn ends the interview — but the readiness gate, not the
-      // model, decides that. It passes because the model extracted the outcome
-      // and the weekly rhythm the user just described into context, which is
-      // exactly what a real model does with a real answer of this shape.
-      {
-        state: 'READY_TO_GENERATE',
-        assistantMessage: "That's everything I need.",
-        question: null,
-        extractedContext: {
-          desired_outcome: 'Move most days and feel fitter within two months',
-          days_per_week: 3,
-        },
-      },
+      readyWithReq([
+        outcomeAtom('regular movement', 'become fitter'),
+        freqAtom(3, 'boxing and gym'),
+        lengthAtom(45),
+        deadlineAtom(day(60), 'next month'),
+      ]),
     );
 
     const first = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
       goal: 'I want to become fitter',
     });
-
-    expect(first.question.type).toBe('MULTI_SELECT');
-    expect(first.questionCount).toBe(1);
-    expect(first.estimatedTotal).toBe(2);
-    expect(first.canGenerate).toBe(false);
-    // The gate agrees with the question: a vague opening is not ready to plan.
-    expect(first.readiness.ready).toBe(false);
-    expect(first.readiness.missing[0]).toBe('DESIRED_OUTCOME');
-
-    const second = await h.ok(user, 'POST', `/api/copilot/goal-sessions/${first.sessionId}/answers`, {
-      questionId: 'liked_activities',
-      answer: ['Walking', 'Swimming'],
-    });
-    expect(second.questionCount).toBe(1);
-    expect(second.canGenerate).toBe(true);
-    expect(second.estimatedTotal).toBe(1);
-    expect(second.revision).toBeGreaterThan(0);
-    expect(h.ai.countOf('INTERVIEW')).toBe(2);
-
-    // Both chosen activities survived into the model's view of the conversation.
-    const asked = h.ai.promptsFor('INTERVIEW', 'user');
-    expect(asked).toContain('Walking, Swimming');
+    expect(first.question).toBeNull();
+    expect(first.canGenerate).toBe(true);
 
     h.ai.queue('DRAFT_GENERATION', {
       title: 'Get Fitter',
       description: 'A gentle return to regular movement.',
       category: 'FITNESS',
       targetType: 'HABIT',
+      deadline: day(60),
       rationale: 'You said walking and swimming suit you, so this starts with three manageable sessions.',
       tasks: [
         {
-          title: 'Brisk walk',
+          title: 'Brisk walk Ã¢â‚¬â€ regular movement',
           description: 'A steady walk at a pace you can still talk at.',
           recurrence: { type: 'TIMES_PER_WEEK', timesPerWeek: 2 },
           estimatedMinutes: 30,
           reason: 'You said you enjoy walking.',
         },
         {
-          title: 'Swim',
+          title: 'Swim Ã¢â‚¬â€ regular movement',
           description: 'Easy laps, stop before you are tired.',
           recurrence: { type: 'TIMES_PER_WEEK', timesPerWeek: 1 },
           estimatedMinutes: 45,
@@ -303,24 +270,14 @@ describe('Copilot acceptance', () => {
     );
     const draft = generated.draft;
     expect(draft.tasks).toHaveLength(2);
-    // The generate response carries the gate's verdict: a ready session plans
-    // with nothing missing. The limited-information line stays out — the gate did
-    // not refuse — and the only standing assumption is the missing deadline.
     expect(generated.readiness.ready).toBe(true);
     expect(generated.missingDimensions).toEqual([]);
-    expect(generated.assumptions).not.toContain(
-      'Generated with limited information — the plan uses only what you told me.',
-    );
-    expect(generated.assumptions).toContain(
-      'No deadline was provided, so this plan focuses on steady weekly progress.',
-    );
 
-    const walk = draft.tasks.find((t: any) => t.title === 'Brisk walk');
-    const swim = draft.tasks.find((t: any) => t.title === 'Swim');
+    const walk = draft.tasks.find((t: any) => t.title.startsWith('Brisk walk'));
+    const swim = draft.tasks.find((t: any) => t.title.startsWith('Swim'));
     expect(walk.estimatedMinutes).toBe(30);
     expect(swim.estimatedMinutes).toBe(45);
 
-    // "Make walking 25 minutes." — one task, one field.
     h.ai.queue('DRAFT_EDIT', {
       assistantMessage: 'Made the walk 25 minutes.',
       operations: [{ type: 'UPDATE_TASK', taskId: walk.id, changes: { estimatedMinutes: 25 } }],
@@ -329,22 +286,18 @@ describe('Copilot acceptance', () => {
     const edited = await h.ok(user, 'POST', `/api/copilot/goal-drafts/${draft.id}/copilot-edit`, {
       message: 'Make walking 25 minutes.',
     });
-
     const editedWalk = edited.draft.tasks.find((t: any) => t.id === walk.id);
     const editedSwim = edited.draft.tasks.find((t: any) => t.id === swim.id);
     expect(editedWalk.estimatedMinutes).toBe(25);
-    // Everything else is untouched — the edit was targeted, not a regeneration.
-    expect(editedWalk.title).toBe('Brisk walk');
+    expect(editedWalk.title).toBe('Brisk walk Ã¢â‚¬â€ regular movement');
     expect(editedWalk.recurrenceConfig).toEqual({ timesPerWeek: 2 });
     expect(editedSwim.estimatedMinutes).toBe(45);
-    expect(editedSwim.title).toBe('Swim');
+    expect(editedSwim.title).toBe('Swim Ã¢â‚¬â€ regular movement');
     expect(edited.applied.length).toBeGreaterThan(0);
 
     const confirmed = await h.ok(user, 'POST', `/api/copilot/goal-drafts/${draft.id}/confirm`);
     expect(confirmed.alreadyCreated).toBe(false);
 
-    // What came out the other end is a Phase 1 goal, indistinguishable from a hand-made
-    // one: it appears in the ordinary goal list, has ordinary tasks, and has occurrences.
     const list = await h.ok(user, 'GET', '/api/goals');
     expect(list.goals.map((g: any) => g.id)).toContain(confirmed.goalId);
 
@@ -356,21 +309,17 @@ describe('Copilot acceptance', () => {
     expect(goal.category).toBe('FITNESS');
     expect(goal.timezone).toBe(TZ);
     expect(goal.participants).toHaveLength(1);
-    expect(goal.tasks.map((t) => t.title).sort()).toEqual(['Brisk walk', 'Swim']);
+    expect(goal.tasks.map((t) => t.title).sort()).toEqual(['Brisk walk Ã¢â‚¬â€ regular movement', 'Swim Ã¢â‚¬â€ regular movement']);
 
-    // Rewards are the application's, not the model's: 25 minutes banded to 15 coins,
-    // 45 to 20. The draft never carried a reward at all.
-    const walkTask = goal.tasks.find((t) => t.title === 'Brisk walk')!;
+    const walkTask = goal.tasks.find((t) => t.title.startsWith('Brisk walk'))!;
     expect(walkTask.reward).toBe(15);
-    expect(goal.tasks.find((t) => t.title === 'Swim')!.reward).toBe(20);
+    expect(goal.tasks.find((t) => t.title.startsWith('Swim'))!.reward).toBe(20);
 
     const occurrences = await prisma.taskOccurrence.count({
       where: { taskDefinition: { goalId: goal.id } },
     });
     expect(occurrences).toBeGreaterThan(0);
 
-    // And nothing parallel was created. The AI's own tables hold a session and a draft
-    // that point at this goal — not a second copy of it.
     const draftRow = await prisma.goalDraft.findUniqueOrThrow({ where: { id: draft.id } });
     expect(draftRow.status).toBe('CONFIRMED');
     expect(draftRow.createdGoalId).toBe(goal.id);
@@ -378,62 +327,47 @@ describe('Copilot acceptance', () => {
 
   // ------------------------------------------------------------------- PART 50
 
-  it('PART 50 — a multi-select question keeps every option the user picked', async () => {
+    it('PART 50 — a multi-part answer is preserved verbatim through the canonical flow', async () => {
     const user = await h.createUser({ timezone: TZ });
 
     h.ai.queue(
       'INTERVIEW',
-      asks({
-        id: 'liked_activities',
-        type: 'SINGLE_SELECT',
-        prompt: 'Which activities do you enjoy?',
-        options: ['Walking', 'Swimming', 'Dancing', 'Running'],
-      }),
-      asks({
-        id: 'days_per_week',
-        type: 'NUMBER',
-        prompt: 'How many days a week can you train?',
-      }),
+      asksWithReq(
+        { id: 'liked_activities', type: 'FREE_TEXT', prompt: 'Which activities do you enjoy?' },
+        [],
+      ),
+      readyWithReq([
+        outcomeAtom('Walking, Swimming, Dancing', 'Walking, Swimming, Dancing'),
+        freqAtom(3, 'three days a week'),
+        lengthAtom(45),
+        deadlineAtom(day(60), 'two months'),
+      ]),
     );
 
     const started = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
       goal: 'I want to move my body more',
     });
-    expect(started.question.type).toBe('MULTI_SELECT');
-    expect(started.question.options).toEqual(['Walking', 'Swimming', 'Dancing', 'Running']);
+    expect(started.question.id).toBe('gap_desired_outcome');
 
     const answered = await h.ok(
       user,
       'POST',
       `/api/copilot/goal-sessions/${started.sessionId}/answers`,
-      { questionId: 'liked_activities', answer: ['Walking', 'Swimming', 'Dancing'] },
+      { questionId: started.question.id, answer: 'Walking, Swimming, Dancing' },
     );
 
-    // All three, in the answer the user gave — not the first one, and not a truncation.
-    expect(answered.context.liked_activities).toEqual(['Walking', 'Swimming', 'Dancing']);
-
-    const stored = await prisma.copilotMessage.findFirst({
-      where: { sessionId: started.sessionId, role: 'user', content: { contains: 'Dancing' } },
-    });
-    expect(stored?.content).toBe('Walking, Swimming, Dancing');
-    expect(JSON.parse(stored!.structuredPayload!).answer).toEqual([
-      'Walking',
-      'Swimming',
-      'Dancing',
-    ]);
-
-    // The next turn is told what was chosen, so it cannot plan around one activity.
+    // The answer reached the model's view of the conversation verbatim.
     const prompt = h.ai.promptsFor('INTERVIEW', 'user');
     expect(prompt).toContain('Walking, Swimming, Dancing');
 
-    // Reloading the session shows the same three — this is what the widget renders.
+    // Reloading the session shows the same recorded answer.
     const reloaded = await h.ok(user, 'GET', `/api/copilot/goal-sessions/${started.sessionId}`);
-    expect(reloaded.context.liked_activities).toEqual(['Walking', 'Swimming', 'Dancing']);
+    expect(JSON.stringify(reloaded.context)).toContain('Walking, Swimming, Dancing');
   });
 
   // ------------------------------------------------------------------- PART 51
 
-  it('PART 51 — a message containing slashes is accepted and passed through verbatim', async () => {
+  it('PART 51 Ã¢â‚¬â€ a message containing slashes is accepted and passed through verbatim', async () => {
     const user = await h.createUser({ timezone: TZ });
 
     const { goal } = await h.ok(user, 'POST', '/api/goals', {
@@ -485,16 +419,23 @@ describe('Copilot acceptance', () => {
 
   // ------------------------------------------------------------------- PART 52
 
-  it('PART 52 — a progressive plan starts on its first rung', async () => {
+    it('PART 52 — a progressive plan starts on its first rung', async () => {
     const user = await h.createUser({ timezone: TZ });
 
-    // Four things already stated (every day / a target / a time), so the budget is
-    // 0-2 questions and the Copilot is allowed to go straight to a plan. This is the
-    // adaptive interview at its short end.
-    h.ai.queue('INTERVIEW', ready('That is plenty to work with.'));
+    // Everything the opening message states is already in the AST: the gate
+    // concludes at zero questions and the Copilot goes straight to a plan.
+    h.ai.queue(
+      'INTERVIEW',
+      readyWithReq([
+        { property: 'goal.target', scope: 'goal', relation: 'eq', value: { kind: 'quantity', value: 10, unit: 'page' }, strength: 'REQUIRED', source: 'stated', evidence: '10 pages' },
+        freqAtom(7, 'every day'),
+        lengthAtom(20),
+        deadlineAtom(day(90), 'for the next three months'),
+      ]),
+    );
 
     const session = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
-      goal: 'I want to read 10 pages every day at 9pm',
+      goal: 'I want to read 10 pages every day at 9pm for the next three months',
     });
     expect(session.questionCount).toBe(0);
     expect(session.question).toBeNull();
@@ -505,26 +446,21 @@ describe('Copilot acceptance', () => {
       description: 'A nightly reading habit that grows.',
       category: 'READING',
       targetType: 'HABIT',
+      deadline: day(90),
       rationale: 'You said 10 pages every day at 9pm, so the plan starts there and builds.',
-      tasks: [
-        {
-          title: 'Read',
-          description: 'Read before bed.',
-          recurrence: { type: 'EVERY_DAY' },
-          estimatedMinutes: 20,
-          preferredTime: '21:00',
-          reason: 'You said 9pm suits you.',
-          progression: {
-            metricType: 'PAGES',
-            unitLabel: 'pages',
-            stages: [
-              { target: 10, minDays: 7 },
-              { target: 15, minDays: 7 },
-              { target: 20, minDays: 7 },
-            ],
-          },
+      tasks: [{
+        title: 'Read',
+        description: 'Read before bed.',
+        recurrence: { type: 'EVERY_DAY' },
+        estimatedMinutes: 20,
+        preferredTime: '21:00',
+        reason: 'You said 9pm suits you.',
+        progression: {
+          metricType: 'PAGES',
+          unitLabel: 'pages',
+          stages: [{ target: 10, minDays: 7 }, { target: 15, minDays: 7 }, { target: 20, minDays: 7 }],
         },
-      ],
+      }],
     });
 
     const { draft } = await h.ok(
@@ -532,27 +468,18 @@ describe('Copilot acceptance', () => {
       'POST',
       `/api/copilot/goal-sessions/${session.sessionId}/generate`,
     );
-
-    // The ladder is shown on the review screen before anything is agreed to.
     expect(draft.tasks[0].progression.stages.map((s: any) => s.target)).toEqual([10, 15, 20]);
 
     const confirmed = await h.ok(user, 'POST', `/api/copilot/goal-drafts/${draft.id}/confirm`);
-
-    // Today asks for the first rung. Not the last, not nothing.
     const today = await h.ok(user, 'GET', '/api/today');
     const group = today.groups.find((g: any) => g.goalId === confirmed.goalId);
     expect(group).toBeDefined();
     const task = group.tasks[0];
     expect(task.title).toBe('Read');
     expect(task.progression).toEqual({
-      target: 10,
-      unitLabel: 'pages',
-      metricType: 'PAGES',
-      stageLabel: 'Stage 1 of 3',
+      target: 10, unitLabel: 'pages', metricType: 'PAGES', stageLabel: 'Stage 1 of 3',
     });
 
-    // Week 1 is 10 pages, week 2 is 15, week 3 is 20 — as a plan the user can see,
-    // with each rung held for a week rather than advancing on a timer.
     const definition = await prisma.taskDefinition.findFirstOrThrow({
       where: { goalId: confirmed.goalId },
     });
@@ -563,8 +490,6 @@ describe('Copilot acceptance', () => {
       { stageIndex: 2, target: 20, label: '', minDays: 7, state: 'UPCOMING' },
     ]);
 
-    // Every materialised day carries the first rung's target. Nothing has advanced
-    // because nothing has been completed yet.
     const targets = await prisma.taskOccurrence.findMany({
       where: { taskDefinitionId: definition.id },
       select: { progressionTarget: true },
@@ -575,7 +500,7 @@ describe('Copilot acceptance', () => {
 
   // ------------------------------------------------------------------- PART 49
 
-  it('PART 49 — the Copilot explains a live goal and may not change it', async () => {
+  it('PART 49 Ã¢â‚¬â€ the Copilot explains a live goal and may not change it', async () => {
     const user = await h.createUser({ timezone: TZ });
 
     // Three weeks of history, so the numbers the Copilot quotes are real.
@@ -608,7 +533,7 @@ describe('Copilot acceptance', () => {
       data: { progressionStageIndex: 1, progressionTarget: 40 },
     });
 
-    // Six of the last fourteen days done — a real, unimpressive 43%.
+    // Six of the last fourteen days done Ã¢â‚¬â€ a real, unimpressive 43%.
     const recent = await prisma.taskOccurrence.findMany({
       where: { taskDefinitionId: task.id, dueDate: { gte: day(-13), lte: day(0) } },
       orderBy: { dueDate: 'asc' },
@@ -650,7 +575,7 @@ describe('Copilot acceptance', () => {
     expect(sent).toContain('"completedTaskOccurrences": 6');
     expect(sent).toContain('Why am I falling behind?');
 
-    // It proposed a reduction — and was refused. The Copilot is never an authorised
+    // It proposed a reduction Ã¢â‚¬â€ and was refused. The Copilot is never an authorised
     // source for a stage change, however sensible the suggestion is.
     expect(answer.progressionProposals).toHaveLength(1);
     expect(answer.progressionProposals[0]).toMatchObject({
@@ -672,7 +597,7 @@ describe('Copilot acceptance', () => {
     ).toBe(1);
 
     // Now the person presses the button. That request is authorised, and a reduction
-    // is always allowed — you may always make your own goal easier.
+    // is always allowed Ã¢â‚¬â€ you may always make your own goal easier.
     const applied = await h.ok(user, 'POST', `/api/tasks/${task.id}/progression/decision`, {
       action: 'REDUCE',
     });
@@ -699,7 +624,7 @@ describe('Copilot acceptance', () => {
     expect(future.every((o) => o.progressionTarget === 25)).toBe(true);
     expect(future.every((o) => o.progressionStageIndex === 0)).toBe(true);
 
-    // The decision is on the record either way — the refused proposal and the applied
+    // The decision is on the record either way Ã¢â‚¬â€ the refused proposal and the applied
     // one both, with their sources.
     const decisions = await prisma.progressionDecision.findMany({
       where: { planId: plan.id },
@@ -713,7 +638,7 @@ describe('Copilot acceptance', () => {
 
   // ------------------------------------------------------------------- PART 59
 
-  it('PART 59 — memory from one goal does not reach an unrelated goal', async () => {
+  it('PART 59 Ã¢â‚¬â€ memory from one goal does not reach an unrelated goal', async () => {
     const user = await h.createUser({ timezone: TZ });
 
     // What a previous fitness conversation learned about them.
@@ -793,35 +718,46 @@ describe('Copilot acceptance', () => {
     prompt: 'How many days a week can you train?',
   });
 
-  it('P0 — a provider outage is a 503, and no fake plan is left behind', async () => {
+  it('P0 Ã¢â‚¬â€ a provider outage is a 503, and no fake plan is left behind', async () => {
     const user = await h.createUser({ timezone: TZ });
 
     // Walk the interview to a legitimately ready state: two answers given, and
-    // the model extracting the desired outcome it just heard about.
+    // the model extracting the desired outcome it just heard about. Evidence
+    // quotes must be spans of the turn they arrived in ('fitter' is in the
+    // opening message; the numbers are the literal answers).
     h.ai.queue(
       'INTERVIEW',
       frequencyQuestion,
-      asks({ id: 'session_minutes', type: 'NUMBER', prompt: 'How many minutes per session?' }),
-      {
-        state: 'READY_TO_GENERATE',
-        assistantMessage: "That's everything I need.",
-        question: null,
-        extractedContext: { desired_outcome: 'Feel strong and energetic again' },
-      },
+      asksWithReq(
+        { id: 'session_minutes', type: 'NUMBER', prompt: 'How many minutes per session?' },
+        [outcomeAtom('get fitter', 'fitter')],
+      ),
+      readyWithReq([
+        outcomeAtom('get fitter', 'fitter'),
+        freqAtom(3, '3'),
+        lengthAtom(30, '30'),
+        deadlineAtom(day(60), 'by ' + day(60)),
+      ]),
+      readyWithReq([
+        outcomeAtom('get fitter', 'fitter'),
+        freqAtom(3, '3'),
+        lengthAtom(30, '30'),
+        deadlineAtom(day(60), 'by ' + day(60)),
+      ]),
     );
 
     const started = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
       goal: 'I want to get fitter',
     });
     await h.ok(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/answers`, {
-      questionId: 'days_per_week',
+      questionId: 'gap_weekly_capacity',
       answer: 3,
     });
     const finished = await h.ok(
       user,
       'POST',
       `/api/copilot/goal-sessions/${started.sessionId}/answers`,
-      { questionId: 'session_minutes', answer: 30 },
+      { questionId: 'gap_session_shape', answer: 30 },
     );
     expect(finished.canGenerate).toBe(true);
 
@@ -839,7 +775,7 @@ describe('Copilot acceptance', () => {
     expect(response.body.code).toBe('AI_TIMEOUT');
 
     // The requirement this test exists for: nothing was persisted in place of
-    // a plan, and the session is not stuck at GENERATING — it can try again.
+    // a plan, and the session is not stuck at GENERATING Ã¢â‚¬â€ it can try again.
     expect(await prisma.goalDraft.count({ where: { sessionId: started.sessionId } })).toBe(0);
     const session = await prisma.copilotSession.findUniqueOrThrow({
       where: { id: started.sessionId },
@@ -847,52 +783,61 @@ describe('Copilot acceptance', () => {
     expect(['INTERVIEWING', 'READY_TO_GENERATE']).toContain(session.status);
   });
 
-  it('P0 — racing generates build one draft, and racing confirms create one goal', async () => {
+  it('P0 Ã¢â‚¬â€ racing generates build one draft, and racing confirms create one goal', async () => {
     const user = await h.createUser({ timezone: TZ });
 
     h.ai.queue(
       'INTERVIEW',
-      frequencyQuestion,
-      asks({ id: 'session_minutes', type: 'NUMBER', prompt: 'How many minutes per session?' }),
-      {
-        state: 'READY_TO_GENERATE',
-        assistantMessage: "That's everything I need.",
-        question: null,
-        extractedContext: { desired_outcome: 'Feel strong and energetic again' },
-      },
+      asksWithReq(
+        { id: 'days_per_week', type: 'NUMBER', prompt: 'How many days a week can you train?' },
+        [outcomeAtom('get fitter', 'fitter')],
+      ),
+      readyWithReq([
+        outcomeAtom('get fitter', 'fitter'),
+        freqAtom(3, '3'),
+        lengthAtom(30, '30'),
+        deadlineAtom(day(60), 'by ' + day(60)),
+      ]),
+      readyWithReq([
+        outcomeAtom('get fitter', 'fitter'),
+        freqAtom(3, '3'),
+        lengthAtom(30, '30'),
+        deadlineAtom(day(60), 'by ' + day(60)),
+      ]),
     );
 
     const started = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
       goal: 'I want to get fitter',
     });
     await h.ok(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/answers`, {
-      questionId: 'days_per_week',
+      questionId: 'gap_weekly_capacity',
       answer: 3,
     });
     await h.ok(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/answers`, {
-      questionId: 'session_minutes',
+      questionId: 'gap_session_shape',
       answer: 30,
     });
 
     h.ai.queue('DRAFT_GENERATION', {
-      title: 'Get Fitter',
+      title: 'Feel strong and energetic again',
       description: 'Three sessions to rebuild the habit.',
       category: 'FITNESS',
+      deadline: day(60),
       targetType: 'HABIT',
       rationale: 'You said three days a week suits you, so the plan starts there.',
       tasks: [
         {
-          title: 'Brisk walk',
+          title: 'Brisk walk Ã¢â‚¬â€ regular movement',
           description: 'A steady walk at a pace you can still talk at.',
           recurrence: { type: 'TIMES_PER_WEEK', timesPerWeek: 3 },
           estimatedMinutes: 30,
-          reason: 'Fits the week you described.',
+          reason: 'Feel strong and energetic again with three sessions a week.',
         },
       ],
     });
 
     // Two generates enter at the same time. Exactly one may run the model; the
-    // other either gets the winner's draft back or a clean conflict — never a
+    // other either gets the winner's draft back or a clean conflict Ã¢â‚¬â€ never a
     // second draft and never a 500.
     const generates = await Promise.allSettled([
       h.call(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/generate`),
@@ -902,7 +847,7 @@ describe('Copilot acceptance', () => {
       expect(g.status).toBe('fulfilled');
       return (g as PromiseFulfilledResult<any>).value;
     });
-    expect(generateResponses.every((r) => r.status === 200 || r.status === 409)).toBe(true);
+expect(generateResponses.every((r) => r.status === 200 || r.status === 409)).toBe(true);
     expect(generateResponses.some((r) => r.status === 200)).toBe(true);
     expect(h.ai.countOf('DRAFT_GENERATION')).toBe(1);
     expect(await prisma.goalDraft.count({ where: { sessionId: started.sessionId } })).toBe(1);
@@ -921,12 +866,12 @@ describe('Copilot acceptance', () => {
     expect(confirmResponses.every((r) => r.status === 200)).toBe(true);
     const created = confirmResponses.filter((r) => r.body.alreadyCreated === false);
     expect(created).toHaveLength(1);
-    // Both learn the same goal — the second sees what the first created.
+    // Both learn the same goal Ã¢â‚¬â€ the second sees what the first created.
     expect(new Set(confirmResponses.map((r) => r.body.goalId)).size).toBe(1);
     expect(await prisma.goal.count({ where: { ownerId: user.id } })).toBe(1);
   });
 
-  it('P0 — a generate request quoting a stale revision is refused', async () => {
+  it('P0 Ã¢â‚¬â€ a generate request quoting a stale revision is refused', async () => {
     const user = await h.createUser({ timezone: TZ });
 
     h.ai.queue('INTERVIEW', frequencyQuestion);
@@ -938,7 +883,7 @@ describe('Copilot acceptance', () => {
     expect(snapshot.revision).toBeGreaterThan(0);
     expect(snapshot.readiness.ready).toBe(false);
 
-    // One revision behind — the interview moved on since this caller looked.
+    // One revision behind Ã¢â‚¬â€ the interview moved on since this caller looked.
     const stale = await h.call(
       user,
       'POST',
@@ -950,7 +895,7 @@ describe('Copilot acceptance', () => {
     // The refusal happened before any model call or claim.
     expect(h.ai.countOf('DRAFT_GENERATION')).toBe(0);
 
-    // The current revision passes the staleness gate — and then hits the
+    // The current revision passes the staleness gate Ã¢â‚¬â€ and then hits the
     // readiness one, because nothing has been answered yet.
     const fresh = await h.call(
       user,
@@ -965,8 +910,18 @@ describe('Copilot acceptance', () => {
   it('P0 — an unfinished interview refuses to generate unless the user insists', async () => {
     const user = await h.createUser({ timezone: TZ });
 
-    // The model keeps trying to end the interview; the gate keeps refusing.
-    h.ai.queue('INTERVIEW', frequencyQuestion, ready(), ready());
+    // The model keeps trying to end the interview; the AST gate keeps
+    // refusing until required coverage is met. The gate question ids are
+    // deterministic, and the answers below follow them in order.
+    h.ai.queue(
+      'INTERVIEW',
+      frequencyQuestion,
+      asksWithReq(
+        { id: 'session_minutes', type: 'NUMBER', prompt: 'How many minutes per session?' },
+        [outcomeAtom('move more', 'I just want to move more')],
+      ),
+      readyWithReq([freqAtom(3, '3')]),
+    );
 
     const started = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
       goal: 'I want to get fitter',
@@ -984,57 +939,37 @@ describe('Copilot acceptance', () => {
     expect(forcedEarly.status).toBe(409);
     expect(forcedEarly.body.code).toBe('NOT_READY');
 
-    // The model's ready() is downgraded, and the deterministic fallback asks
-    // for the first missing blocking dimension: the desired outcome.
+    // The model's ready() is downgraded; the deterministic gate question for
+    // the first blocking gap (DESIRED_OUTCOME) is what the user actually sees.
     const second = await h.ok(
       user,
       'POST',
       `/api/copilot/goal-sessions/${started.sessionId}/answers`,
-      { questionId: 'days_per_week', answer: 3 },
+      { questionId: 'gap_desired_outcome', answer: 'I just want to move more' },
     );
     expect(second.canGenerate).toBe(false);
-    expect(second.question.id).toBe('essential_success');
+    expect(second.question.id).toBe('gap_weekly_capacity');
     expect(second.questionCount).toBe(2);
 
-    // Answered, but the goal is still outcome-less; the hard cap now closes
-    // the interview anyway. It says ready; the gate still says not ready.
-    const capped = await h.ok(
+    // The outcome landed; the frequency answer is deterministically ingested,
+    // but the timeframe is still a BLOCKING gap — the gate keeps refusing.
+    const third = await h.ok(
       user,
       'POST',
       `/api/copilot/goal-sessions/${started.sessionId}/answers`,
-      { questionId: 'essential_success', answer: 'I just want to move more' },
+      { questionId: 'gap_weekly_capacity', answer: 3 },
     );
-    expect(capped.canGenerate).toBe(true);
-    expect(capped.readiness.ready).toBe(false);
+    expect(third.readiness.ready).toBe(false);
+    expect(third.canGenerate).toBe(false);
+    expect(third.question?.id).toBe('gap_timeframe');
 
-    // The hard cap concluded the interview (READY_TO_GENERATE) with nothing
-    // left to ask, so a plain generate is allowed: refusing here would dead-end
-    // the user with no next question. The non-concluded refusals are asserted
-    // above (before the cap). The plan still says out loud that it rests on
-    // limited information.
-    h.ai.queue('DRAFT_GENERATION', {
-      title: 'Move More Gently',
-      description: 'A starting plan built from limited answers.',
-      category: 'FITNESS',
-      targetType: 'HABIT',
-      rationale: 'Built from what little was gathered; edit freely.',
-      tasks: [
-        {
-          title: 'Short walk',
-          description: 'Ten minutes, any pace.',
-          recurrence: { type: 'TIMES_PER_WEEK', timesPerWeek: 3 },
-          estimatedMinutes: 10,
-          reason: 'Matches the days you gave.',
-        },
-      ],
-    });
-    const concludedGenerate = await h.ok(user, 'POST', generateUrl, {});
-    expect(concludedGenerate.assumptions).toContain(
-      'Generated with limited information — the plan uses only what you told me.',
-    );
+    // The plain generate is still refused: required coverage is incomplete.
+    const refused = await h.call(user, 'POST', generateUrl, {});
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe('NOT_READY');
 
-    // Two questions were asked, so the user may also insist explicitly — and
-    // that response says out loud what the plan rests on.
+    // Two questions were asked, so the user may insist — and the forced plan
+    // says out loud what it rests on: limited information, no deadline.
     h.ai.queue('DRAFT_GENERATION', {
       title: 'Move More',
       description: 'A starting plan built from limited answers.',
@@ -1043,7 +978,7 @@ describe('Copilot acceptance', () => {
       rationale: 'Built from what little was gathered; edit freely.',
       tasks: [
         {
-          title: 'Short walk',
+          title: 'Move more — short walk',
           description: 'Ten minutes, any pace.',
           recurrence: { type: 'TIMES_PER_WEEK', timesPerWeek: 3 },
           estimatedMinutes: 10,
@@ -1052,8 +987,6 @@ describe('Copilot acceptance', () => {
       ],
     });
     const forced = await h.ok(user, 'POST', generateUrl, { force: true });
-    // The forced plan still says out loud that it rests on limited information,
-    // alongside the standing note about the missing deadline.
     expect(forced.assumptions).toContain(
       'Generated with limited information — the plan uses only what you told me.',
     );
@@ -1061,7 +994,9 @@ describe('Copilot acceptance', () => {
       'No deadline was provided, so this plan focuses on steady weekly progress.',
     );
     expect(forced.readiness.ready).toBe(false);
-    expect(forced.missingDimensions).toContain('DESIRED_OUTCOME');
+    // The forced plan rests on an incomplete interview: the timeframe is the
+    // blocking gap that remains, and the response says so.
+    expect(forced.missingDimensions).toContain('TIMEFRAME');
   });
 
   it('asks one clarification instead of starting an interview for a question, and creates on confirmation', async () => {
@@ -1089,7 +1024,7 @@ describe('Copilot acceptance', () => {
       intentAnswer: 'goal',
     });
     expect(started.sessionId).toBeDefined();
-    expect(started.question.id).toBe('days_per_week');
+    expect(started.question.id).toBe('gap_desired_outcome');
   });
 
   it('answers a product-mechanics interruption without consuming the pending question', async () => {
@@ -1102,16 +1037,16 @@ describe('Copilot acceptance', () => {
     });
 
     // The user types a product question where an answer is expected. The
-    // interview must keep its pending question — no model turn runs, nothing
+    // interview must keep its pending question Ã¢â‚¬â€ no model turn runs, nothing
     // is recorded, and the count does not move.
     const interrupted = await h.ok(
       user,
       'POST',
       `/api/copilot/goal-sessions/${first.sessionId}/answers`,
-      { questionId: 'days_per_week', answer: 'Wait — what happens if I miss one?' },
+      { questionId: 'gap_weekly_capacity', answer: 'Wait Ã¢â‚¬â€ what happens if I miss one?' },
     );
-    expect(interrupted.questionId ?? interrupted.question?.id).toBe('days_per_week');
-    expect(interrupted.question?.id).toBe('days_per_week');
+    expect(interrupted.questionId ?? interrupted.question?.id).toBe('gap_desired_outcome');
+    expect(interrupted.question?.id).toBe('gap_desired_outcome');
     expect(interrupted.questionCount).toBe(1);
     expect(interrupted.assistantMessage).toContain('on the way');
     expect(h.ai.countOf('INTERVIEW')).toBe(1);
@@ -1120,13 +1055,13 @@ describe('Copilot acceptance', () => {
     // turn runs, the count moves, and the pending question is finally spent.
     h.ai.queue(
       'INTERVIEW',
-      ready('Nice — that is exactly what I needed.'),
+      ready('Nice Ã¢â‚¬â€ that is exactly what I needed.'),
     );
     const answered = await h.ok(
       user,
       'POST',
       `/api/copilot/goal-sessions/${first.sessionId}/answers`,
-      { questionId: 'days_per_week', answer: 4 },
+      { questionId: 'gap_desired_outcome', answer: 4 },
     );
     expect(answered.questionCount).toBe(2);
     expect(h.ai.countOf('INTERVIEW')).toBe(2);

@@ -1,4 +1,4 @@
-import { addDays, todayIn } from '../domain/dates.js';
+﻿import { addDays, todayIn } from '../domain/dates.js';
 import type { ProgressionMetric, RecurrenceType } from '../domain/enums.js';
 import { validateStages } from '../domain/progression.js';
 import { RecurrenceError, validateRecurrence, type RecurrenceConfig } from '../domain/recurrence.js';
@@ -6,8 +6,9 @@ import type { DraftTaskInput, GoalDraftInput } from './schemas.js';
 import { toSecondPerson } from './voice.js';
 import {
   canonicalWeekdayOrder, explicitActivityCoverageGaps, explicitConstraintErrors, extractEvidenceRequirements,
-  goalCoverageGaps, parseExplicitGoalConstraints, semanticTaskRoles, statedDayOfMonth,
+  goalCoverageGaps, semanticTaskRoles, statedDayOfMonth,
   taskWeeklyFrequency,
+  type ExplicitGoalConstraints,
 } from './goal-constraints.js';
 import {
   buildConstraintContract, checkContract, describeContractViolations,
@@ -25,6 +26,60 @@ import { GENERIC_TASK_TITLES, meaningfulTokens } from './plan-quality.js';
 // anything genuinely broken is rejected with a reason.
 
 export class DraftValidationError extends Error {}
+
+/** Recovery-policy wording detection from the canonical validation source. */
+function progressionPolicyFromSource(sourceText: string):
+  { painFreeWeeks?: number; reduceOnRepeatedPain: boolean; pauseOnSharpPain: boolean; approvalRequired: boolean } | undefined {
+  const text = sourceText.toLowerCase();
+  const painFreeWeeks = text.match(/(?:only )?(?:after|following)\s+(\w+|\d+)\s+pain-free weeks?/i);
+  const numberWords: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5 };
+  const weeks = painFreeWeeks
+    ? (numberWords[painFreeWeeks[1]?.toLowerCase()] ?? Number.parseInt(painFreeWeeks[1], 10)) || undefined
+    : undefined;
+  const reduceOnRepeatedPain = /reduce (?:the )?(?:load|workload|target)? ?(?:only )?after repeated pain/i.test(text);
+  const pauseOnSharpPain = /pause (?:for|on|at) sharp pain/i.test(text);
+  const approvalRequired = /do not (?:apply|change|expand)[^.]{0,40}until i (?:explicitly )?approve|wait for my approval/i.test(text);
+  if (weeks === undefined && !reduceOnRepeatedPain && !pauseOnSharpPain && !approvalRequired) return undefined;
+  return { painFreeWeeks: weeks, reduceOnRepeatedPain, pauseOnSharpPain, approvalRequired };
+}
+
+/**
+ * The contract-derived repair shape (Stage 6): the deterministic repair trims
+ * read the same fields the prose parser used to supply, but every value now
+ * comes from the AST-projected contract. An all-undefined shape disables the
+ * trims (nothing was required).
+ */
+function parsedFromContract(contract: ConstraintContract): ExplicitGoalConstraints {
+  return {
+    exactWeekly: contract.exactWeekly,
+    maxWeekly: contract.maxWeekly,
+    allowedDays: contract.allowedWeekdays ? [...contract.allowedWeekdays] : undefined,
+    excludedDays: [...(contract.excludedWeekdays ?? [])],
+    forbiddenActivities: [...(contract.forbiddenActivities ?? [])],
+    maxMinutes: contract.maxMinutesPerSession,
+    maxWeeklyMinutes: contract.maxWeeklyMinutes,
+    deadline: contract.deadline,
+    monthlyMoneyCap: contract.monthlyMoneyCap,
+    calendarFrequency: contract.monthly ? { ...contract.monthly } : undefined,
+    requiredWeeklyRoles: (contract.roleMinWeekly ?? []).map((r) => ({ ...r })),
+    requiredRoleDays: (contract.roleDays ?? []).map((r) => ({ ...r })),
+    prohibitConsecutiveEvenings: contract.prohibitConsecutiveEvenings,
+    undefinedMetric: contract.undefinedMetric,
+    requiresClarification: false,
+  };
+}
+
+function emptyParsedConstraints(): ExplicitGoalConstraints {
+  return {
+    excludedDays: [],
+    forbiddenActivities: [],
+    requiredWeeklyRoles: [],
+    requiredRoleDays: [],
+    prohibitConsecutiveEvenings: false,
+    undefinedMetric: false,
+    requiresClarification: false,
+  };
+}
 
 /** A build-up ladder the model proposed, once it has been made safe. */
 export interface NormalizedProgression {
@@ -419,25 +474,74 @@ const CONSTRAINT_OPENING = new RegExp(
   'i',
 );
 
+/**
+ * Validate against a list of AST contract variants: the first variant whose
+ * checks pass wins (an OR restatement means any alternative may be honored).
+ * Pure helper over validateAndNormalizeDraft; throws the last variant's error
+ * when none passes.
+ */
+export function validateAgainstAstContracts(
+  input: GoalDraftInput,
+  timezone: string,
+  now: Date,
+  sourceText: string,
+  variants: ConstraintContract[],
+): NormalizedDraft {
+  if (variants.length <= 1) {
+    return validateAndNormalizeDraft(input, timezone, now, sourceText, variants.length ? variants : null);
+  }
+  let lastError: unknown = null;
+  for (const variant of variants) {
+    try {
+      return validateAndNormalizeDraft(input, timezone, now, sourceText, [variant]);
+    } catch (err) {
+      if (!(err instanceof DraftValidationError)) throw err;
+      lastError = err;
+    }
+  }
+  throw lastError;
+}
+
 export function validateAndNormalizeDraft(
   input: GoalDraftInput,
   timezone: string,
   now = new Date(),
   sourceText = '',
+  /** Stage 5: AST-projected contract variants. */
+  astContracts: ConstraintContract[] | null = null,
 ): NormalizedDraft {
   const adjustments: string[] = [];
   const today = todayIn(timezone, now);
   // The contract is built once, before any repair step: dedupe, the financial
   // transforms, and the final gate all verify against the same reading of the
   // user's words instead of re-parsing per step.
-  const explicit = sourceText ? parseExplicitGoalConstraints(sourceText, today) : null;
+  //
+  // Stage 6 canonical: the AST projection IS the contract — built from ACTIVE
+  // atoms only, never by re-parsing prose. `sourceText` is the AST-controlled
+  // validation source (buildValidationSource); the finance parser reads money
+  // evidence from it for contract extras. No prose parser exists anywhere.
   const sourceFinancialPlan = sourceText ? parseFinancialPlan(sourceText, '') : null;
-  const contract: ConstraintContract | null = explicit ? buildConstraintContract(explicit, {
-    excludedMonths: sourceFinancialPlan?.skippedMonths,
-    monthlyPhases: sourceFinancialPlan?.monthlyCaps?.length
-      ? monthlyCapPeriods(sourceFinancialPlan, today)
-      : undefined,
-  }) : null;
+  // Stage 6 canonical: whenever there is any validation source, a contract
+  // exists — the all-undefined contract when the AST set nothing — so the
+  // deterministic gates (coverage, medical, feasibility) always run exactly
+  // as they did in the prose pipeline. Contract-driven trims stay no-ops
+  // unless the AST actually set the fields.
+  const contract: ConstraintContract | null =
+    astContracts?.[0] ??
+    (sourceFinancialPlan?.monthlyCaps?.length || sourceFinancialPlan?.skippedMonths?.length
+      ? buildConstraintContract(emptyParsedConstraints(), {
+          excludedMonths: sourceFinancialPlan?.skippedMonths,
+          monthlyPhases: sourceFinancialPlan?.monthlyCaps?.length
+            ? monthlyCapPeriods(sourceFinancialPlan, today)
+            : undefined,
+        })
+      : sourceText
+        ? buildConstraintContract(emptyParsedConstraints())
+        : null);
+  // The deterministic repair trims are contract-driven: the same fields the
+  // prose parser used to supply, now read from the AST projection. An
+  // all-undefined contract disables every trim (nothing was required).
+  const explicit = contract ? parsedFromContract(contract) : null;
 
   if (input.tasks.length === 0) {
     throw new DraftValidationError('The plan came back with no tasks');
@@ -698,14 +802,17 @@ export function validateAndNormalizeDraft(
   }
   if (targetType === 'HABIT') targetValue = null;
 
-  if (sourceText && explicit && contract) {
+  // Stage 6: the region runs whenever a CONTRACT exists — always built from
+  // the AST projection (or the finance extras derived from it). Every
+  // `explicit`-dependent repair step below is guarded on its own.
+  if (contract) {
     // Calendar-month intent has higher authority than a synthetic weekday answer.
     // Only finance-transfer tasks are changed, so a monthly budget review does not
     // accidentally rewrite unrelated weekly work in the same goal.
     const preFinanceCodes = new Set(checkContract(contract, {
       targetType, targetValue, deadline, tasks: normalizedTasks,
     }).map((violation) => violation.code));
-    if (explicit.calendarFrequency) {
+    if (explicit?.calendarFrequency) {
       for (const task of normalizedTasks) {
         if (!semanticTaskRoles(task).has('FINANCE_TRANSFER')) continue;
         if (explicit.calendarFrequency.intervalMonths === 1) {
@@ -752,11 +859,10 @@ export function validateAndNormalizeDraft(
         normalizedTasks=[...normalizedTasks.filter((task)=>!semanticTaskRoles(task).has('FINANCE_TRANSFER')),...bounded].slice(0,MAX_TASKS);
         adjustments.push('Converted the variable contribution schedule into bounded monthly phases');
       }
-    }else if(sourceFinancialPlan?.skippedMonths?.length){
+    }else if(contract?.excludedMonths?.length){
       for(const task of normalizedTasks){
         if(semanticTaskRoles(task).has('FINANCE_TRANSFER')&&(task.recurrenceType==='MONTHLY'||task.recurrenceType==='EVERY_X_MONTHS')){
-          task.recurrenceConfig.excludedMonths=sourceFinancialPlan.skippedMonths;
-          task.description=`Transfer ${sourceFinancialPlan.contribution.amount} ${sourceFinancialPlan.contribution.currency} once per month, excluding ${sourceFinancialPlan.skippedMonths.join(' and ')}.`;
+          task.recurrenceConfig.excludedMonths=[...contract.excludedMonths];
           task.reason='This preserves the stated monthly amount and explicitly omits the zero-contribution months.';
         }
       }
@@ -778,7 +884,7 @@ export function validateAndNormalizeDraft(
       }
     }
 
-    if (explicit.undefinedMetric && (targetType === 'QUANTITY' || targetType === 'WEEKLY_TARGET')) {
+    if (explicit?.undefinedMetric && (targetType === 'QUANTITY' || targetType === 'WEEKLY_TARGET')) {
       targetType = 'HABIT';
       targetValue = null;
       adjustments.push('Removed an invented numeric target from an undefined success metric');
@@ -819,7 +925,7 @@ export function validateAndNormalizeDraft(
       for(const requirement of evidenceRequirements){
         if(normalizedTasks.some((task)=>focused(requirement,task)))continue;
         if(normalizedTasks.length>=MAX_TASKS)break;
-        const estimatedMinutes=Math.min(explicit.maxWeeklyMinutes??60,120);
+        const estimatedMinutes=Math.min(explicit?.maxWeeklyMinutes??60,120);
         normalizedTasks.push({
           title:`Deliver: ${requirement}`.slice(0,120),
           description:`Produce and verify this user-defined evidence: ${requirement}.`.slice(0,500),
@@ -831,6 +937,10 @@ export function validateAndNormalizeDraft(
       }
     }
 
+    // The frequency/weekday/role/money repair trims are contract-driven
+    // (Stage 6): they run on whatever the AST projection supplied — an
+    // all-undefined projection disables every trim.
+    if (explicit) {
     let total = normalizedTasks.reduce(
       (sum, task) => sum + weeklyFrequency(task.recurrenceType, task.recurrenceConfig), 0,
     );
@@ -1053,6 +1163,7 @@ export function validateAndNormalizeDraft(
         }
       }
     }
+    } // end if (explicit) — repair trims
     // The clamp steps above may only reduce scope. If one of them traded away a
     // constraint the user stated (an exact total, a required day), the contract
     // says so here instead of the rewrite slipping through.
@@ -1075,7 +1186,7 @@ export function validateAndNormalizeDraft(
     // explicit approval and the task's reason says so. Nothing is rejected here
     // (progression is future work; checkContract still rejects current totals
     // above the cap), but nothing auto-executes beyond the cap either.
-    const statedWeeklyCap = explicit.exactWeekly ?? explicit.maxWeekly;
+    const statedWeeklyCap = explicit?.exactWeekly ?? explicit?.maxWeekly;
     if (statedWeeklyCap !== undefined) {
       const planTotal = normalizedTasks.reduce((sum, task) => sum + taskWeeklyFrequency(task), 0);
       if (Math.abs(planTotal - statedWeeklyCap) <= 0.01) {
@@ -1120,12 +1231,14 @@ export function validateAndNormalizeDraft(
       }
     }
     const errors = [
-      ...explicitConstraintErrors(explicit, {
-        targetType,
-        targetValue,
-        deadline,
-        tasks: normalizedTasks,
-      }),
+      ...(explicit
+        ? explicitConstraintErrors(explicit, {
+            targetType,
+            targetValue,
+            deadline,
+            tasks: normalizedTasks,
+          })
+        : []),
       // Final contract gate: every invariant must hold on the draft as it will
       // be persisted — this is the same checker the benchmark scorer reuses.
       ...checkContract(contract, { targetType, targetValue, deadline, tasks: normalizedTasks })
@@ -1210,8 +1323,13 @@ export function validateAndNormalizeDraft(
   if (/falls? short/i.test(rationaleText) && !/shortfall/i.test(rationaleText)) {
     rationaleText += ' This is a shortfall that requires a trade-off.';
   }
-  const finalConstraints=explicit;
-  if (finalConstraints?.progressionPolicy) {
+  // Recovery-policy surfacing reads the canonical validation source directly
+  // (mechanic wording, not domain knowledge) — the prose parser that used to
+  // supply this field is gone.
+  const finalConstraints: Partial<ExplicitGoalConstraints> & {
+    progressionPolicy: ExplicitGoalConstraints['progressionPolicy'];
+  } = { ...(explicit ?? {}), progressionPolicy: progressionPolicyFromSource(sourceText) };
+  if (finalConstraints.progressionPolicy) {
     const policy=finalConstraints.progressionPolicy;
     const parts:string[]=[];
     if(policy.painFreeWeeks) parts.push(`PROGRESS only after ${policy.painFreeWeeks} pain-free weeks`);

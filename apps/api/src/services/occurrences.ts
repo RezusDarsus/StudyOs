@@ -1,4 +1,5 @@
 import type { Goal, GoalParticipant, TaskDefinition } from '@prisma/client';
+import type { DbClient } from '../capabilities/types.js';
 import { type DayString, addDays, maxDay, minDay, todayIn } from '../domain/dates.js';
 import { occurrenceDays, parseRecurrenceConfig, type TaskSchedule } from '../domain/recurrence.js';
 import type { ParticipantScoreInput } from '../domain/scoring.js';
@@ -50,8 +51,9 @@ export async function ensureOccurrences(
   goalId: string,
   participantIds?: string[],
   now = new Date(),
+  client: DbClient = prisma,
 ): Promise<void> {
-  const goal = await prisma.goal.findUnique({
+  const goal = await client.goal.findUnique({
     where: { id: goalId },
     include: {
       // The progression plan comes along for the ride so each new day can be born
@@ -105,7 +107,7 @@ export async function ensureOccurrences(
   // insert an all-or-nothing statement and makes "how many were actually new?"
   // answerable, which matters because this runs on every read of a day. The unique
   // index remains the real guard against duplicates.
-  const existing = await prisma.taskOccurrence.findMany({
+  const existing = await client.taskOccurrence.findMany({
     where: {
       participantId: { in: goal.participants.map((p) => p.id) },
       taskDefinitionId: { in: goal.tasks.map((t) => t.id) },
@@ -121,7 +123,7 @@ export async function ensureOccurrences(
   );
   if (missing.length === 0) return;
 
-  await prisma.taskOccurrence.createMany({ data: missing });
+  await client.taskOccurrence.createMany({ data: missing });
 }
 
 /**

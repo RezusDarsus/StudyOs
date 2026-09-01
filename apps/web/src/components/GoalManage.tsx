@@ -14,11 +14,11 @@ import {
 
 const labelStyle = {
   fontSize: '0.8rem',
-  fontWeight: 700,
-  color: '#4b4870',
+  fontWeight: 500,
+  color: 'var(--text-body)',
   display: 'block',
   marginBottom: 6,
-  fontFamily: 'Plus Jakarta Sans',
+  fontFamily: 'var(--font-sans)',
 } as const;
 
 /** Owner-only settings: rename, re-describe, change privacy, pause or complete. */
@@ -117,11 +117,11 @@ export function EditGoalModal({
             aria-pressed={visibility === value}
             className="flex-1 px-4 py-2.5 rounded-xl text-sm"
             style={{
-              background: visibility === value ? '#f0ebff' : '#fdfcff',
-              border: `1.5px solid ${visibility === value ? '#7c3aed' : '#e8e6f5'}`,
-              color: visibility === value ? '#7c3aed' : '#6b688f',
-              fontWeight: 700,
-              fontFamily: 'Plus Jakarta Sans',
+              background: visibility === value ? 'var(--surface-3)' : 'var(--surface-2)',
+              border: `1px solid ${visibility === value ? 'var(--accent)' : 'var(--hairline)'}`,
+              color: visibility === value ? 'var(--text)' : 'var(--text-body)',
+              fontWeight: 500,
+              fontFamily: 'var(--font-sans)',
             }}
           >
             {value === 'PRIVATE' ? '🔒 Private' : '🌍 Public'}
@@ -272,12 +272,12 @@ export function AddTaskModal({
                   style={{
                     width: 44,
                     height: 40,
-                    background: on ? '#f0ebff' : '#fff',
-                    border: `1.5px solid ${on ? '#7c3aed' : '#e8e6f5'}`,
-                    color: on ? '#7c3aed' : '#8b88b0',
-                    fontWeight: 700,
+                    background: on ? 'var(--surface-3)' : 'var(--surface)',
+                    border: `1px solid ${on ? 'var(--accent)' : 'var(--hairline)'}`,
+                    color: on ? 'var(--text)' : 'var(--text-muted)',
+                    fontWeight: 500,
                     fontSize: '0.75rem',
-                    fontFamily: 'Plus Jakarta Sans',
+                    fontFamily: 'var(--font-sans)',
                   }}
                 >
                   {label}
@@ -364,7 +364,7 @@ export function AddTaskModal({
           className="flex-1"
           style={{ border: 'none', background: 'transparent', padding: 0 }}
         />
-        <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#f59e0b', minWidth: 56 }}>
+        <span style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-muted)', minWidth: 56 }}>
           +{reward}🪙
         </span>
       </div>

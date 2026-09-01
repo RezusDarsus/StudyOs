@@ -28,24 +28,24 @@ export default function Leaderboard() {
       <div className="mb-6">
         <h1
           style={{
-            fontFamily: 'Plus Jakarta Sans',
-            fontWeight: 800,
+            fontFamily: 'var(--font-sans)',
+            fontWeight: 600,
             fontSize: 'clamp(1.4rem, 2.5vw, 1.75rem)',
-            color: '#1a1635',
+            color: 'var(--text)',
             letterSpacing: '-0.02em',
           }}
         >
           Leaderboard
         </h1>
-        <p style={{ color: '#8b88b0', fontSize: '0.9rem', marginTop: 4 }}>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: 4 }}>
           See how you're doing against everyone in your shared challenges.
         </p>
       </div>
 
       {loading ? (
         <div className="flex flex-col gap-3">
-          <Skeleton height={44} radius={12} />
-          <Skeleton height={240} radius={16} />
+          <Skeleton height={44} radius={10} />
+          <Skeleton height={240} radius={10} />
         </div>
       ) : error ? (
         <ErrorState message={error} onRetry={reload} />
@@ -72,12 +72,12 @@ export default function Leaderboard() {
                   aria-pressed={active}
                   className="flex items-center gap-2 px-3.5 py-2 rounded-xl whitespace-nowrap"
                   style={{
-                    background: active ? '#f0ebff' : '#fff',
-                    border: `1px solid ${active ? '#ddd0ff' : '#e8e6f5'}`,
-                    color: active ? '#7c3aed' : '#6b688f',
-                    fontWeight: 700,
+                    background: active ? 'var(--surface-3)' : 'var(--surface)',
+                    border: `1px solid ${active ? 'var(--hairline-strong)' : 'var(--hairline)'}`,
+                    color: active ? 'var(--text)' : 'var(--text-body)',
+                    fontWeight: 500,
                     fontSize: '0.82rem',
-                    fontFamily: 'Plus Jakarta Sans',
+                    fontFamily: 'var(--font-sans)',
                   }}
                 >
                   <span aria-hidden="true">{CATEGORY_EMOJI[goal.category]}</span>
@@ -94,7 +94,7 @@ export default function Leaderboard() {
               <Link
                 to={`/app/goals/${selected}`}
                 className="text-sm"
-                style={{ color: '#7c3aed', fontWeight: 700, fontFamily: 'Plus Jakarta Sans' }}
+                style={{ color: 'var(--text)', fontWeight: 500, fontFamily: 'var(--font-sans)' }}
               >
                 Open challenge →
               </Link>

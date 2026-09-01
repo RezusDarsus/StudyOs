@@ -51,10 +51,10 @@ export default function AdjustmentOffers({
         className="mb-2.5"
         style={{
           fontSize: '0.72rem',
-          fontWeight: 700,
-          color: '#6b688f',
+          fontWeight: 500,
+          color: 'var(--text-body)',
           letterSpacing: '0.05em',
-          fontFamily: 'Plus Jakarta Sans',
+          fontFamily: 'var(--font-sans)',
         }}
       >
         WORTH A LOOK
@@ -67,12 +67,12 @@ export default function AdjustmentOffers({
             <div
               key={`${offer.taskId}-${offer.kind}`}
               className="rounded-xl px-3.5 py-3"
-              style={{ background: '#fdfcff', border: '1px solid #e8e6f5' }}
+              style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}
             >
               <div className="flex items-start gap-2">
                 <Icon
                   size={14}
-                  style={{ color: '#7c3aed', flexShrink: 0, marginTop: 2 }}
+                  style={{ color: 'var(--text)', flexShrink: 0, marginTop: 2 }}
                   aria-hidden="true"
                 />
                 <div className="flex-1 min-w-0">
@@ -80,9 +80,9 @@ export default function AdjustmentOffers({
                     <span
                       style={{
                         fontSize: '0.85rem',
-                        fontWeight: 700,
-                        color: '#1a1635',
-                        fontFamily: 'Plus Jakarta Sans',
+                        fontWeight: 500,
+                        color: 'var(--text)',
+                        fontFamily: 'var(--font-sans)',
                       }}
                     >
                       {offer.headline}
@@ -91,7 +91,7 @@ export default function AdjustmentOffers({
                         on the card a user must not miss. */}
                     {offer.needsOverride && <Badge tone="neutral">Your call</Badge>}
                   </div>
-                  <p className="mt-1" style={{ fontSize: '0.78rem', color: '#6b688f', lineHeight: 1.55 }}>
+                  <p className="mt-1" style={{ fontSize: '0.78rem', color: 'var(--text-body)', lineHeight: 1.55 }}>
                     {offer.because}
                   </p>
 
@@ -99,12 +99,12 @@ export default function AdjustmentOffers({
                     <button
                       onClick={() => setOpenTask(offer)}
                       className="mt-2.5"
-                      style={{ fontSize: '0.78rem', fontWeight: 700, color: '#7c3aed' }}
+                      style={{ fontSize: '0.78rem', fontWeight: 500, color: 'var(--text)' }}
                     >
                       {offer.kind === 'START_LADDER' ? 'Set up a build-up' : 'Open the build-up'} →
                     </button>
                   ) : (
-                    <p className="mt-2" style={{ fontSize: '0.75rem', color: '#8b88b0', lineHeight: 1.5 }}>
+                    <p className="mt-2" style={{ fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
                       The goal owner sets the pace for everyone, so this one is theirs to
                       change. The ratings behind it are your own.
                     </p>
@@ -116,7 +116,7 @@ export default function AdjustmentOffers({
         })}
       </div>
 
-      <p className="mt-2.5" style={{ fontSize: '0.72rem', color: '#b8b5d5', lineHeight: 1.5 }}>
+      <p className="mt-2.5" style={{ fontSize: '0.72rem', color: 'var(--text-faint)', lineHeight: 1.5 }}>
         Nothing here has happened. Each one opens the build-up, where the numbers sit next
         to the button — and days already past keep the target they asked for.
       </p>

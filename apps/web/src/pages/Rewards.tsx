@@ -31,8 +31,8 @@ export default function Rewards() {
   if (loading) {
     return (
       <div className="p-5 sm:p-6 lg:p-8 max-w-3xl mx-auto flex flex-col gap-4">
-        <Skeleton height={140} radius={16} />
-        <Skeleton height={220} radius={16} />
+        <Skeleton height={140} radius={10} />
+        <Skeleton height={220} radius={10} />
       </div>
     );
   }
@@ -53,10 +53,10 @@ export default function Rewards() {
       <h1
         className="mb-6"
         style={{
-          fontFamily: 'Plus Jakarta Sans',
-          fontWeight: 800,
+          fontFamily: 'var(--font-sans)',
+          fontWeight: 600,
           fontSize: 'clamp(1.4rem, 2.5vw, 1.75rem)',
-          color: '#1a1635',
+          color: 'var(--text)',
           letterSpacing: '-0.02em',
         }}
       >
@@ -67,8 +67,8 @@ export default function Rewards() {
       <div
         className="rounded-2xl p-6 mb-6 shadow-card"
         style={{
-          background: 'linear-gradient(135deg, #f0ebff 0%, #eff6ff 100%)',
-          border: '1px solid #ddd0ff',
+          background: 'var(--surface-2)',
+          border: '1px solid var(--hairline-strong)',
         }}
       >
         <div className="flex items-center gap-3 mb-4">
@@ -78,25 +78,25 @@ export default function Rewards() {
           <div>
             <div
               style={{
-                fontFamily: 'Plus Jakarta Sans',
-                fontWeight: 900,
+                fontFamily: 'var(--font-sans)',
+                fontWeight: 600,
                 fontSize: '2rem',
-                color: '#1a1635',
-                letterSpacing: '-0.03em',
+                color: 'var(--text)',
+                letterSpacing: '-0.042em',
                 lineHeight: 1,
               }}
             >
               {data.totalCoins.toLocaleString()}
             </div>
-            <div style={{ fontSize: '0.8rem', color: '#6b688f', marginTop: 2 }}>coins earned</div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-body)', marginTop: 2 }}>coins earned</div>
           </div>
         </div>
 
         <div className="flex items-center justify-between mb-1.5">
-          <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#7c3aed' }}>
+          <span style={{ fontSize: '0.78rem', fontWeight: 500, color: 'var(--text)' }}>
             Level {data.level}
           </span>
-          <span style={{ fontSize: '0.75rem', color: '#8b88b0' }}>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
             {data.intoLevel} / {data.perLevel} to level {data.level + 1}
           </span>
         </div>
@@ -116,8 +116,8 @@ export default function Rewards() {
                 key={a.code}
                 className="card p-4 text-center"
                 style={{
-                  background: isUnlocked ? '#fff' : '#fdfcff',
-                  borderColor: isUnlocked ? '#ddd0ff' : '#e8e6f5',
+                  background: isUnlocked ? 'var(--surface)' : 'var(--surface-2)',
+                  borderColor: isUnlocked ? 'var(--hairline-strong)' : 'var(--hairline)',
                   opacity: isUnlocked ? 1 : 0.65,
                 }}
               >
@@ -128,19 +128,19 @@ export default function Rewards() {
                   className="mt-2"
                   style={{
                     fontSize: '0.82rem',
-                    fontWeight: 700,
-                    color: '#1a1635',
-                    fontFamily: 'Plus Jakarta Sans',
+                    fontWeight: 500,
+                    color: 'var(--text)',
+                    fontFamily: 'var(--font-sans)',
                   }}
                 >
                   {a.title}
                 </div>
-                <div style={{ fontSize: '0.72rem', color: '#8b88b0', marginTop: 3, lineHeight: 1.4 }}>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 3, lineHeight: 1.4 }}>
                   {a.description}
                 </div>
                 <div
                   className="mt-2"
-                  style={{ fontSize: '0.72rem', fontWeight: 700, color: isUnlocked ? '#0f9d58' : '#b8b5d5' }}
+                  style={{ fontSize: '0.72rem', fontWeight: 500, color: isUnlocked ? 'var(--green)' : 'var(--text-faint)' }}
                 >
                   {/* Locked/unlocked is stated in words, not just by dimming. */}
                   {isUnlocked ? '✓ Unlocked' : `Locked · +${a.reward}🪙`}
@@ -158,18 +158,18 @@ export default function Rewards() {
         </h2>
         <div className="card shadow-card p-2">
           {data.transactions.length === 0 ? (
-            <p className="px-3 py-4" style={{ fontSize: '0.85rem', color: '#8b88b0' }}>
+            <p className="px-3 py-4" style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
               Complete a task to start earning.
             </p>
           ) : (
             data.transactions.map((t) => (
               <div key={t.id} className="flex items-center gap-3 px-3 py-2.5">
                 <div className="flex-1 min-w-0">
-                  <div style={{ fontSize: '0.85rem', color: '#1a1635' }}>
+                  <div style={{ fontSize: '0.85rem', color: 'var(--text)' }}>
                     {REASON_LABEL[t.reason] ?? t.reason}
                   </div>
                   {t.goalTitle && (
-                    <div className="truncate" style={{ fontSize: '0.72rem', color: '#b8b5d5' }}>
+                    <div className="truncate" style={{ fontSize: '0.72rem', color: 'var(--text-faint)' }}>
                       {t.goalTitle}
                     </div>
                   )}
@@ -177,8 +177,8 @@ export default function Rewards() {
                 <span
                   style={{
                     fontSize: '0.82rem',
-                    fontWeight: 700,
-                    color: t.amount >= 0 ? '#f59e0b' : '#c8253c',
+                    fontWeight: 500,
+                    color: t.amount >= 0 ? 'var(--green)' : 'var(--red)',
                   }}
                 >
                   {t.amount >= 0 ? '+' : ''}
@@ -194,8 +194,8 @@ export default function Rewards() {
 }
 
 const sectionTitle = {
-  fontFamily: 'Plus Jakarta Sans',
-  fontWeight: 700,
+  fontFamily: 'var(--font-sans)',
+  fontWeight: 500,
   fontSize: '1rem',
-  color: '#1a1635',
+  color: 'var(--text)',
 } as const;

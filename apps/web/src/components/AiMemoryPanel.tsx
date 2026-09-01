@@ -69,16 +69,16 @@ export default function AiMemoryPanel() {
       <div className="flex items-center justify-between mb-3">
         <h2
           className="flex items-center gap-2"
-          style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '1rem', color: '#1a1635' }}
+          style={{ fontFamily: 'var(--font-sans)', fontWeight: 500, fontSize: '1rem', color: 'var(--text)' }}
         >
-          <Sparkles size={15} style={{ color: '#7c3aed' }} />
+          <Sparkles size={15} style={{ color: 'var(--text-muted)' }} />
           What the Copilot remembers
         </h2>
         {(data?.preferences.length ?? 0) > 0 && (
           <button
             onClick={forgetAll}
             className="text-sm"
-            style={{ color: '#c8253c', fontWeight: 700, fontFamily: 'Plus Jakarta Sans' }}
+            style={{ color: 'var(--red)', fontWeight: 500, fontFamily: 'var(--font-sans)' }}
           >
             Forget all
           </button>
@@ -92,7 +92,7 @@ export default function AiMemoryPanel() {
             <Skeleton height={30} />
           </div>
         ) : (data?.preferences.length ?? 0) === 0 ? (
-          <p style={{ fontSize: '0.85rem', color: '#8b88b0', lineHeight: 1.6 }}>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', lineHeight: 1.6 }}>
             Nothing yet. As you create goals with the Copilot, it remembers durable
             preferences — like the activities you enjoy or when you prefer to work — and
             reuses them next time. You can delete any of them here.
@@ -104,10 +104,10 @@ export default function AiMemoryPanel() {
                 <div
                   style={{
                     fontSize: '0.7rem',
-                    fontWeight: 700,
-                    color: '#8b88b0',
+                    fontWeight: 500,
+                    color: 'var(--text-muted)',
                     letterSpacing: '0.06em',
-                    fontFamily: 'Plus Jakarta Sans',
+                    fontFamily: 'var(--font-sans)',
                     marginBottom: 8,
                   }}
                 >
@@ -120,14 +120,14 @@ export default function AiMemoryPanel() {
                       <div
                         key={pref.id}
                         className="flex items-center gap-2.5 px-3 py-2 rounded-xl"
-                        style={{ background: '#fdfcff', border: '1px solid #e8e6f5' }}
+                        style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}
                       >
                         <span aria-hidden="true" style={{ fontSize: 13 }}>
                           {negative ? '✕' : '✓'}
                         </span>
                         <span
                           className="flex-1 min-w-0 truncate"
-                          style={{ fontSize: '0.85rem', color: '#1a1635' }}
+                          style={{ fontSize: '0.85rem', color: 'var(--text)' }}
                         >
                           {label}
                         </span>
@@ -137,7 +137,7 @@ export default function AiMemoryPanel() {
                           aria-label={`Forget ${label}`}
                           title="Forget this"
                           className="flex items-center justify-center rounded-lg flex-shrink-0"
-                          style={{ width: 28, height: 28, color: '#b8b5d5' }}
+                          style={{ width: 28, height: 28, color: 'var(--text-faint)' }}
                         >
                           <X size={14} />
                         </button>
@@ -147,7 +147,7 @@ export default function AiMemoryPanel() {
                 </div>
               </div>
             ))}
-            <p className="mt-3" style={{ fontSize: '0.75rem', color: '#b8b5d5', lineHeight: 1.5 }}>
+            <p className="mt-3" style={{ fontSize: '0.75rem', color: 'var(--text-faint)', lineHeight: 1.5 }}>
               These carry over to new goals so the Copilot does not ask the same things
               twice. Delete anything that is wrong or no longer true.
             </p>

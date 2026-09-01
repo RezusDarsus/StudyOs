@@ -88,7 +88,7 @@ export default function ShareGoalModal({
     <Modal open={open} onClose={onClose} title={`Share "${goalTitle}"`}>
       {!code ? (
         <>
-          <p style={{ fontSize: '0.9rem', color: '#4b4870', lineHeight: 1.6 }}>
+          <p style={{ fontSize: '0.9rem', color: 'var(--text-body)', lineHeight: 1.6 }}>
             Create a link you can send to anyone — on Messenger, WhatsApp, anywhere. They
             don't need to be your friend on One Up to join.
           </p>
@@ -105,11 +105,11 @@ export default function ShareGoalModal({
           <label
             style={{
               fontSize: '0.8rem',
-              fontWeight: 700,
-              color: '#4b4870',
+              fontWeight: 500,
+              color: 'var(--text-body)',
               display: 'block',
               marginBottom: 6,
-              fontFamily: 'Plus Jakarta Sans',
+              fontFamily: 'var(--font-sans)',
             }}
           >
             Invite code
@@ -118,13 +118,13 @@ export default function ShareGoalModal({
             onClick={() => copy(code, 'Code')}
             className="w-full rounded-xl py-4 mb-3"
             style={{
-              background: '#f0ebff',
-              border: '1.5px dashed #7c3aed',
-              fontFamily: 'Plus Jakarta Sans',
-              fontWeight: 800,
+              background: 'var(--surface-3)',
+              border: '1px dashed var(--hairline-strong)',
+              fontFamily: 'var(--font-mono)',
+              fontWeight: 500,
               fontSize: '1.6rem',
-              letterSpacing: '0.22em',
-              color: '#7c3aed',
+              letterSpacing: '0.18em',
+              color: 'var(--text)',
             }}
             title="Tap to copy the code"
           >
@@ -158,10 +158,10 @@ export default function ShareGoalModal({
           <p
             className="px-3.5 py-3 rounded-xl mb-4"
             style={{
-              background: '#fff5e6',
-              border: '1px solid #ffe3b8',
+              background: 'var(--note-tint)',
+              border: '1px solid var(--note-line)',
               fontSize: '0.78rem',
-              color: '#b26a00',
+              color: 'var(--note-ink)',
               lineHeight: 1.5,
             }}
           >
@@ -181,7 +181,7 @@ export default function ShareGoalModal({
               className="btn-ghost flex-1 py-2.5 text-sm flex items-center justify-center gap-1.5"
               onClick={revoke}
               disabled={busy}
-              style={{ color: '#c8253c' }}
+              style={{ color: 'var(--red)' }}
             >
               <Trash2 size={14} /> Turn off
             </button>

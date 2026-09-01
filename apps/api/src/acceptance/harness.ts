@@ -27,6 +27,7 @@ import { setProvider } from '../ai/client.js';
 import type { AiChatProvider, AiPurpose, ChatRequest, ChatResponse } from '../ai/provider.js';
 import { SESSION_COOKIE, createSession, hashPassword } from '../lib/auth.js';
 import { prisma } from '../lib/prisma.js';
+import { installRuntimeContent } from '../runtime-content.js';
 import { buildServer } from '../server.js';
 import { ACCEPTANCE_SUFFIX } from './database.js';
 
@@ -211,6 +212,10 @@ export function useHarness(): Harness {
   let app: FastifyInstance;
 
   beforeAll(async () => {
+    // Stage 3: the runtime-knowledge port must exist before the server (and
+    // any direct-service test) reads it. Explicit bootstrap, same as the
+    // real server does in buildServer().
+    installRuntimeContent();
     // The tripwire. Everything else in this file assumes it is safe to truncate every
     // table, and this is the one line that makes that assumption true. A DATABASE_URL
     // that slipped through pointing at development stops the run here, before the first

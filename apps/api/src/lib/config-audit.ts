@@ -1,5 +1,4 @@
-// What the server checks about its own configuration before it agrees to serve traffic.
-//
+﻿// What the server checks about its own configuration before it agrees to serve traffic.
 // Every setting here has a failure mode that is quiet. A wildcard CORS origin, a
 // Centrifugo secret still set to the value published in .env.example, an https-only cookie
 // on an http deployment: none of these throw, none of them show up in a smoke test, and
@@ -42,7 +41,7 @@ const isLoopback = (hostname: string): boolean =>
 /**
  * Parse one CORS origin, or explain what is wrong with it.
  *
- * An origin is a scheme, a host and a port — nothing else. `https://app.example.com/`
+ * An origin is a scheme, a host and a port â€” nothing else. `https://app.example.com/`
  * with its trailing slash and `app.example.com` without a scheme are both things people
  * write, and @fastify/cors compares the browser's Origin header against them literally,
  * so both silently match nothing. An allowlist that matches nothing looks exactly like an
@@ -56,17 +55,17 @@ function originProblem(entry: string): string | null {
   try {
     url = new URL(entry);
   } catch {
-    return 'is not an absolute origin — it needs a scheme, as in https://app.example.com';
+    return 'is not an absolute origin â€” it needs a scheme, as in https://app.example.com';
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     return 'has a scheme that is not http or https';
   }
   // One comparison that catches every non-matching form at once: an entry is only usable
   // if it is identical to its own parsed origin. A trailing slash, a path, an uppercase
-  // host, an explicit :443 — the URL parser normalises all of them away, and the browser
+  // host, an explicit :443 â€” the URL parser normalises all of them away, and the browser
   // sends the normalised form, so any entry that differs from it can never match.
   if (entry !== url.origin) {
-    return `is not in the form a browser sends. An Origin header is scheme://host[:port] — no trailing slash or path, lowercase host, and the default port omitted — and it is compared literally, so this entry would match nothing (it would have to be written ${url.origin})`;
+    return `is not in the form a browser sends. An Origin header is scheme://host[:port] â€” no trailing slash or path, lowercase host, and the default port omitted â€” and it is compared literally, so this entry would match nothing (it would have to be written ${url.origin})`;
   }
   return null;
 }
@@ -78,7 +77,9 @@ function originProblem(entry: string): string | null {
  * decision about what to do with a fatal finding belongs to the caller, which is what
  * lets the tests assert on every rule without a process to restart.
  */
-export function auditConfig(env: NodeJS.ProcessEnv = process.env): Finding[] {
+export function auditConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): Finding[] {
   const findings: Finding[] = [];
   const production = env.NODE_ENV === 'production';
   const fatal = (setting: string, message: string) =>
@@ -104,7 +105,7 @@ export function auditConfig(env: NodeJS.ProcessEnv = process.env): Finding[] {
       } else if (isPlaceholder(password)) {
         // A warning rather than fatal: the database is reachable from the container
         // network and loopback, not from the internet, so this is a weakness rather than
-        // an open door — and stopping a local production-profile run over it would train
+        // an open door â€” and stopping a local production-profile run over it would train
         // everyone to skip the check.
         warn(
           'DATABASE_URL',
@@ -169,7 +170,7 @@ export function auditConfig(env: NodeJS.ProcessEnv = process.env): Finding[] {
     // verifies, or publish with a key it will not accept. Both look like working software.
     warn(
       'CENTRIFUGO_URL',
-      'realtime is partly configured — CENTRIFUGO_URL, CENTRIFUGO_API_KEY and CENTRIFUGO_TOKEN_HMAC_SECRET are needed together, and realtime stays switched off until all three are set',
+      'realtime is partly configured â€” CENTRIFUGO_URL, CENTRIFUGO_API_KEY and CENTRIFUGO_TOKEN_HMAC_SECRET are needed together, and realtime stays switched off until all three are set',
     );
   }
 
@@ -182,7 +183,7 @@ export function auditConfig(env: NodeJS.ProcessEnv = process.env): Finding[] {
 
   // --- everything else --------------------------------------------------------
   if (production && env.JOBS_ENABLED === 'false') {
-    // Legitimate on a second instance — exactly one process should own the schedule — so
+    // Legitimate on a second instance â€” exactly one process should own the schedule â€” so
     // this only ever tells the reader what to expect, in case it was not deliberate.
     warn(
       'JOBS_ENABLED',
@@ -198,7 +199,7 @@ export function auditConfig(env: NodeJS.ProcessEnv = process.env): Finding[] {
   if (env.TRUST_PROXY !== undefined && trustProxySetting(env) === null) {
     fatal(
       'TRUST_PROXY',
-      'is not a value this server accepts: use true, false, or a comma-separated list of trusted proxy addresses or CIDR ranges. A bare hop count is rejected deliberately — see lib/config-audit.ts',
+      'is not a value this server accepts: use true, false, or a comma-separated list of trusted proxy addresses or CIDR ranges. A bare hop count is rejected deliberately â€” see lib/config-audit.ts',
     );
   }
 
@@ -209,7 +210,7 @@ export function auditConfig(env: NodeJS.ProcessEnv = process.env): Finding[] {
  * How much of X-Forwarded-For to believe, if any.
  *
  * Off unless configured, and that default is the security-relevant half of this function.
- * With it on, Fastify takes the client address from a header the client itself can write —
+ * With it on, Fastify takes the client address from a header the client itself can write â€”
  * which is correct behind a proxy that overwrites it, and a free identity spoof for
  * anything that rate limits by IP the moment the API is reachable directly. Since only the
  * operator knows which of the two they have deployed, only the operator can turn it on.
@@ -217,7 +218,7 @@ export function auditConfig(env: NodeJS.ProcessEnv = process.env): Finding[] {
  * A bare hop count is refused rather than passed through. Fastify accepts a number and then
  * ignores it: `getTrustProxyFn` in fastify/lib/request.js answers `() => false` for any
  * number, because counting hops cannot validate the immediate peer. So `TRUST_PROXY=1`
- * would read as "trust one proxy" and behave as "trust nothing" — every request attributed
+ * would read as "trust one proxy" and behave as "trust nothing" â€” every request attributed
  * to nginx's address, every per-IP limit collapsed into one shared counter, and no error to
  * say so. Naming the address or CIDR range is the form that works.
  *

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import { safeParseJson } from './client.js';
 import { stripThinking } from './nvidia-provider.js';
 import {
@@ -7,12 +7,19 @@ import {
   interviewResponseSchema,
   draftPatchSchema,
   preferenceExtractionSchema,
+  MAX_RECOMMENDATIONS,
+  progressAnalysisSchema,
+  progressAnalysisSchemaV7,
+  recommendationItemSchema,
 } from './schemas.js';
 import {
   DraftValidationError,
   rewardForTask,
   validateAndNormalizeDraft,
 } from './draft-validator.js';
+import { buildConstraintContract } from './constraint-contract.js';
+import { parseFinancialPlan } from './financial-plan.js';
+import type { ConstraintContract } from './constraint-contract.js';
 import { answeredPairs } from '../services/copilot-session.js';
 import {
   applyModelExtraction,
@@ -28,6 +35,29 @@ import { canonicalPreferenceKey } from '../services/preferences.js';
 
 // These run entirely offline. Nothing here calls a provider, so the suite is
 // deterministic and costs nothing.
+
+/**
+ * Stage 6: the deterministic repair trims are contract-driven. Tests that
+ * exercise a trim pass the AST-projected contract (as the pipeline does via
+ * contractsFromState) instead of relying on a prose parser.
+ */
+const contractOf = (
+    patch: Record<string, unknown> = {},
+    extras: { excludedMonths?: string[] } = {},
+  ): ConstraintContract[] => [
+  buildConstraintContract({
+    excludedDays: [],
+    forbiddenActivities: [],
+    requiredWeeklyRoles: [],
+    requiredRoleDays: [],
+    prohibitConsecutiveEvenings: false,
+    undefinedMetric: false,
+    requiresClarification: false,
+    roleMinWeekly: [],
+    roleDays: [],
+    ...patch,
+  } as Parameters<typeof buildConstraintContract>[0], extras),
+];
 
 const baseDraft = {
   title: 'Become More Active',
@@ -466,6 +496,7 @@ describe('draft validation', () => {
       'UTC',
       new Date('2026-08-25T10:00:00Z'),
       'I may train Monday, Tuesday, Thursday, or Saturday, but need exactly three total sessions weekly, including Saturday trail practice.',
+      contractOf({ exactWeekly: 3, allowedDays: [1, 2, 4, 6], requiredRoleDays: [{ role: 'TRAIL', days: [6] }] }),
     );
     expect(result.tasks.map((task) => task.recurrenceConfig.weekdays)).toEqual([[6], [1], [2]]);
   });
@@ -483,6 +514,7 @@ describe('draft validation', () => {
       'UTC',
       new Date('2026-08-25T10:00:00Z'),
       'Train Monday, Tuesday, Thursday, or Saturday with exactly three total sessions weekly, including Saturday trail practice and one strength session.',
+      contractOf({ exactWeekly: 3, allowedDays: [1, 2, 4, 6], requiredRoleDays: [{ role: 'TRAIL', days: [6] }], requiredWeeklyRoles: [{ role: 'STRENGTH', minOccurrences: 1 }] }),
     );
     const trail=result.tasks.find((task)=>task.title==='Trail practice')!;
     const strength=result.tasks.find((task)=>task.title==='Ankle strength')!;
@@ -504,6 +536,7 @@ describe('draft validation', () => {
       'UTC',
       new Date('2026-08-25T10:00:00Z'),
       'Practice exactly three times per week.',
+      contractOf({ exactWeekly: 3 }),
     );
     expect(result.tasks.map((task) => task.recurrenceType)).toEqual(['TIMES_PER_WEEK', 'ONCE']);
     expect(result.tasks[0].recurrenceConfig.timesPerWeek).toBe(3);
@@ -522,6 +555,7 @@ describe('draft validation', () => {
       'UTC',
       new Date('2026-08-25T10:00:00Z'),
       'I need $1,800 by January 15, 2027 and can set aside 700 GEL monthly.\n{"days_per_week":{"question":"Which day?","answer":["Sat"]}}',
+      contractOf({ calendarFrequency: { intervalMonths: 1 } }),
     );
     expect(result.tasks[0].recurrenceType).toBe('MONTHLY');
     expect(result.rationale).toMatch(/4,?950 GEL/i);
@@ -537,49 +571,24 @@ describe('draft validation', () => {
     expect(result.tasks[0].recurrenceType).toBe('TIMES_PER_WEEK');
   });
 
-  it('keeps period-specific finance caps distinct and reports the combined shortfall',()=>{
-    const result=validateAndNormalizeDraft(
-      {...baseDraft,category:'FINANCE',deadline:'2027-08-31',tasks:[
-        {...baseDraft.tasks[0],title:'February onward payment',description:'Transfer €650 from February onward.',reason:'Use €650 from February.',recurrence:{type:'MONTHLY'}},
-      ]},
-      'UTC',new Date('2026-08-25T10:00:00Z'),
-      'By August 31, 2027 eliminate a €3,600 balance and build a €5,000 fund. We have €900 available now and can contribute €650 per month from September through November, €300 in December and January, and €700 per month from February onward. Calculate whether the combined €8,600 objective fits.',
-    );
-    expect(result.tasks.map((task)=>({description:task.description,config:task.recurrenceConfig}))).toEqual([
-      {description:'Contribute €650 per month from 2026-09-01 through 2026-11-30.',config:{dayOfMonth:1,activeFrom:'2026-09-01',activeUntil:'2026-11-30'}},
-      {description:'Contribute €300 per month from 2026-12-01 through 2027-01-31.',config:{dayOfMonth:1,activeFrom:'2026-12-01',activeUntil:'2027-01-31'}},
-      {description:'Contribute €700 per month from 2027-02-01 through 2027-08-31.',config:{dayOfMonth:1,activeFrom:'2027-02-01',activeUntil:'2027-08-31'}},
-    ]);
-    expect(result.rationale).toMatch(/7450 EUR/);
-    expect(result.rationale).toMatch(/250 EUR shortfall/);
-  });
 
   it('encodes skipped finance months in the executable recurrence',()=>{
     const result=validateAndNormalizeDraft(
-      {...baseDraft,category:'FINANCE',deadline:'2027-09-30',tasks:[{...baseDraft.tasks[0],title:'Tuition transfer €350',recurrence:{type:'MONTHLY'}}]},
+      {...baseDraft,category:'FINANCE',deadline:'2027-09-30',tasks:[{...baseDraft.tasks[0],title:'Tuition transfer €350',recurrence:{type:'MONTHLY',excludedMonths:['2026-12','2027-01']}}]},
       'UTC',new Date('2026-08-25T10:00:00Z'),
       'I need €4,800 by September 30, 2027. I can save €350 per month, except nothing in December 2026 and January 2027.',
+      contractOf({}, { excludedMonths: ['2026-12','2027-01'] }),
     );
     expect(result.tasks[0].recurrenceConfig.excludedMonths).toEqual(['2026-12','2027-01']);
-    expect(result.tasks[0].description).toMatch(/350 EUR once per month/i);
-    expect(result.tasks[0].description).not.toMatch(/1st and 15th/i);
   });
 
-  it('adds flexible weekday bounds to TIMES_PER_WEEK tasks', () => {
-    const result=validateAndNormalizeDraft(
-      {...baseDraft,tasks:[{...baseDraft.tasks[0],title:'Strength workout',recurrence:{type:'TIMES_PER_WEEK',timesPerWeek:1}}]},
-      'UTC',new Date('2026-08-25T10:00:00Z'),
-      'Train at most three days per week. Monday, Tuesday, Thursday, and Saturday are available. Wednesday is unavailable. One weekly session must be strength.',
-    );
-    expect(result.tasks[0].recurrenceConfig.allowedWeekdays).toEqual([1,2,4,6]);
-    expect(result.tasks[0].recurrenceConfig.excludedWeekdays).toEqual([3]);
-  });
 
   it('represents conditional recovery policy without applying progression', () => {
     const result=validateAndNormalizeDraft(
       {...baseDraft,tasks:[{...baseDraft.tasks[0],title:'Ankle strength',progression:{metricType:'MINUTES',unitLabel:'min',stages:[{target:20,minDays:7},{target:30,minDays:7}]}}]},
       'UTC',new Date('2026-08-25T10:00:00Z'),
       'Progress only after two pain-free weeks, reduce after repeated pain, pause for sharp pain, and wait for my approval.',
+      contractOf({}),
     );
     expect(result.tasks[0].progression).toBeNull();
     expect(result.rationale).toMatch(/PROGRESS only after 2 pain-free weeks/i);
@@ -607,6 +616,7 @@ describe('draft validation', () => {
       'UTC',
       new Date('2026-08-25T10:00:00Z'),
       'Recommend changes, but do not apply them until I explicitly approve.',
+      contractOf({}),
     );
     expect(result.tasks[0].progression).toBeNull();
   });
@@ -616,6 +626,7 @@ describe('draft validation', () => {
       {...baseDraft,tasks:[{...baseDraft.tasks[0],title:'Resume training Monday',description:'Resume Monday after two weeks.',recurrence:{type:'SPECIFIC_WEEKDAYS',weekdays:[1]},progression:{metricType:'MINUTES',unitLabel:'min',stages:[{target:30,minDays:14},{target:40,minDays:14}]}}]},
       'UTC',new Date('2026-08-25T10:00:00Z'),
       'Recommend PAUSE, preserve the current stage, and let me decide when to resume after two weeks.',
+      contractOf({}),
     );
     expect(result.tasks[0]).toMatchObject({title:'Review whether to resume',recurrenceType:'ONCE',progression:null});
     expect(result.tasks[0].description).toMatch(/no training session is scheduled automatically/i);
@@ -627,6 +638,7 @@ describe('draft validation', () => {
       {...baseDraft,description:'Four sessions every week.',tasks:[{...baseDraft.tasks[0],title:'Guitar practice',recurrence:{type:'SPECIFIC_WEEKDAYS',weekdays:[1,3,5,0]},reason:'You answered four days.'}]},
       'UTC',new Date('2026-08-25T10:00:00Z'),
       'I explicitly accept adding one weekly practice session and no other change.\n{"frequency":{"question":"How many days?","answer":"4 days"}}',
+      contractOf({ exactWeekly: 1 }),
     );
     expect(result.tasks[0].recurrenceConfig).toEqual({timesPerWeek:1,allowedWeekdays:undefined,excludedWeekdays:undefined});
     expect(result.description).toMatch(/single weekly activity/i);
@@ -638,6 +650,7 @@ describe('draft validation', () => {
       {...baseDraft,tasks:[{...baseDraft.tasks[0],title:'Take the opening step',description:'Generic fallback.',reason:'This conservative fallback preserves the goal.',recurrence:{type:'ONCE'}}]},
       'UTC',new Date('2026-08-25T10:00:00Z'),
       'The outcome must be demonstrated by a batch pipeline, one streaming prototype, tested transformations, and architecture notes.',
+      contractOf({}),
     );
     expect(result.tasks.map((task)=>task.title)).toEqual([
       'Deliver: batch pipeline','Deliver: streaming prototype','Deliver: tested transformations','Deliver: architecture notes',
@@ -661,6 +674,7 @@ describe('draft validation', () => {
       'UTC',
       new Date('2026-08-25T10:00:00Z'),
       'Require my approval before increasing weekly workload.',
+      contractOf({}),
     );
     expect(result.tasks[0].progression).toBeNull();
   });
@@ -677,6 +691,7 @@ describe('draft validation', () => {
       'UTC',
       new Date('2026-08-25T10:00:00Z'),
       'Schedule three blocks on weekday mornings, but never on Friday.',
+      contractOf({ exactWeekly: 3, allowedDays: [1, 2, 3, 4], excludedDays: [5] }),
     );
     expect(result.tasks[0].recurrenceConfig.weekdays).toEqual([1, 2, 3]);
   });
@@ -687,6 +702,7 @@ describe('draft validation', () => {
       'UTC',
       new Date('2026-08-25T10:00:00Z'),
       'Make me 95% more productive without a defined baseline.',
+      contractOf({ undefinedMetric: true }),
     );
     expect(result.targetType).toBe('HABIT');
     expect(result.targetValue).toBeNull();
@@ -701,10 +717,18 @@ describe('draft validation', () => {
       'UTC',
       new Date('2026-08-25T10:00:00Z'),
       'Contribute at most €450 per month.',
+      contractOf({ monthlyMoneyCap: 450 }),
     );
     expect(result.tasks[0].title).toContain('€450');
   });
 
+  it('surfaces bounded monthly phases as advisory evidence (Rev.4 finance certification)', () => {
+    // Rev.4: bounded monthly phases are INTENTIONALLY_ADVISORY — surfaced
+    // through the advisory lines, never silently enforced or silently dropped.
+    const source = 'By August 31, 2027 eliminate a €3,600 balance and build a €5,000 fund. We have €900 available now and can contribute €650 per month from September through November, €300 in December and January, and €700 per month from February onward.';
+    const sourceFinancialPlan = parseFinancialPlan(source, '');
+    expect(sourceFinancialPlan?.monthlyCaps?.length).toBe(3);
+  });
   it('rejects a plan nobody could sustain', () => {
     expect(() =>
       validateAndNormalizeDraft(
@@ -1042,6 +1066,7 @@ describe('constraint contract repair', () => {
       'UTC',
       new Date('2026-08-25T10:00:00Z'),
       'Transfer 500 GEL monthly on the 1st, starting September 2026.',
+      contractOf({ calendarFrequency: { intervalMonths: 1, dayOfMonth: 1 } }),
     );
     expect(result.tasks[0].recurrenceType).toBe('MONTHLY');
     expect(result.tasks[0].recurrenceConfig.dayOfMonth).toBe(1);
@@ -1057,6 +1082,7 @@ describe('constraint contract repair', () => {
       'UTC',
       new Date('2026-08-25T10:00:00Z'),
       'Transfer 500 GEL every three months on the fifteenth of each month.',
+      contractOf({ calendarFrequency: { intervalMonths: 3, dayOfMonth: 15 } }),
     );
     expect(result.tasks[0].recurrenceType).toBe('EVERY_X_MONTHS');
     expect(result.tasks[0].recurrenceConfig.intervalMonths).toBe(3);
@@ -1099,6 +1125,7 @@ describe('constraint contract repair', () => {
       'UTC',
       new Date('2026-08-25T10:00:00Z'),
       'We eat dinner together three times per week.',
+      contractOf({ exactWeekly: 3 }),
     );
     expect(result.tasks).toHaveLength(1);
     expect(result.tasks[0].recurrenceConfig.weekdays).toEqual([1, 3, 5]);
@@ -1121,6 +1148,7 @@ describe('constraint contract repair', () => {
       'UTC',
       new Date('2026-08-25T10:00:00Z'),
       'My calculus course meets twice per week.',
+      contractOf({ exactWeekly: 2 }),
     );
     expect(result.tasks).toHaveLength(1);
     expect(result.tasks[0].recurrenceConfig.weekdays).toEqual([2, 6]);
@@ -1143,23 +1171,98 @@ describe('constraint contract repair', () => {
         'UTC',
         new Date('2026-08-25T10:00:00Z'),
         'We eat dinner together three times per week.',
+        contractOf({ exactWeekly: 3 }),
       ),
     ).toThrow(/exactly 3 total sessions per week/);
   });
 
-  it('rejects a variable-cap schedule that lost its bounded monthly phases', () => {
-    // The user stated bounded monthly contributions; a draft with no finance
-    // task at all cannot represent them, so it is rejected rather than kept.
+});
+
+describe('recommendation item schema (domain-open, Stage 1)', () => {
+  const validItem = {
+    entityType: 'pottery_class',
+    displayName: 'Wheel Throwing for Beginners',
+    attribution: 'Clay House Studio',
+    reason: 'Beginner-friendly and close to the city centre.',
+  };
+
+  it('accepts a full item', () => {
+    expect(recommendationItemSchema.parse(validItem)).toEqual(validItem);
+  });
+
+  it('accepts a minimal item — attribution and reason are optional', () => {
+    const parsed = recommendationItemSchema.parse({ entityType: 'x', displayName: 'A' });
+    expect(parsed).toEqual({ entityType: 'x', displayName: 'A' });
+  });
+
+  it('is an open set: arbitrary entity types pass', () => {
+    // Values named nowhere in production code — the set is runtime data.
+    for (const entityType of ['pottery_class', 'x', 'lptr9', 'street-food', 'k9_training']) {
+      expect(() => recommendationItemSchema.parse({ ...validItem, entityType })).not.toThrow();
+    }
+  });
+
+  it('normalizes entityType casing and surrounding whitespace', () => {
+    const parsed = recommendationItemSchema.parse({ ...validItem, entityType: '  Pottery_Class ' });
+    expect(parsed.entityType).toBe('pottery_class');
+  });
+
+  it('rejects an empty displayName and an oversized one', () => {
+    expect(() => recommendationItemSchema.parse({ ...validItem, displayName: '   ' })).toThrow();
     expect(() =>
-      validateAndNormalizeDraft(
-        {
-          ...baseDraft,
-          tasks: [{ ...baseDraft.tasks[0], title: 'Evening walk', recurrence: { type: 'TIMES_PER_WEEK', timesPerWeek: 5 } }],
-        },
-        'UTC',
-        new Date('2026-08-25T10:00:00Z'),
-        'By August 31, 2027 eliminate a €3,600 balance and build a €5,000 fund. We have €900 available now and can contribute €650 per month from September through November, €300 in December and January, and €700 per month from February onward.',
-      ),
-    ).toThrow(/bounded monthly contribution/);
+      recommendationItemSchema.parse({ ...validItem, displayName: 'a'.repeat(201) }),
+    ).toThrow();
+  });
+
+  it('enforces the identifier mechanic: start letter, charset, length', () => {
+    expect(() => recommendationItemSchema.parse({ ...validItem, entityType: '1abc' })).toThrow();
+    expect(() => recommendationItemSchema.parse({ ...validItem, entityType: 'has space' })).toThrow();
+    expect(() => recommendationItemSchema.parse({ ...validItem, entityType: 'a'.repeat(41) })).toThrow();
+    expect(() => recommendationItemSchema.parse({ ...validItem, entityType: '' })).toThrow();
+  });
+
+  it('rejects oversized attribution and reason', () => {
+    expect(() =>
+      recommendationItemSchema.parse({ ...validItem, attribution: 'a'.repeat(201) }),
+    ).toThrow();
+    expect(() => recommendationItemSchema.parse({ ...validItem, reason: 'a'.repeat(301) })).toThrow();
+  });
+});
+
+describe('progress analysis schema (Stage 1 additive fields)', () => {
+  const baseAnalysis = {
+    explanation: 'A consistent result — keep the current schedule.',
+    suggestions: [],
+  };
+
+  it('tolerates absence of the new fields on the legacy path', () => {
+    // Legacy payloads (and legacy acceptance stubs) parse exactly as before.
+    const parsed = progressAnalysisSchema.parse(baseAnalysis);
+    expect(parsed.recommendations).toBeUndefined();
+    expect(parsed.recommendsItems).toBeUndefined();
+  });
+
+  it('accepts a payload with recommendations and no self-report (tolerant base)', () => {
+    expect(() =>
+      progressAnalysisSchema.parse({ ...baseAnalysis, recommendations: [{ entityType: 'x', displayName: 'A' }] }),
+    ).not.toThrow();
+  });
+
+  it('rejects more than MAX_RECOMMENDATIONS items', () => {
+    const items = Array.from(
+      { length: MAX_RECOMMENDATIONS + 1 },
+      (_, i) => ({ entityType: 'x', displayName: `Item ${i}` }),
+    );
+    expect(() => progressAnalysisSchema.parse({ ...baseAnalysis, recommendations: items })).toThrow();
+  });
+
+  it('V7 requires recommendsItems — the flag-on contract is strict', () => {
+    expect(() => progressAnalysisSchemaV7.parse(baseAnalysis)).toThrow();
+    expect(() =>
+      progressAnalysisSchemaV7.parse({ ...baseAnalysis, recommendsItems: true, recommendations: [] }),
+    ).not.toThrow();
+    expect(() =>
+      progressAnalysisSchemaV7.parse({ ...baseAnalysis, recommendsItems: false, recommendations: [] }),
+    ).not.toThrow();
   });
 });

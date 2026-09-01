@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import { DraftValidationError, validateAndNormalizeDraft } from './draft-validator.js';
+import { buildConstraintContract } from './constraint-contract.js';
 import type { GoalDraftInput } from './schemas.js';
 
 // Colocated gates for the two deterministic semantics of the draft pipeline:
@@ -27,7 +28,20 @@ const task = (overrides: Partial<DraftTask> = {}): DraftTask => ({
   ...overrides,
 });
 
-const laddered = (sourceText: string, timesPerWeek: number, targets: number[]) =>
+const contractOf = (patch: Record<string, unknown> = {}): Parameters<typeof validateAndNormalizeDraft>[4] => [
+  buildConstraintContract({
+    excludedDays: [], forbiddenActivities: [], requiredWeeklyRoles: [], requiredRoleDays: [],
+    prohibitConsecutiveEvenings: false, undefinedMetric: false, requiresClarification: false,
+    roleMinWeekly: [], roleDays: [], ...patch,
+  } as Parameters<typeof buildConstraintContract>[0]),
+];
+
+const laddered = (
+  sourceText: string,
+  timesPerWeek: number,
+  targets: number[],
+  contract?: Parameters<typeof validateAndNormalizeDraft>[4],
+) =>
   validateAndNormalizeDraft(
     draft([task({
       recurrence: { type: 'TIMES_PER_WEEK' as const, timesPerWeek },
@@ -41,6 +55,7 @@ const laddered = (sourceText: string, timesPerWeek: number, targets: number[]) =
     'UTC',
     new Date('2026-08-25T10:00:00Z'),
     sourceText,
+    contract,
   );
 
 describe('goal-coverage gate', () => {
@@ -96,7 +111,7 @@ describe('goal-coverage gate', () => {
 
 describe('authority-gated build-ups', () => {
   it('marks a step-up that would exceed a filled cap as requiring approval', () => {
-    const result = laddered('Walk at most two times per week.', 2, [15, 30]);
+    const result = laddered('Walk at most two times per week.', 2, [15, 30], contractOf({ maxWeekly: 2 }));
     expect(result.tasks[0].progression?.requiresApproval).toBe(true);
     expect(result.tasks[0].reason.endsWith('This step-up starts only after you approve it.')).toBe(true);
     expect(result.adjustments.join(' ')).toMatch(/requiring approval/);

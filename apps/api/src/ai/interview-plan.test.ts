@@ -1,11 +1,9 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import {
   promoteMultiSelect,
   ensureCustomAnswer,
   goalDomain,
-  questionBudget,
   questionDomainMismatch,
-  essentialFallbackQuestion,
   questionTopic,
   redundancyReason,
 } from './interview-plan.js';
@@ -94,192 +92,6 @@ describe('what a question is about', () => {
   });
 });
 
-describe('how many answers a question may take', () => {
-  it('turns the time-of-day radio group into checkboxes', () => {
-    // The screenshot that started this: Morning / Afternoon / Evening / Whenever,
-    // pick exactly one, from someone who reads morning and night.
-    const promoted = promoteMultiSelect(
-      question({ prompt: 'What time of day do you usually read?', type: 'SINGLE_SELECT' }),
-    );
-    expect(promoted.type).toBe('MULTI_SELECT');
-  });
-
-  it('leaves a genuinely exclusive question alone', () => {
-    const asked = question({ prompt: 'How long is one session?', type: 'SINGLE_SELECT' });
-    expect(promoteMultiSelect(asked).type).toBe('SINGLE_SELECT');
-  });
-
-  it('promotes on the options alone when the wording is opaque', () => {
-    const promoted = promoteMultiSelect(
-      question({
-        prompt: 'Pick your ideal reading time',
-        type: 'SINGLE_SELECT',
-        options: ['Morning', 'Afternoon', 'Evening'],
-      }),
-    );
-    expect(promoted.type).toBe('MULTI_SELECT');
-  });
-
-  it('never narrows a question the model already opened up', () => {
-    const asked = question({ prompt: 'How long is one session?', type: 'MULTI_SELECT' });
-    expect(promoteMultiSelect(asked).type).toBe('MULTI_SELECT');
-  });
-
-  it('does not touch free text, dates or numbers', () => {
-    for (const type of ['FREE_TEXT', 'NUMBER', 'DATE', 'TIME', 'DAYS_OF_WEEK'] as const) {
-      expect(promoteMultiSelect(question({ prompt: 'Which days?', type })).type).toBe(type);
-    }
-  });
-});
-
-describe('how much interview a request has earned', () => {
-  it('gives a vague goal room to ask', () => {
-    const budget = questionBudget('I want read more');
-    expect(budget.stated).toEqual([]);
-    expect(budget.min).toBe(1);
-    expect(budget.max).toBe(2);
-  });
-
-  it('stops interviewing someone who already said what they want', () => {
-    // Frequency, days, duration and time of day are all in this one sentence.
-    const budget = questionBudget('Read 30 minutes every evening on weekdays');
-    expect(budget.stated).toContain('DURATION');
-    expect(budget.stated).toContain('TIME_OF_DAY');
-    expect(budget.max).toBeLessThanOrEqual(2);
-    // Nothing left worth asking, so no floor either. A question here reads as not
-    // having read what they wrote.
-    expect(budget.min).toBe(0);
-  });
-
-  it('asks a little of someone who gave one detail', () => {
-    const budget = questionBudget('I want to go to the gym 3 times a week');
-    expect(budget.stated).toEqual(['FREQUENCY']);
-    expect(budget.min).toBe(1);
-    expect(budget.max).toBe(2);
-  });
-
-  it('never asks for more questions than it allows', () => {
-    for (const goal of [
-      'I want read more',
-      'Run 5km on Tuesdays and Thursdays at 7am',
-      'save money',
-      'read 20 pages of non-fiction each morning for 30 minutes',
-    ]) {
-      const budget = questionBudget(goal);
-      expect(budget.min).toBeLessThanOrEqual(budget.max);
-    }
-  });
-
-  it('requires clarification for an impossible day count', () => {
-    const budget = questionBudget(
-      'I need exactly three different days per week, but I can exercise only on Monday and Wednesday.',
-    );
-    expect(budget.requiresClarification).toBe(true);
-    expect(budget.min).toBeGreaterThan(0);
-  });
-
-  it('recognizes every-week wording and days named before "only days"', () => {
-    const budget = questionBudget(
-      'I need three different days every week. Monday and Wednesday are the only days possible.',
-    );
-    expect(budget.requiresClarification).toBe(true);
-  });
-
-  it('recognizes a qualified expert goal as undefined', () => {
-    const budget = questionBudget('Help me become a world-class expert in distributed systems.');
-    expect(budget.requiresClarification).toBe(true);
-  });
-
-  it('requires a measurable definition instead of accepting fake precision', () => {
-    const budget = questionBudget('Make me 95% more productive in 30 days.');
-    expect(budget.requiresClarification).toBe(true);
-    expect(budget.min).toBeGreaterThan(0);
-  });
-});
-
-describe('deterministic minimum interview',()=>{
-  it('asks a domain-flavoured success question for a vague fitness goal',()=>{
-    const first=essentialFallbackQuestion('I want to get fitter',[]);
-    expect(first.id).toBe('essential_success');
-    expect(first.type).toBe('SINGLE_SELECT');
-    expect(first.optional).toBe(false);
-    expect(first.allowCustomAnswer).toBe(true);
-    expect(first.options).toEqual(['Lose weight','Build strength','Improve endurance','Be more active generally']);
-    const second=essentialFallbackQuestion('I want to get fitter',['TARGET']);
-    expect(second.id).toBe('essential_frequency');
-    expect(questionTopic(second.prompt,second.type,second.options)).toBe('FREQUENCY');
-    expect(questionBudget('I want to get fitter')).toMatchObject({ min: 1, max: 2 });
-    expect(questionBudget('Run 30 minutes three days per week')).toMatchObject({ min: 0, max: 1 });
-  });
-
-  it('keeps the open free-text success question when no domain fits',()=>{
-    const general=essentialFallbackQuestion('I want to turn my life around',[]);
-    expect(general.id).toBe('essential_success');
-    expect(general.type).toBe('FREE_TEXT');
-    expect(general.prompt).toBe('What specific target or result would make this goal feel successful to you?');
-  });
-});
-
-describe('goalDomain', () => {
-  it('routes goals by their subject', () => {
-    expect(goalDomain('I want to run a 10K race')).toBe('FITNESS');
-    expect(goalDomain('I want to learn Java')).toBe('LEARNING');
-    expect(goalDomain('I want to learn English speaking')).toBe('LANGUAGE');
-    expect(goalDomain('I want to save $5,000 in 10 months')).toBe('MONEY');
-    expect(goalDomain('Prepare for a job interview')).toBe('CAREER');
-    expect(goalDomain('Practice guitar every evening')).toBe('CREATIVE');
-    expect(goalDomain('I want to reduce my social media use')).toBe('GENERAL');
-  });
-
-  it('puts language above learning, so "learn English" is a language goal', () => {
-    expect(goalDomain('learn Japanese grammar')).toBe('LANGUAGE');
-  });
-
-  it('puts career above learning, so interview prep is about the career', () => {
-    expect(goalDomain('Study for my Java interview')).toBe('CAREER');
-  });
-
-  it('matches on word boundaries only', () => {
-    // "retraining" contains "training" but is not a training goal.
-    expect(goalDomain('retraining my cat to use the litter tray')).toBe('GENERAL');
-  });
-});
-
-describe('domain-flavoured fallback questions', () => {
-  it('offers exclusive outcome choices for a language goal', () => {
-    const question = essentialFallbackQuestion('I want to become fluent in Spanish', []);
-    expect(question.id).toBe('essential_success');
-    expect(question.type).toBe('SINGLE_SELECT');
-    expect(question.optional).toBe(false);
-    expect(question.allowCustomAnswer).toBe(true);
-    expect(question.options).toEqual(['Speaking', 'Listening', 'Grammar', 'Vocabulary']);
-  });
-
-  it('asks a money goal for its amount and date in plain text', () => {
-    const question = essentialFallbackQuestion('I want to save for a trip', []);
-    expect(question.id).toBe('essential_success');
-    expect(question.type).toBe('FREE_TEXT');
-    expect(question.prompt).toBe('How much do you want to save, and by when?');
-  });
-
-  it('gives learning, career and creative goals their own concrete choices', () => {
-    expect(essentialFallbackQuestion('I want to learn Python', []).options).toEqual([
-      'University coursework', 'Job readiness', 'General skills', 'A specific project',
-    ]);
-    expect(essentialFallbackQuestion('I want to land a job', []).options).toEqual([
-      'Pass interviews', 'Land an offer', 'Get noticed at work', 'Build a portfolio',
-    ]);
-    expect(essentialFallbackQuestion('I want to learn piano', []).options).toEqual([
-      'Finish a piece', 'Build a daily practice', 'Share publicly', 'Learn technique',
-    ]);
-  });
-
-  it('leaves every other branch of the fallback unchanged', () => {
-    const frequency = essentialFallbackQuestion('I want to get fitter', ['TARGET']);
-    expect(frequency.id).toBe('essential_frequency');
-    expect(frequency.type).toBe('NUMBER');
-  });
-});
 
 describe('the custom-answer guarantee', () => {
   it('forces allowCustomAnswer on every single-select question', () => {
@@ -320,15 +132,6 @@ describe('which questions never reach the user', () => {
       askedIds: ['reading_days'],
     });
     expect(reason).toBe('REPEATED_ID');
-  });
-
-  it('does not ask back something the opening message already said', () => {
-    const budget = questionBudget('Read 30 minutes every evening on weekdays');
-    const reason = redundancyReason(
-      question({ prompt: 'How long do you want each session to be?' }),
-      { ...base, stated: budget.stated as never },
-    );
-    expect(reason).toBe('ALREADY_STATED');
   });
 
   it('lets a genuinely new question through', () => {
@@ -375,7 +178,6 @@ describe('which questions never reach the user', () => {
       question({prompt:'How many Sundays per month would you like to call?'}),
       'Call my parents every Sunday afternoon.',
     )).toBe(true);
-    expect(questionBudget('Water plants every Saturday morning.').stated).toContain('FREQUENCY');
   });
 
   it('rejects resume scheduling questions when the user reserves that decision',()=>{

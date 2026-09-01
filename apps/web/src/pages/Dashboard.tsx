@@ -1,444 +1,86 @@
-import { useState } from 'react';
-import { ArrowRight, Plus, TrendingUp } from 'lucide-react';
-import { Link, useNavigate } from 'react-router-dom';
+import { ArrowRight, CircleDollarSign, Plus, Sparkles, UsersRound } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import TaskRow from '../components/TaskRow';
-import { EmptyState, ErrorState, Skeleton, useAsync } from '../components/ui';
+import { EmptyState, ErrorState, Skeleton, UpMarker, useAsync } from '../components/ui';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { CATEGORY_EMOJI, type GoalSummary, type TodayResponse } from '../lib/types';
+import { CATEGORY_LABEL, type GoalSummary, type TodayResponse } from '../lib/types';
+import { useState } from 'react';
+import './Dashboard.css';
 
-/**
- * Home answers "what should I do today?" before "what are my statistics?".
- * Today's tasks sit at the top and are completable in place — no need to open
- * each goal one at a time.
- */
 export default function Dashboard() {
   const { user } = useAuth();
-  const navigate = useNavigate();
-
   const today = useAsync(() => api.get<TodayResponse>('/today'), []);
   const goals = useAsync(() => api.get<{ goals: GoalSummary[] }>('/goals?status=ACTIVE'), []);
-
-  // Kept locally so completing a task updates the header instantly.
   const [delta, setDelta] = useState(0);
   const [coinDelta, setCoinDelta] = useState(0);
-
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
-
   const summary = today.data?.summary;
-  const completed = (summary?.completed ?? 0) + delta;
+  const completed = Math.max(0, (summary?.completed ?? 0) + delta);
   const required = summary?.required ?? 0;
-  const percent = required === 0 ? 0 : Math.round((completed / required) * 100);
+  const percent = required === 0 ? 0 : Math.min(100, Math.round((completed / required) * 100));
   const remaining = Math.max(0, required - completed);
-  const coinsToday = (summary?.coinsToday ?? 0) + coinDelta;
+  const groups = today.data?.groups ?? [];
+  const hasTasks = groups.some((group) => group.tasks.length > 0);
+  const hasGoals = !!goals.data?.goals.length;
+  const heading = today.loading ? 'Getting your day ready…' : today.error ? 'Your day is unavailable.' : !hasTasks ? 'Room to breathe.' : remaining === 0 ? 'Today, well done.' : 'One move at a time.';
 
   return (
-    <div className="p-5 sm:p-6 lg:p-8 max-w-6xl mx-auto">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-7">
+    <div className="product-page dashboard-page">
+      <header className="product-page-header">
         <div>
-          <h1
-            style={{
-              fontFamily: 'Plus Jakarta Sans',
-              fontWeight: 800,
-              fontSize: 'clamp(1.4rem, 2.5vw, 1.75rem)',
-              color: '#1a1635',
-              marginBottom: 4,
-              letterSpacing: '-0.02em',
-            }}
-          >
-            {greeting}, {user?.name ?? 'there'} 👋
-          </h1>
-          <p style={{ color: '#8b88b0', fontSize: '0.9rem' }}>
-            Ready to make some progress today?
-          </p>
+          <p className="product-eyebrow">Your day{user?.name ? ` · ${user.name}` : ''}</p>
+          <h1>A little progress, today.</h1>
+          <p>Pick a move. Give it your attention. Make it count.</p>
         </div>
-        <Link to="/app/goals/new" className="btn-primary flex items-center gap-2 px-5 py-2.5 text-sm self-start">
-          <Plus size={15} /> New Goal
-        </Link>
-      </div>
+        <Link to="/app/goals/new" className="btn-secondary product-new-goal"><Plus size={17} /> New goal</Link>
+      </header>
 
-      {/* ---------------------------------------------- today's progress */}
-      <div
-        className="rounded-2xl p-5 sm:p-6 mb-6 shadow-card"
-        style={{
-          background: 'linear-gradient(135deg, #f0ebff 0%, #eff6ff 100%)',
-          border: '1px solid #ddd0ff',
-        }}
-      >
-        <div className="flex flex-col sm:flex-row sm:items-center gap-6">
-          <div className="flex-1">
-            <div className="flex items-center gap-2 mb-2">
-              <div
-                style={{
-                  width: 24,
-                  height: 24,
-                  borderRadius: 6,
-                  background: '#7c3aed',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <TrendingUp size={13} color="white" />
+      <div className="dashboard-layout">
+        <section className="dashboard-primary" aria-labelledby="today-heading">
+          <div className="challenge-window daily-window">
+            <div className="challenge-rail" aria-hidden="true"><span>TODAY</span><i /><i /><i /></div>
+            <div className="challenge-body">
+              <div className="daily-window-head">
+                <div><p className="product-eyebrow">Daily focus</p><h2 id="today-heading">{heading}</h2></div>
+                <UpMarker size={40} />
               </div>
-              <span
-                style={{
-                  fontSize: '0.75rem',
-                  fontWeight: 700,
-                  color: '#6b688f',
-                  fontFamily: 'Plus Jakarta Sans',
-                  letterSpacing: '0.06em',
-                }}
-              >
-                TODAY'S PROGRESS
-              </span>
+              {!today.loading && !today.error && hasTasks && <div className="daily-progress">
+                <div className="daily-progress-copy" aria-live="polite"><span><strong>{completed} of {required}</strong> complete</span><span>{remaining > 0 ? `${remaining} left today` : 'Day complete'}</span></div>
+                <div className="momentum-track" role="progressbar" aria-label="Today's plan" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-valuetext={`${completed} of ${required} moves complete`}><span style={{ width: `${percent}%` }} />{[0, 33, 66, 100].map((threshold) => <i aria-hidden="true" key={threshold} className={completed > 0 && percent >= threshold ? 'is-settled' : ''} />)}</div>
+              </div>}
+              {today.loading ? <div className="dashboard-task-stack" role="status" aria-label="Loading today's tasks"><Skeleton height={96} /><Skeleton height={74} /></div> : today.error ? <ErrorState message={today.error} onRetry={today.reload} /> : hasTasks ? (
+                <div className="dashboard-task-stack">{groups.filter((group) => group.tasks.length).map((group) => <div key={group.goalId} className="goal-task-group">
+                  <div className="goal-task-group__head"><Link to={`/app/goals/${group.goalId}`}><span className="goal-glyph">{CATEGORY_LABEL[group.category].slice(0, 1)}</span>{group.goalTitle}</Link><span className="trail-count">{group.streak} day streak</span></div>
+                  {group.tasks.map((task) => <TaskRow key={task.occurrenceId} task={task} onChanged={(t, d) => { setDelta((prev) => prev + d); setCoinDelta((prev) => prev + d * t.reward); }} />)}
+                </div>)}</div>
+              ) : goals.loading ? <div role="status" aria-label="Checking your goals"><Skeleton height={160} /></div> : goals.error ? <ErrorState message="Your tasks loaded, but we couldn’t check your goals." onRetry={goals.reload} /> : <EmptyState emoji="" title={hasGoals ? 'Nothing scheduled today' : 'A first move starts with a goal'} body={hasGoals ? 'Your goals are still here. Enjoy the breathing room, or open a goal to review its schedule.' : 'Choose something you want to work toward. Start small; you can build from there.'} action={<Link className="btn-primary px-5 py-3" to={hasGoals ? '/app/goals' : '/app/goals/new'}>{hasGoals ? 'Review my goals' : 'Shape my first goal'}</Link>} />}
             </div>
-
-            {today.loading ? (
-              <Skeleton height={54} />
-            ) : (
-              <>
-                <div className="flex items-baseline gap-2 mb-3 flex-wrap">
-                  <span
-                    style={{
-                      fontFamily: 'Plus Jakarta Sans',
-                      fontWeight: 900,
-                      fontSize: '2.75rem',
-                      color: '#1a1635',
-                      letterSpacing: '-0.03em',
-                    }}
-                  >
-                    {completed}
-                  </span>
-                  <span
-                    style={{
-                      fontFamily: 'Plus Jakarta Sans',
-                      fontWeight: 600,
-                      fontSize: '1.3rem',
-                      color: '#b8b5d5',
-                    }}
-                  >
-                    /{required}
-                  </span>
-                  <span style={{ color: '#6b688f', fontSize: '0.9rem' }}>tasks completed</span>
-                </div>
-                <div className="progress-bar-track mb-2.5" style={{ height: 10 }}>
-                  <div className="progress-bar-fill" style={{ width: `${percent}%` }} />
-                </div>
-                <p style={{ fontSize: '0.8rem', color: '#8b88b0' }}>
-                  {required === 0
-                    ? 'Nothing scheduled today — enjoy the rest day.'
-                    : remaining === 0
-                      ? "Every task done today. That's the whole list 🎉"
-                      : `Complete ${remaining} more ${remaining === 1 ? 'task' : 'tasks'} to hit your daily goal 💪`}
-                </p>
-              </>
-            )}
           </div>
 
-          <div className="flex gap-6 sm:gap-8">
-            {[
-              { icon: '🪙', label: 'Coins today', value: String(coinsToday), valueColor: '#f59e0b' },
-              { icon: '🔥', label: 'Day streak', value: String(summary?.streak ?? 0), valueColor: '#f97316' },
-              { icon: '🎯', label: 'Goals', value: String(goals.data?.goals.length ?? 0), valueColor: '#7c3aed' },
-            ].map(({ icon, label, value, valueColor }) => (
-              <div key={label} className="text-center">
-                <div style={{ fontSize: 22, marginBottom: 5 }} aria-hidden="true">
-                  {icon}
-                </div>
-                <div
-                  style={{
-                    fontFamily: 'Plus Jakarta Sans',
-                    fontWeight: 900,
-                    fontSize: '1.4rem',
-                    color: valueColor,
-                    letterSpacing: '-0.02em',
-                  }}
-                >
-                  {value}
-                </div>
-                <div style={{ fontSize: '0.7rem', color: '#8b88b0', marginTop: 1 }}>{label}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+          {hasGoals && <section className="active-goals-section" aria-labelledby="active-goals-heading">
+            <div className="section-row-heading"><div><p className="product-eyebrow">Longer horizon</p><h2 id="active-goals-heading">Goals in motion</h2></div><Link to="/app/goals">View all <ArrowRight size={14} /></Link></div>
+            <div className="goal-rail">{goals.data!.goals.slice(0, 3).map((goal) => <GoalRow key={goal.id} goal={goal} />)}</div>
+          </section>}
+          {hasTasks && goals.error && <ErrorState message="Your goals couldn’t be loaded." onRetry={goals.reload} />}
+        </section>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        {/* ------------------------------------------- today's tasks */}
-        <div className="xl:col-span-2">
-          <h2
-            className="mb-4"
-            style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '1rem', color: '#1a1635' }}
-          >
-            Today
-          </h2>
-
-          {today.loading ? (
-            <div className="flex flex-col gap-3">
-              <Skeleton height={120} radius={16} />
-              <Skeleton height={120} radius={16} />
-            </div>
-          ) : today.error ? (
-            <ErrorState message={today.error} onRetry={today.reload} />
-          ) : today.data && today.data.groups.length > 0 ? (
-            <div className="flex flex-col gap-4">
-              {today.data.groups.map((group) => (
-                <div key={group.goalId} className="card shadow-card p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <Link to={`/app/goals/${group.goalId}`} className="flex items-center gap-2 min-w-0">
-                      <span style={{ fontSize: 17 }} aria-hidden="true">
-                        {CATEGORY_EMOJI[group.category]}
-                      </span>
-                      <span
-                        className="truncate"
-                        style={{
-                          fontFamily: 'Plus Jakarta Sans',
-                          fontWeight: 700,
-                          fontSize: '0.92rem',
-                          color: '#1a1635',
-                        }}
-                      >
-                        {group.goalTitle}
-                      </span>
-                    </Link>
-                    {group.streak > 0 && (
-                      <span style={{ fontSize: '0.72rem', color: '#f97316', fontWeight: 700 }}>
-                        🔥 {group.streak}d
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    {group.tasks.map((task) => (
-                      <TaskRow
-                        key={task.occurrenceId}
-                        task={task}
-                        onChanged={(t, d) => {
-                          setDelta((prev) => prev + d);
-                          setCoinDelta((prev) => prev + d * t.reward);
-                        }}
-                      />
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <EmptyState
-              emoji="🎯"
-              title="Ready to start?"
-              body="Create your first goal and turn it into a challenge."
-              action={
-                <button className="btn-primary px-5 py-2.5 text-sm" onClick={() => navigate('/app/goals/new')}>
-                  Create Your First Goal
-                </button>
-              }
-            />
-          )}
-
-          {/* ------------------------------------------ active goals */}
-          {goals.data && goals.data.goals.length > 0 && (
-            <>
-              <div className="flex items-center justify-between mb-4 mt-8">
-                <h2
-                  style={{
-                    fontFamily: 'Plus Jakarta Sans',
-                    fontWeight: 700,
-                    fontSize: '1rem',
-                    color: '#1a1635',
-                  }}
-                >
-                  My Goals
-                </h2>
-                <Link
-                  to="/app/goals"
-                  className="flex items-center gap-1 text-sm"
-                  style={{ color: '#7c3aed', fontWeight: 700, fontFamily: 'Plus Jakarta Sans' }}
-                >
-                  View all <ArrowRight size={13} />
-                </Link>
-              </div>
-              <div className="flex flex-col gap-3">
-                {goals.data.goals.slice(0, 3).map((goal) => (
-                  <GoalRow key={goal.id} goal={goal} />
-                ))}
-                <Link
-                  to="/app/goals/new"
-                  className="card p-5 flex items-center justify-center gap-2 w-full card-hover shadow-card"
-                  style={{ border: '1.5px dashed #ddd0ff', background: '#fdfcff' }}
-                >
-                  <Plus size={16} style={{ color: '#b8b5d5' }} />
-                  <span
-                    style={{
-                      fontSize: '0.875rem',
-                      color: '#8b88b0',
-                      fontWeight: 700,
-                      fontFamily: 'Plus Jakarta Sans',
-                    }}
-                  >
-                    Create new goal
-                  </span>
-                </Link>
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* ------------------------------------------------- side column */}
-        <div className="flex flex-col gap-5">
+        <aside className="dashboard-context" aria-label="Your wider picture">
+          <section className="dashboard-note"><p className="product-eyebrow">At your pace</p><h2>Small is a good start.</h2><p>Your list comes from your goal schedules. Choose what fits now; check in after each completed move.</p><Link to="/app/goals">Review your plans <ArrowRight size={15} /></Link></section>
+          <section className="dashboard-earned" aria-label="Rewards today"><CircleDollarSign size={20} /><div>{today.loading ? <span>Loading rewards…</span> : today.error ? <span>Rewards unavailable</span> : <><strong>{(summary?.coinsToday ?? 0) + coinDelta}</strong><span>coins earned today</span></>}</div><Link to="/app/rewards" aria-label="View rewards"><ArrowRight size={18} /></Link></section>
           <FriendActivity />
-        </div>
+          <div className="dashboard-copilot"><Sparkles size={18} /><p>Have something new in mind?</p><Link to="/app/goals/new/ai">Plan a new goal with Copilot <ArrowRight size={14} /></Link></div>
+        </aside>
       </div>
     </div>
   );
 }
 
 function GoalRow({ goal }: { goal: GoalSummary }) {
-  return (
-    <Link to={`/app/goals/${goal.id}`} className="card card-hover p-5 text-left shadow-card block">
-      <div className="flex items-center gap-4">
-        <div
-          className="flex items-center justify-center rounded-xl flex-shrink-0"
-          style={{ width: 46, height: 46, fontSize: 20, background: '#f0ebff', border: '1px solid #ddd0ff' }}
-          aria-hidden="true"
-        >
-          {CATEGORY_EMOJI[goal.category]}
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center justify-between mb-1.5 gap-2">
-            <span
-              className="truncate"
-              style={{
-                fontFamily: 'Plus Jakarta Sans',
-                fontWeight: 700,
-                fontSize: '0.95rem',
-                color: '#1a1635',
-              }}
-            >
-              {goal.title}
-            </span>
-            <span
-              style={{
-                fontFamily: 'Plus Jakarta Sans',
-                fontWeight: 800,
-                fontSize: '0.9rem',
-                color: '#7c3aed',
-              }}
-            >
-              {Math.round(goal.progress)}%
-            </span>
-          </div>
-          <div className="progress-bar-track mb-2" style={{ height: 5 }}>
-            <div className="progress-bar-fill" style={{ width: `${goal.progress}%` }} />
-          </div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <span style={{ fontSize: '0.72rem', color: '#8b88b0' }}>
-              {goal.todayRequired === 0
-                ? 'No tasks today'
-                : `${Math.max(0, goal.todayRequired - goal.todayCompleted)} left today`}
-            </span>
-            {goal.streak > 0 && (
-              <span style={{ fontSize: '0.72rem', color: '#f97316', fontWeight: 600 }}>
-                🔥 {goal.streak}d
-              </span>
-            )}
-            {goal.participantCount > 1 && (
-              <span style={{ fontSize: '0.72rem', color: '#7c3aed', fontWeight: 600 }}>
-                👥 {goal.participantCount}
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-    </Link>
-  );
+  const progress = Math.min(100, Math.max(0, Math.round(goal.progress)));
+  return <Link to={`/app/goals/${goal.id}`} className="goal-rail-row"><span className="goal-glyph">{CATEGORY_LABEL[goal.category].slice(0, 1)}</span><span className="goal-rail-copy"><strong>{goal.title}</strong><small>{Math.max(0, goal.todayRequired - goal.todayCompleted)} left today · {goal.participantCount > 1 ? `${goal.participantCount} people` : 'Private goal'}</small></span><span className="goal-rail-progress" aria-label={`${progress}% complete`}><i><b style={{ width: `${progress}%` }} /></i><em>{progress}%</em></span></Link>;
 }
 
-/** Lightweight friend activity — deliberately not a full social feed in Phase 1. */
 function FriendActivity() {
-  const { data, loading } = useAsync(
-    () => api.get<{ friends: Array<{ id: string; name: string; avatarEmoji: string; currentStreak: number; sharedGoals: number }> }>('/friends'),
-    [],
-  );
-
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <h2
-          style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '1rem', color: '#1a1635' }}
-        >
-          Friends
-        </h2>
-        <Link
-          to="/app/friends"
-          className="flex items-center gap-1 text-sm"
-          style={{ color: '#7c3aed', fontWeight: 700, fontFamily: 'Plus Jakarta Sans' }}
-        >
-          View <ArrowRight size={13} />
-        </Link>
-      </div>
-
-      <div className="card rounded-2xl p-4 shadow-card">
-        {loading ? (
-          <div className="flex flex-col gap-2">
-            <Skeleton height={34} />
-            <Skeleton height={34} />
-          </div>
-        ) : data && data.friends.length > 0 ? (
-          data.friends.slice(0, 5).map((friend) => (
-            <div key={friend.id} className="flex items-center gap-2.5 py-2">
-              <div
-                className="flex items-center justify-center rounded-full flex-shrink-0"
-                style={{
-                  width: 30,
-                  height: 30,
-                  fontSize: 14,
-                  background: '#f5f4ff',
-                  border: '1px solid #e8e6f5',
-                }}
-                aria-hidden="true"
-              >
-                {friend.avatarEmoji}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div
-                  className="truncate"
-                  style={{ fontSize: '0.83rem', fontWeight: 600, color: '#1a1635' }}
-                >
-                  {friend.name}
-                </div>
-                <div style={{ fontSize: '0.7rem', color: '#b8b5d5' }}>
-                  {friend.sharedGoals > 0
-                    ? `${friend.sharedGoals} shared ${friend.sharedGoals === 1 ? 'goal' : 'goals'}`
-                    : 'No shared goals yet'}
-                </div>
-              </div>
-              {friend.currentStreak > 0 && (
-                <span style={{ fontSize: 11, color: '#f97316', fontWeight: 700 }}>
-                  🔥{friend.currentStreak}
-                </span>
-              )}
-            </div>
-          ))
-        ) : (
-          <div className="text-center py-4">
-            <div style={{ fontSize: 26 }} aria-hidden="true">
-              👋
-            </div>
-            <p style={{ fontSize: '0.8rem', color: '#8b88b0', marginTop: 6 }}>
-              Productivity is better together.
-            </p>
-            <Link
-              to="/app/friends"
-              className="btn-secondary inline-block mt-3 px-4 py-2"
-              style={{ fontSize: '0.8rem' }}
-            >
-              Find friends
-            </Link>
-          </div>
-        )}
-      </div>
-    </div>
-  );
+  const { data, loading, error, reload } = useAsync(() => api.get<{ friends: Array<{ id: string; name: string; currentStreak: number; sharedGoals: number }> }>('/friends'), []);
+  return <section className="friend-field"><div className="section-row-heading compact"><div><p className="product-eyebrow">Better together</p><h2>Alongside you</h2></div><Link to="/app/friends" aria-label="View friends"><ArrowRight size={18} /></Link></div>{loading ? <Skeleton height={120} /> : error ? <div className="dashboard-friends-error"><p>Friends couldn’t be loaded.</p><button onClick={reload}>Try again</button></div> : data?.friends.length ? data.friends.slice(0, 3).map((friend) => <div key={friend.id} className="friend-signal"><span className="friend-avatar">{friend.name.slice(0, 2).toUpperCase()}</span><span><strong>{friend.name}</strong><small>{friend.sharedGoals ? `${friend.sharedGoals} shared goal${friend.sharedGoals === 1 ? '' : 's'}` : `${friend.currentStreak} day streak`}</small></span></div>) : <div className="friend-empty"><UsersRound size={22} /><p>A little encouragement goes a long way. Invite someone when you’re ready.</p><Link to="/app/friends">Find a friend</Link></div>}</section>;
 }

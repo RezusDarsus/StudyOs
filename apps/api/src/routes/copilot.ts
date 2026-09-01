@@ -1,14 +1,17 @@
-import type { FastifyInstance } from 'fastify';
+﻿import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { CopilotUnavailableError, isCopilotEnabled } from '../ai/client.js';
 import { AiProviderError } from '../ai/provider.js';
 import { DraftValidationError } from '../ai/draft-validator.js';
+import { MAX_RECOMMENDATIONS, recommendationItemSchema } from '../ai/schemas.js';
 import { RECURRENCE_TYPE } from '../domain/enums.js';
 import { isDayString } from '../domain/dates.js';
-import { badRequest, notFound, serviceUnavailable } from '../lib/errors.js';
+import { badRequest, notFound, serviceUnavailable, tooManyRequests } from '../lib/errors.js';
+import { AttemptWindow, describeWait } from '../lib/rate-limit.js';
 import { prisma } from '../lib/prisma.js';
 import { describeProvenance, parseContext, toPlainObject } from '../ai/context.js';
-import { questionBudget } from '../ai/interview-plan.js';
+import { canForceGenerate, HARD_MAX_QUESTIONS } from '../services/copilot-session.js';
 import {
   classifyIntent,
   classifyIntentWithLlm,
@@ -16,7 +19,7 @@ import {
   type CopilotIntent,
   type CopilotIntentResult,
 } from '../ai/intent-router.js';
-import type { PlanReadiness } from '../ai/readiness.js';
+import type { PlanReadiness } from '../ai/requirements/coverage.js';
 import {
   answerQuestion,
   cancelSession,
@@ -27,16 +30,20 @@ import {
 } from '../services/copilot-session.js';
 import {
   applyCopilotEdit,
-  applyManualEdit,
-  confirmDraft,
   discardDraft,
   generateDraft,
   loadDraft,
   parseLadder,
 } from '../services/copilot-draft.js';
 import { askGoalCopilot } from '../services/copilot-goal.js';
+import { RecommendationValidationError } from '../services/copilot-recommendations.js';
+import { RecommendationHistoryUnavailableError } from '../services/recommendation-history.js';
+import { executeCapability, unwrapCapability } from '../capabilities/executor.js';
+import { CapabilityError } from '../capabilities/capability-error.js';
 import { deletePreference, listPreferences } from '../services/preferences.js';
 import { recordEvent } from '../services/copilot-analytics.js';
+import { estimateRemainingAskable, evaluateAstReadiness, summarizeReadiness, renderAssumptionLines, type RequirementState } from '../ai/requirements/index.js';
+import { parseRequirementState } from '../ai/context.js';
 
 /**
  * Every route here derives the user from the session cookie. A userId appearing
@@ -82,8 +89,47 @@ function serializeDraft(draft: Awaited<ReturnType<typeof loadDraft>>) {
  */
 const copilotMessage = z.string().trim().min(1, 'Type something first').max(400);
 
+// Every AI call costs real money and real latency, so every Copilot user gets a
+// rate: this many model-backed requests per minute, keyed on the authenticated
+// user. In memory and per process — the same limitation lib/rate-limit.ts
+// documents — and applied only to the model-backed routes below; reads and
+// drafts-by-id stay unmetered.
+const AI_REQUESTS_PER_WINDOW = 30;
+const AI_WINDOW_SECONDS = 60;
+const copilotAiPerUser = new AttemptWindow(AI_REQUESTS_PER_WINDOW, AI_WINDOW_SECONDS);
+
+function throttleAi(req: FastifyRequest, reply: FastifyReply): void {
+  const key = `copilot-ai:user:${req.user!.id}`;
+  const blocked = copilotAiPerUser.blockedFor(key);
+  if (blocked > 0) {
+    reply.header('Retry-After', String(blocked));
+    throw tooManyRequests(
+      `Too many Copilot requests. Please try again in ${describeWait(blocked)}.`,
+    );
+  }
+  copilotAiPerUser.record(key);
+}
+
+/**
+ * The mirrored goal-chat conversation the client sends back. Stage 1: entries
+ * may carry the structured recommendations that came with the turn — the only
+ * recommendation memory this pipeline has. Optional and validated with the same
+ * domain-open schema the model output uses, so pre-Stage-1 clients (which send
+ * no field) parse unchanged.
+ */
+export const goalCopilotHistorySchema = z
+  .array(
+    z.object({
+      role: z.enum(['user', 'assistant']),
+      content: z.string().trim().min(1).max(800),
+      recommendations: z.array(recommendationItemSchema).max(MAX_RECOMMENDATIONS).nullish(),
+    }),
+  )
+  .max(8)
+  .default([]);
+
 /** Turn provider failures into something a person can act on. */
-function toUserFacing(err: unknown): never {
+export function toUserFacing(err: unknown): never {
   if (err instanceof CopilotUnavailableError) {
     throw badRequest(
       'The Copilot is not configured on this server. You can still create goals manually.',
@@ -92,6 +138,27 @@ function toUserFacing(err: unknown): never {
   }
   if (err instanceof DraftValidationError) {
     throw badRequest(err.message, 'DRAFT_INVALID');
+  }
+  if (err instanceof RecommendationValidationError) {
+    // The structured recommendation contract could not be satisfied within the
+    // one-repair budget. Typed and retryable — nothing is substituted for the
+    // model's answer, ever.
+    throw serviceUnavailable(
+      "Copilot couldn't format its recommendations just now. Try again.",
+      err.code,
+    );
+  }
+  if (err instanceof RecommendationHistoryUnavailableError) {
+    // Stage 2, `required` write mode: durable memory is part of the request,
+    // so a persistence failure is an honest retryable 503 rather than an
+    // answer that silently forgets.
+    throw serviceUnavailable(err.message, err.code);
+  }
+  if (err instanceof CapabilityError) {
+    // Stage 4: typed capability failures carry their own HTTP convention
+    // (403/404/409/503 per code) and are never fed back to the model for
+    // repair when they are authorization-shaped.
+    throw err.toHttpError();
   }
   if (err instanceof AiProviderError) {
     // AUTH is the one permanent failure: retrying cannot help, so it stays a
@@ -139,13 +206,24 @@ const LIMITED_INFORMATION_LINE =
  * bury the plan in fine print, and skipping empty or structured values, which
  * do not render as a sentence). A refused readiness gate adds its one honest
  * line, and a missing deadline gets its own. Nothing here is invented.
+ *
+ * Stage 5 (flag ON): structured assumptions — ACTIVE records with provenance
+ * SYSTEM_ASSUMPTION — come first. Unsafe assumptions never reach rendering:
+ * the merge rejected them, so everything here is safe by construction.
  */
 export function buildAssumptions(
   draft: { deadline: string | null },
   session: AssumptionSession | null,
   readiness: PlanReadiness | null,
+  requirementState?: RequirementState | null,
 ): string[] {
   const assumptions: string[] = [];
+  if (requirementState) {
+    for (const line of renderAssumptionLines(requirementState)) {
+      if (assumptions.length >= 6) break;
+      assumptions.push(line);
+    }
+  }
   if (session) {
     const provenance = describeProvenance(parseContext(session.structuredContext, session.initialGoalText));
     for (const entry of provenance) {
@@ -199,7 +277,8 @@ export default async function copilotRoutes(app: FastifyInstance) {
 
   // ------------------------------------------------------------- interview
 
-  app.post('/copilot/goal-sessions', { preHandler: app.requireAuth }, async (req) => {
+  app.post('/copilot/goal-sessions', { preHandler: app.requireAuth }, async (req, reply) => {
+    throttleAi(req, reply);
     const { goal, intentAnswer } = z
       .object({
         goal: z.string().trim().min(3, 'Tell me a little more').max(2000),
@@ -230,6 +309,20 @@ export default async function copilotRoutes(app: FastifyInstance) {
       orderBy: { createdAt: 'desc' },
     });
 
+    const requirementState = parseRequirementState(session.structuredContext);
+    const snapshotReadiness = summarizeReadiness(requirementState, {
+      questionCount: session.questionCount,
+      maxQuestions: HARD_MAX_QUESTIONS,
+    });
+    const remaining = estimateRemainingAskable(
+      evaluateAstReadiness(requirementState, {
+        questionCount: session.questionCount,
+        maxQuestions: HARD_MAX_QUESTIONS,
+      }),
+      session.questionCount,
+      HARD_MAX_QUESTIONS,
+    );
+
     return {
       sessionId: session.id,
       status: session.status,
@@ -239,8 +332,13 @@ export default async function copilotRoutes(app: FastifyInstance) {
       // gates the interview and the generate route actually enforce.
       revision: session.revision,
       readiness: sessionReadiness(session),
+      // Stage 6: the AST gate's own verdict — ready / shouldAsk / canForce are
+      // deliberately separate fields, and conflicts/pending are listed.
+      shouldAsk: snapshotReadiness.shouldAsk,
+      canForce: canForceGenerate(session, requirementState),
+      requirements: snapshotReadiness,
       estimatedTotal: session.status === 'INTERVIEWING'
-        ? questionBudget(session.initialGoalText).max
+        ? session.questionCount + remaining
         : session.questionCount,
       context: toPlainObject(parseContext(session.structuredContext, session.initialGoalText)),
       provenance: describeProvenance(parseContext(session.structuredContext, session.initialGoalText)),
@@ -259,7 +357,8 @@ export default async function copilotRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post('/copilot/goal-sessions/:id/answers', { preHandler: app.requireAuth }, async (req) => {
+  app.post('/copilot/goal-sessions/:id/answers', { preHandler: app.requireAuth }, async (req, reply) => {
+    throttleAi(req, reply);
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const body = z
       .object({
@@ -273,6 +372,7 @@ export default async function copilotRoutes(app: FastifyInstance) {
     try {
       return await answerQuestion(id, req.user!.id, body);
     } catch (err) {
+      
       toUserFacing(err);
     }
   });
@@ -285,7 +385,8 @@ export default async function copilotRoutes(app: FastifyInstance) {
 
   // ----------------------------------------------------------------- draft
 
-  app.post('/copilot/goal-sessions/:id/generate', { preHandler: app.requireAuth }, async (req) => {
+  app.post('/copilot/goal-sessions/:id/generate', { preHandler: app.requireAuth }, async (req, reply) => {
+    throttleAi(req, reply);
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const { regenerate, force, revision } = z
       .object({
@@ -306,12 +407,13 @@ export default async function copilotRoutes(app: FastifyInstance) {
       const session = await loadSession(id, req.user!.id);
       const readiness = sessionReadiness(session);
       const serialized = serializeDraft(draft);
+      const requirementState = parseRequirementState(session.structuredContext);
       return {
         draft: serialized,
         adjustments,
         readiness,
         missingDimensions: readiness.ready ? [] : readiness.missing,
-        assumptions: buildAssumptions(serialized, session, readiness),
+        assumptions: buildAssumptions(serialized, session, readiness, requirementState),
       };
     } catch (err) {
       toUserFacing(err);
@@ -327,7 +429,10 @@ export default async function copilotRoutes(app: FastifyInstance) {
     const session = draft.sessionId
       ? await prisma.copilotSession.findUnique({ where: { id: draft.sessionId } })
       : null;
-    return { draft, assumptions: buildAssumptions(draft, session, null) };
+    const requirementState = session
+      ? parseRequirementState(session.structuredContext)
+      : null;
+    return { draft, assumptions: buildAssumptions(draft, session, null, requirementState) };
   });
 
   app.patch('/copilot/goal-drafts/:id', { preHandler: app.requireAuth }, async (req) => {
@@ -363,16 +468,58 @@ export default async function copilotRoutes(app: FastifyInstance) {
       })
       .parse(req.body);
 
-    const draft = await applyManualEdit(id, req.user!.id, body);
-    return { draft: serializeDraft(draft) };
+    // Stage 4 canonical path: through the registry — schema, authorization,
+    // idempotency claim, transaction and audit in one generic pipeline. The
+    // client's task ids are required on this path (the review UI always has
+    // them).
+    const outcome = await executeCapability<{ draft: unknown }>(
+      { userId: req.user!.id, confirmed: true, correlationId: randomUUID() },
+      {
+        capability: 'goal.apply_manual_edit',
+        input: {
+          draftId: id,
+          title: body.title,
+          description: body.description,
+          deadline: body.deadline ?? undefined,
+          visibility: body.visibility,
+          tasks: body.tasks?.map((task) => ({
+            id: task.id ?? '',
+            title: task.title,
+            description: task.description,
+            recurrenceType: task.recurrenceType,
+            recurrenceConfig: task.recurrenceConfig,
+            estimatedMinutes: task.estimatedMinutes ?? null,
+            preferredTime: task.preferredTime ?? null,
+            reason: task.reason,
+            progression: null,
+          })),
+        },
+      },
+    );
+    return { draft: serializeDraft(unwrapCapability(outcome).result.draft as never) };
   });
 
-  app.post('/copilot/goal-drafts/:id/copilot-edit', { preHandler: app.requireAuth }, async (req) => {
+  app.post('/copilot/goal-drafts/:id/copilot-edit', { preHandler: app.requireAuth }, async (req, reply) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
-    const { message } = z.object({ message: copilotMessage }).parse(req.body);
+    const { message, operationId } = z
+      .object({ message: copilotMessage, operationId: z.string().optional() })
+      .parse(req.body);
+    throttleAi(req, reply);
     try {
-      const { draft, assistantMessage, applied } = await applyCopilotEdit(id, req.user!.id, message);
-      return { draft: serializeDraft(draft), assistantMessage, applied };
+      // Stage 4 canonical path: the model call runs in the capability's prepare
+      // phase, then the prepared patch is applied inside the claim transaction.
+      // A replay returns the committed result without a model call.
+      const outcome = await executeCapability<{ draft: unknown; assistantMessage: string; applied: string[] }>(
+        { userId: req.user!.id, confirmed: true, correlationId: randomUUID() },
+        { capability: 'goal.apply_ai_edit', input: { draftId: id, message }, operationId },
+      );
+      const { result, replayed: editReplayed } = unwrapCapability(outcome);
+      return {
+        draft: serializeDraft(result.draft as never),
+        assistantMessage: result.assistantMessage,
+        applied: result.applied,
+        replayed: editReplayed,
+      };
     } catch (err) {
       toUserFacing(err);
     }
@@ -381,7 +528,20 @@ export default async function copilotRoutes(app: FastifyInstance) {
   /** The only endpoint that creates real Phase 1 entities. */
   app.post('/copilot/goal-drafts/:id/confirm', { preHandler: app.requireAuth }, async (req) => {
     const { id } = z.object({ id: z.string() }).parse(req.params);
-    return confirmDraft(id, req.user!.id);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const operationId = typeof body.operationId === 'string' ? body.operationId : undefined;
+    // Stage 4 canonical path: the whole confirm sequence (claim, goal, tasks,
+    // ladders, occurrences) commits atomically with the idempotency claim; a
+    // replay returns the same goal id.
+    const outcome = await executeCapability<{ goalId: string; alreadyCreated: boolean }>(
+      { userId: req.user!.id, confirmed: true, correlationId: randomUUID() },
+      { capability: 'goal.confirm_from_draft', input: { draftId: id }, operationId },
+    );
+    const { result, replayed } = unwrapCapability(outcome);
+    return {
+      goalId: result.goalId,
+      alreadyCreated: result.alreadyCreated || replayed,
+    };
   });
 
   app.post('/copilot/goal-drafts/:id/discard', { preHandler: app.requireAuth }, async (req) => {
@@ -400,14 +560,12 @@ export default async function copilotRoutes(app: FastifyInstance) {
 
   // ------------------------------------------------------- existing goals
 
-  app.post('/goals/:id/copilot', { preHandler: app.requireAuth }, async (req) => {
+  app.post('/goals/:id/copilot', { preHandler: app.requireAuth }, async (req, reply) => {
+    throttleAi(req, reply);
     const { id } = z.object({ id: z.string() }).parse(req.params);
     const { message, history } = z.object({
       message: copilotMessage,
-      history: z.array(z.object({
-        role: z.enum(['user', 'assistant']),
-        content: z.string().trim().min(1).max(800),
-      })).max(8).default([]),
+      history: goalCopilotHistorySchema,
     }).parse(req.body);
     try {
       return await askGoalCopilot(id, req.user!.id, message, history);

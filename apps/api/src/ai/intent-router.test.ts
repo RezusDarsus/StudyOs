@@ -9,6 +9,11 @@ import {
   INTENT_CONFIDENCE_THRESHOLD,
   type CopilotIntentResult,
 } from './intent-router.js';
+import { installRuntimeContent } from '../runtime-content.js';
+
+// The routing vocabularies (verbs, nouns, topics) are runtime data; the port
+// must exist before the rules compile (the same bootstrap the server runs).
+installRuntimeContent();
 
 // The routing layer's contract, in order of how badly it fails if broken:
 // a question must never start an interview, a goal statement must never be
@@ -224,9 +229,17 @@ describe('classifyIntent — LLM fallback', () => {
 });
 
 describe('the frozen intent benchmark runner', () => {
+  const script = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', 'scripts', 'intent-benchmark.mjs');
+
   it('runs the offline benchmark green against the frozen fixtures', () => {
-    const script = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', 'scripts', 'intent-benchmark.mjs');
-    const output = execFileSync(process.execPath, [script], { encoding: 'utf8', timeout: 120_000 });
+    // Stage 6: the vocabularies are runtime data behind the port, installed
+    // unconditionally by the runner — there is no flag mode left to compare.
+    // Every frozen fixture must classify exactly as the parity gate pinned.
+    const output = execFileSync(process.execPath, [script], {
+      encoding: 'utf8',
+      timeout: 120_000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     expect(output).toContain('frozen-100 compatibility: 100/100');
     expect(output).toContain('PASS');
   });

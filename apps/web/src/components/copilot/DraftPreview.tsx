@@ -28,7 +28,7 @@ export default function DraftPreview({
     <div>
       <div
         className="px-4 py-3.5 rounded-xl"
-        style={{ background: '#f0ebff', border: '1px solid #ddd0ff' }}
+        style={{ background: 'var(--surface-3)', border: '1px solid var(--hairline-strong)' }}
       >
         <div className="flex items-start gap-2.5">
           <span style={{ fontSize: 20 }} aria-hidden="true">
@@ -37,23 +37,23 @@ export default function DraftPreview({
           <div className="min-w-0">
             <div
               style={{
-                fontFamily: 'Plus Jakarta Sans',
-                fontWeight: 800,
+                fontFamily: 'var(--font-sans)',
+                fontWeight: 600,
                 fontSize: '0.95rem',
-                color: '#1a1635',
+                color: 'var(--text)',
                 lineHeight: 1.35,
               }}
             >
               {draft.title}
             </div>
-            <div style={{ fontSize: '0.72rem', color: '#7c3aed', fontWeight: 600, marginTop: 2 }}>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text)', fontWeight: 500, marginTop: 2 }}>
               {CATEGORY_LABEL[draft.category]}
               {draft.deadline ? ` · by ${draft.deadline}` : ''}
             </div>
           </div>
         </div>
         {draft.rationale && (
-          <p style={{ fontSize: '0.82rem', color: '#4b4870', lineHeight: 1.55, marginTop: 10 }}>
+          <p style={{ fontSize: '0.82rem', color: 'var(--text-body)', lineHeight: 1.55, marginTop: 10 }}>
             {draft.rationale}
           </p>
         )}
@@ -62,10 +62,10 @@ export default function DraftPreview({
       <div
         style={{
           fontSize: '0.72rem',
-          fontWeight: 700,
-          color: '#6b688f',
+          fontWeight: 500,
+          color: 'var(--text-body)',
           letterSpacing: '0.05em',
-          fontFamily: 'Plus Jakarta Sans',
+          fontFamily: 'var(--font-sans)',
           margin: '14px 0 8px',
         }}
       >
@@ -77,12 +77,12 @@ export default function DraftPreview({
           <div
             key={task.id}
             className="px-3.5 py-3 rounded-xl"
-            style={{ background: '#fff', border: '1px solid #e8e6f5' }}
+            style={{ background: 'var(--surface)', border: '1px solid var(--hairline)' }}
           >
-            <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#1a1635', lineHeight: 1.4 }}>
+            <div style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text)', lineHeight: 1.4 }}>
               {task.title}
             </div>
-            <div className="flex items-center gap-3 mt-1.5" style={{ fontSize: '0.72rem', color: '#8b88b0' }}>
+            <div className="flex items-center gap-3 mt-1.5" style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
               <span className="inline-flex items-center gap-1">
                 <Repeat size={11} /> {describeDraftRecurrence(task)}
               </span>
@@ -97,7 +97,7 @@ export default function DraftPreview({
               // user is agreeing to. A plan that quietly grows is not the plan they read.
               <div
                 className="inline-flex items-center gap-1 mt-2 px-2 py-1 rounded-md"
-                style={{ background: '#f5f4ff', color: '#7c3aed', fontSize: '0.7rem', fontWeight: 600 }}
+                style={{ background: 'var(--surface-2)', color: 'var(--text)', fontSize: '0.7rem', fontWeight: 500 }}
               >
                 <TrendingUp size={11} aria-hidden="true" />
                 Builds up: {describeDraftLadder(task.progression)}
@@ -106,7 +106,7 @@ export default function DraftPreview({
           </div>
         ))}
         {hidden > 0 && (
-          <p style={{ fontSize: '0.75rem', color: '#8b88b0', paddingLeft: 2 }}>
+          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', paddingLeft: 2 }}>
             + {hidden} more {hidden === 1 ? 'task' : 'tasks'}
           </p>
         )}
@@ -118,7 +118,7 @@ export default function DraftPreview({
       >
         Open full plan <ArrowUpRight size={15} />
       </button>
-      <p className="mt-2.5 text-center" style={{ fontSize: '0.72rem', color: '#b8b5d5', lineHeight: 1.5 }}>
+      <p className="mt-2.5 text-center" style={{ fontSize: '0.72rem', color: 'var(--text-faint)', lineHeight: 1.5 }}>
         Nothing is created yet. You review and confirm the plan first.
       </p>
     </div>

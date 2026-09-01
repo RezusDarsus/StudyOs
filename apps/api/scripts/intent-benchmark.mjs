@@ -70,6 +70,10 @@ try {
   const { register } = await import('tsx/esm/api');
   register();
   ({ classifyIntentDeterministic } = await import('../src/ai/intent-router.ts'));
+  // The runtime-content port is installed unconditionally (Stage 6: the
+  // vocabularies are runtime data, composition is not a flag question).
+  const { installRuntimeContent } = await import('../src/runtime-content.ts');
+  installRuntimeContent();
 } catch (err) {
   console.error('Could not load src/ai/intent-router.ts (is tsx installed?):', err.message);
   process.exit(1);

@@ -86,8 +86,8 @@ export default function Profile() {
   if (loading) {
     return (
       <div className="p-5 sm:p-6 lg:p-8 max-w-3xl mx-auto flex flex-col gap-4">
-        <Skeleton height={150} radius={16} />
-        <Skeleton height={200} radius={16} />
+        <Skeleton height={150} radius={10} />
+        <Skeleton height={200} radius={10} />
       </div>
     );
   }
@@ -112,17 +112,17 @@ export default function Profile() {
             <h1
               className="truncate"
               style={{
-                fontFamily: 'Plus Jakarta Sans',
-                fontWeight: 800,
+                fontFamily: 'var(--font-sans)',
+                fontWeight: 600,
                 fontSize: 'clamp(1.25rem, 2.5vw, 1.55rem)',
-                color: '#1a1635',
+                color: 'var(--text)',
                 letterSpacing: '-0.02em',
               }}
             >
               {user.name}
             </h1>
             {user.bio && (
-              <p style={{ fontSize: '0.85rem', color: '#6b688f', marginTop: 4, lineHeight: 1.55 }}>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-body)', marginTop: 4, lineHeight: 1.55 }}>
                 {user.bio}
               </p>
             )}
@@ -144,10 +144,10 @@ export default function Profile() {
 
         <div className="mt-5">
           <div className="flex items-center justify-between mb-1.5">
-            <span style={{ fontSize: '0.75rem', color: '#8b88b0', fontWeight: 600 }}>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 500 }}>
               Level {user.level}
             </span>
-            <span style={{ fontSize: '0.75rem', color: '#8b88b0' }}>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
               {user.intoLevel} / {user.perLevel} to level {user.level + 1}
             </span>
           </div>
@@ -164,12 +164,12 @@ export default function Profile() {
             ))}
           </div>
         ) : (
-          <p style={{ fontSize: '0.85rem', color: '#8b88b0' }}>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
             {isSelf ? 'No active goals yet.' : 'No public goals to show.'}
           </p>
         )}
         {hiddenPrivateGoals > 0 && (
-          <p className="mt-3" style={{ fontSize: '0.78rem', color: '#b8b5d5' }}>
+          <p className="mt-3" style={{ fontSize: '0.78rem', color: 'var(--text-faint)' }}>
             🔒 {hiddenPrivateGoals} private{' '}
             {hiddenPrivateGoals === 1 ? 'goal is' : 'goals are'} hidden.
           </p>
@@ -194,7 +194,7 @@ export default function Profile() {
               <div
                 key={a.code}
                 className="rounded-xl p-3.5 text-center"
-                style={{ background: '#f5f4ff', border: '1px solid #e8e6f5' }}
+                style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}
                 title={a.description}
               >
                 <div style={{ fontSize: 24 }} aria-hidden="true">
@@ -204,9 +204,9 @@ export default function Profile() {
                   className="mt-1.5"
                   style={{
                     fontSize: '0.78rem',
-                    fontWeight: 700,
-                    color: '#1a1635',
-                    fontFamily: 'Plus Jakarta Sans',
+                    fontWeight: 500,
+                    color: 'var(--text)',
+                    fontFamily: 'var(--font-sans)',
                   }}
                 >
                   {a.title}
@@ -215,7 +215,7 @@ export default function Profile() {
             ))}
           </div>
         ) : (
-          <p style={{ fontSize: '0.85rem', color: '#8b88b0' }}>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
             {isSelf ? 'Complete your first task to start unlocking these.' : 'No achievements yet.'}
           </p>
         )}
@@ -230,7 +230,7 @@ export default function Profile() {
             <button className="btn-ghost flex items-center justify-center gap-2 px-4 py-2.5 text-sm" onClick={exportData}>
               <Download size={15} /> Export my data
             </button>
-            <button className="btn-ghost flex items-center justify-center gap-2 px-4 py-2.5 text-sm" style={{ color: '#c8253c' }} onClick={deleteAccount}>
+            <button className="btn-ghost flex items-center justify-center gap-2 px-4 py-2.5 text-sm" style={{ color: 'var(--red)' }} onClick={deleteAccount}>
               <Trash2 size={15} /> Delete account
             </button>
             <a className="btn-ghost flex items-center justify-center px-4 py-2.5 text-sm" href="mailto:support@goalify.app">
@@ -250,7 +250,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     <section className="mb-5">
       <h2
         className="mb-3"
-        style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 700, fontSize: '1rem', color: '#1a1635' }}
+        style={{ fontFamily: 'var(--font-sans)', fontWeight: 500, fontSize: '1rem', color: 'var(--text)' }}
       >
         {title}
       </h2>
@@ -271,9 +271,9 @@ function ProfileGoalRow({ goal }: { goal: ProfileGoal }) {
             className="truncate"
             style={{
               fontSize: '0.88rem',
-              fontWeight: 700,
-              color: '#1a1635',
-              fontFamily: 'Plus Jakarta Sans',
+              fontWeight: 500,
+              color: 'var(--text)',
+              fontFamily: 'var(--font-sans)',
             }}
           >
             {goal.title}
@@ -285,11 +285,11 @@ function ProfileGoalRow({ goal }: { goal: ProfileGoal }) {
         </div>
       </div>
       <div className="text-right flex-shrink-0">
-        <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#7c3aed' }}>
+        <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text)' }}>
           {Math.round(goal.progress)}%
         </div>
         {goal.streak > 0 && (
-          <div style={{ fontSize: '0.7rem', color: '#f97316', fontWeight: 700 }}>🔥{goal.streak}</div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-body)', fontWeight: 500 }}>🔥{goal.streak}</div>
         )}
       </div>
     </Link>
@@ -369,8 +369,8 @@ function EditProfileModal({ open, onClose }: { open: boolean; onClose: () => voi
               width: 44,
               height: 44,
               fontSize: 20,
-              background: avatarEmoji === emoji ? '#f0ebff' : '#fdfcff',
-              border: `1.5px solid ${avatarEmoji === emoji ? '#7c3aed' : '#e8e6f5'}`,
+              background: avatarEmoji === emoji ? 'var(--surface-3)' : 'var(--surface-2)',
+              border: `1px solid ${avatarEmoji === emoji ? 'var(--accent)' : 'var(--hairline)'}`,
             }}
           >
             {emoji}
@@ -383,9 +383,9 @@ function EditProfileModal({ open, onClose }: { open: boolean; onClose: () => voi
 
 const labelStyle = {
   fontSize: '0.8rem',
-  fontWeight: 700,
-  color: '#4b4870',
+  fontWeight: 500,
+  color: 'var(--text-body)',
   display: 'block',
   marginBottom: 6,
-  fontFamily: 'Plus Jakarta Sans',
+  fontFamily: 'var(--font-sans)',
 } as const;

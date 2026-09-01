@@ -25,28 +25,21 @@ export default function LeaderboardPanel({ goalId }: { goalId: string }) {
 
   return (
     <div className="card shadow-card p-5">
-      <div className="flex gap-2 mb-4" role="tablist" aria-label="Leaderboard mode">
+      <div className="tab-strip mb-4" role="tablist" aria-label="Leaderboard mode">
         {(['daily', 'average'] as const).map((m) => (
           <button
             key={m}
             role="tab"
             aria-selected={mode === m}
             onClick={() => setMode(m)}
-            className="px-4 py-2 rounded-xl text-sm flex-1"
-            style={{
-              background: mode === m ? '#f0ebff' : '#fdfcff',
-              border: `1px solid ${mode === m ? '#ddd0ff' : '#e8e6f5'}`,
-              color: mode === m ? '#7c3aed' : '#6b688f',
-              fontWeight: 700,
-              fontFamily: 'Plus Jakarta Sans',
-            }}
+            className="tab-item"
           >
             {m === 'daily' ? 'Daily' : 'Average'}
           </button>
         ))}
       </div>
 
-      <p className="mb-4" style={{ fontSize: '0.78rem', color: '#8b88b0', lineHeight: 1.5 }}>
+      <p className="mb-4" style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
         {mode === 'daily'
           ? "Who's doing best today, based on today's scheduled tasks."
           : 'Average of every finished day since each person joined.'}
@@ -67,7 +60,7 @@ export default function LeaderboardPanel({ goalId }: { goalId: string }) {
           ))}
         </div>
       ) : (
-        <p style={{ fontSize: '0.85rem', color: '#8b88b0' }}>No participants yet.</p>
+        <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>No participants yet.</p>
       )}
     </div>
   );
@@ -86,8 +79,8 @@ export function LeaderboardRow({
     <div
       className="flex items-center gap-2.5 py-2.5 px-3 rounded-xl"
       style={{
-        background: entry.isMe ? '#f0ebff' : 'transparent',
-        border: `1px solid ${entry.isMe ? '#ddd0ff' : 'transparent'}`,
+        background: entry.isMe ? 'var(--accent-wash)' : 'transparent',
+        border: `1px solid ${entry.isMe ? 'var(--accent-line)' : 'transparent'}`,
       }}
     >
       <span
@@ -95,8 +88,8 @@ export function LeaderboardRow({
           fontSize: medal ? 15 : 11,
           width: 24,
           textAlign: 'center',
-          fontWeight: 700,
-          color: '#8b88b0',
+          fontWeight: 500,
+          color: 'var(--text-muted)',
         }}
       >
         {medal ?? entry.rank}
@@ -108,9 +101,9 @@ export function LeaderboardRow({
         className="flex-1 min-w-0 truncate"
         style={{
           fontSize: '0.85rem',
-          fontWeight: entry.isMe ? 700 : 500,
-          color: entry.isMe ? '#7c3aed' : '#1a1635',
-          fontFamily: 'Plus Jakarta Sans',
+          fontWeight: entry.isMe ? 500 : 400,
+          color: 'var(--text)',
+          fontFamily: 'var(--font-sans)',
         }}
       >
         {entry.isMe ? 'You' : entry.name}
@@ -118,21 +111,21 @@ export function LeaderboardRow({
 
       {entry.percent === null ? (
         // Nothing scheduled — never shown as 0%, which would read as failure.
-        <span style={{ fontSize: '0.75rem', color: '#b8b5d5', fontStyle: 'italic' }}>
+        <span style={{ fontSize: '0.75rem', color: 'var(--text-faint)', fontStyle: 'italic' }}>
           No tasks today
         </span>
       ) : (
         <>
           {mode === 'daily' && (
-            <span style={{ fontSize: '0.72rem', color: '#b8b5d5' }}>
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-faint)' }}>
               {entry.completed}/{entry.required}
             </span>
           )}
           <span
             style={{
               fontSize: '0.82rem',
-              fontWeight: 700,
-              color: entry.isMe ? '#7c3aed' : '#8b88b0',
+              fontWeight: 500,
+              color: entry.isMe ? 'var(--text)' : 'var(--text-muted)',
               minWidth: 44,
               textAlign: 'right',
             }}
@@ -143,7 +136,7 @@ export function LeaderboardRow({
       )}
 
       {entry.currentStreak > 0 && (
-        <span style={{ fontSize: 11, color: '#f97316', fontWeight: 700, minWidth: 30 }}>
+        <span style={{ fontSize: 11, color: 'var(--text-body)', fontWeight: 500, minWidth: 30 }}>
           🔥{entry.currentStreak}
         </span>
       )}

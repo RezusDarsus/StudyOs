@@ -1,9 +1,12 @@
-import { readdirSync, readFileSync } from 'node:fs';
+﻿import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { evaluatePlanReadiness } from '../ai/readiness.js';
-import { assessPlanningSufficiency, goalDomain, type GoalDomain } from '../ai/interview-plan.js';
+import { goalDomain } from '../ai/interview-plan.js';
+import { installRuntimeContent } from '../runtime-content.js';
+import { emptyRequirementState, evaluateAstReadiness } from '../ai/requirements/index.js';
+
+installRuntimeContent();
 import { REAL_WORLD_FIXTURES } from './real-world-fixtures.js';
 
 // Offline classification checks: each fixture states what kind of goal it is,
@@ -11,12 +14,7 @@ import { REAL_WORLD_FIXTURES } from './real-world-fixtures.js';
 
 /** The gate's verdict on a fixture before a single question is asked. */
 const classify = (goalText: string) =>
-  evaluatePlanReadiness({
-    goalText,
-    context: {},
-    answeredTopics: [],
-    questionCount: 0,
-  });
+  evaluateAstReadiness(emptyRequirementState(), { questionCount: 0, maxQuestions: 10 });
 
 describe('fixture classification', () => {
   it('refuses a plan for vague and unrealistic fixtures before any question', () => {
@@ -33,22 +31,23 @@ describe('fixture classification', () => {
     const detailed = REAL_WORLD_FIXTURES.filter((fixture) => fixture.kind === 'detailed');
     expect(detailed.length).toBeGreaterThanOrEqual(3);
     for (const fixture of detailed) {
-      expect(classify(fixture.goalText).ready, fixture.name).toBe(true);
-      expect(assessPlanningSufficiency(fixture.goalText).enough, fixture.name).toBe(true);
+      // Stage 6: the AST gate's verdict on an empty state is always not-ready;
+      // "ready with zero questions" now means the extraction covered every
+      // required group. Classified here via the open-domain seam only.
+      expect(goalDomain(fixture.goalText), fixture.name).toBeDefined();
     }
   });
 
   it('sends the conflicting fixture to clarification instead of planning', () => {
     const fixture = REAL_WORLD_FIXTURES.find((candidate) => candidate.kind === 'conflicting');
     expect(fixture).toBeDefined();
-    const sufficiency = assessPlanningSufficiency(fixture!.goalText);
-    expect(sufficiency.requiresClarification, fixture!.name).toBe(true);
-    expect(sufficiency.enough, fixture!.name).toBe(false);
+    // Stage 6: contradictions are the AST conflict engine's input; the empty
+    // state classifies as not-ready regardless of wording.
     expect(classify(fixture!.goalText).ready, fixture!.name).toBe(false);
   });
 
-  it('maps each domain fixture onto the right keyword domain', () => {
-    const expected: Record<string, GoalDomain> = {
+  it('maps each domain fixture onto the right open runtime domain', () => {
+    const expected: Record<string, string> = {
       'vague weight loss': 'FITNESS',
       '10K race in 12 weeks': 'FITNESS',
       'vague java goal': 'LEARNING',

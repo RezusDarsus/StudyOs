@@ -1,6 +1,6 @@
-import { ArrowLeft, ArrowRight, PenLine, Sparkles } from 'lucide-react';
+import { ArrowLeft, ArrowRight, PenLine } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Skeleton, useAsync } from '../components/ui';
+import { Skeleton, UpMarker, useAsync } from '../components/ui';
 import { api } from '../lib/api';
 import type { CopilotStatus } from '../lib/types';
 
@@ -16,28 +16,29 @@ export default function CreateGoalChoice() {
   const { data, loading } = useAsync(() => api.get<CopilotStatus>('/copilot/status'), []);
 
   return (
-    <div className="p-5 sm:p-6 lg:p-8 max-w-2xl mx-auto">
+    <div className="product-page goal-choice-page">
       <Link
         to="/app/goals"
         className="flex items-center gap-2 mb-6"
-        style={{ color: '#8b88b0', fontSize: '0.875rem', fontWeight: 500 }}
+        style={{ color: 'var(--text-muted)', fontSize: '0.875rem', fontWeight: 400 }}
       >
         <ArrowLeft size={15} /> Back to goals
       </Link>
 
+      <p className="product-eyebrow">Shape a new momentum trail</p>
       <h1
         style={{
-          fontFamily: 'Plus Jakarta Sans',
-          fontWeight: 800,
-          fontSize: 'clamp(1.4rem, 2.5vw, 1.8rem)',
-          color: '#1a1635',
+          fontFamily: 'var(--font-sans)',
+          fontWeight: 600,
+          fontSize: 'clamp(2rem, 4vw, 2.6rem)',
+          color: 'var(--text)',
           letterSpacing: '-0.02em',
         }}
       >
         How would you like to create your goal?
       </h1>
-      <p style={{ color: '#8b88b0', fontSize: '0.9rem', marginTop: 6, marginBottom: 26 }}>
-        Both end up in the same place — pick whichever suits you.
+      <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: 6, marginBottom: 26 }}>
+        Start with a conversation or take direct control. You can inspect and change every detail before anything goes live.
       </p>
 
       {/* --------------------------------------------- resume an interview */}
@@ -48,7 +49,7 @@ export default function CreateGoalChoice() {
               key={session.id}
               onClick={() => navigate(`/app/goals/new/ai/${session.id}`)}
               className="card card-hover shadow-card w-full p-4 flex items-center gap-3 text-left mb-2"
-              style={{ background: '#f0ebff', borderColor: '#ddd0ff' }}
+              style={{ background: 'var(--surface-3)', borderColor: 'var(--hairline-strong)' }}
             >
               <span style={{ fontSize: 20 }} aria-hidden="true">
                 ⏳
@@ -57,19 +58,19 @@ export default function CreateGoalChoice() {
                 <span
                   className="block truncate"
                   style={{
-                    fontFamily: 'Plus Jakarta Sans',
-                    fontWeight: 700,
+                    fontFamily: 'var(--font-sans)',
+                    fontWeight: 500,
                     fontSize: '0.9rem',
-                    color: '#1a1635',
+                    color: 'var(--text)',
                   }}
                 >
                   Continue “{session.initialGoalText}”
                 </span>
-                <span className="block" style={{ fontSize: '0.75rem', color: '#6b688f' }}>
+                <span className="block" style={{ fontSize: '0.75rem', color: 'var(--text-body)' }}>
                   {session.questionCount} question{session.questionCount === 1 ? '' : 's'} answered
                 </span>
               </span>
-              <ArrowRight size={16} style={{ color: '#7c3aed' }} />
+              <ArrowRight size={16} style={{ color: 'var(--text-muted)' }} />
             </button>
           ))}
         </div>
@@ -77,87 +78,76 @@ export default function CreateGoalChoice() {
 
       <div className="flex flex-col gap-4">
         {loading ? (
-          <Skeleton height={150} radius={16} />
+          <Skeleton height={150} radius={10} />
         ) : data?.enabled ? (
           <button
             onClick={() => navigate('/app/goals/new/ai')}
-            className="card card-hover shadow-card p-6 text-left"
-            style={{ borderColor: '#ddd0ff' }}
+            className="creation-path creation-path--ai text-left"
+            style={{ borderColor: 'var(--hairline-strong)' }}
           >
             <div className="flex items-start gap-4">
-              <span
-                className="flex items-center justify-center rounded-2xl flex-shrink-0"
-                style={{
-                  width: 52,
-                  height: 52,
-                  background: 'linear-gradient(135deg, #7c3aed, #6d28d9)',
-                  boxShadow: '0 4px 14px rgba(124,58,237,0.35)',
-                }}
-              >
-                <Sparkles size={24} color="white" />
-              </span>
+              <UpMarker size={52} />
               <span className="flex-1">
                 <span
                   className="block"
                   style={{
-                    fontFamily: 'Plus Jakarta Sans',
-                    fontWeight: 800,
+                    fontFamily: 'var(--font-sans)',
+                    fontWeight: 600,
                     fontSize: '1.1rem',
-                    color: '#1a1635',
+                    color: 'var(--text)',
                   }}
                 >
-                  Create with AI
+                  Shape it with Copilot
                 </span>
                 <span
                   className="block mt-1.5"
-                  style={{ fontSize: '0.88rem', color: '#6b688f', lineHeight: 1.55 }}
+                  style={{ fontSize: '0.88rem', color: 'var(--text-body)', lineHeight: 1.55 }}
                 >
-                  Tell your Copilot what you want to achieve. It asks a few questions, then
-                  builds a plan around what you actually enjoy and when you're free.
+                  A short guided interview becomes an editable plan. You see why each task was chosen before you commit.
                 </span>
               </span>
-              <ArrowRight size={18} style={{ color: '#7c3aed', marginTop: 4 }} />
+              <ArrowRight size={18} style={{ color: 'var(--text-muted)', marginTop: 4 }} />
             </div>
           </button>
         ) : null}
 
         <button
           onClick={() => navigate('/app/goals/new/manual')}
-          className="card card-hover shadow-card p-6 text-left"
+          className="creation-path creation-path--manual text-left"
         >
           <div className="flex items-start gap-4">
             <span
               className="flex items-center justify-center rounded-2xl flex-shrink-0"
-              style={{ width: 52, height: 52, background: '#f5f4ff', border: '1px solid #e8e6f5' }}
+              style={{ width: 52, height: 52, background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}
             >
-              <PenLine size={22} style={{ color: '#6b688f' }} />
+              <PenLine size={22} style={{ color: 'var(--text-body)' }} />
             </span>
             <span className="flex-1">
               <span
                 className="block"
                 style={{
-                  fontFamily: 'Plus Jakarta Sans',
-                  fontWeight: 800,
+                  fontFamily: 'var(--font-sans)',
+                  fontWeight: 600,
                   fontSize: '1.1rem',
-                  color: '#1a1635',
+                  color: 'var(--text)',
                 }}
               >
                 Create manually
               </span>
               <span
                 className="block mt-1.5"
-                style={{ fontSize: '0.88rem', color: '#6b688f', lineHeight: 1.55 }}
+                style={{ fontSize: '0.88rem', color: 'var(--text-body)', lineHeight: 1.55 }}
               >
                 Set the goal, tasks and schedule yourself. Full control, no questions asked.
               </span>
             </span>
-            <ArrowRight size={18} style={{ color: '#b8b5d5', marginTop: 4 }} />
+            <ArrowRight size={18} style={{ color: 'var(--text-faint)', marginTop: 4 }} />
           </div>
         </button>
       </div>
 
       {!loading && !data?.enabled && (
-        <p className="mt-5 text-center" style={{ fontSize: '0.8rem', color: '#b8b5d5' }}>
+        <p className="mt-5 text-center" style={{ fontSize: '0.8rem', color: 'var(--text-faint)' }}>
           The AI Copilot isn't configured on this server, so goals are created manually.
         </p>
       )}

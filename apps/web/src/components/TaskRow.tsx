@@ -47,7 +47,7 @@ export default function TaskRow({
           setJustEarned(result.reward);
           setTimeout(() => setJustEarned(null), 700);
         }
-        push(result.reward > 0 ? `Nice! +${result.reward} 🪙` : 'Nice!');
+        push(result.reward > 0 ? `Move settled · +${result.reward}` : 'Move settled');
         onChanged?.({ ...task, status: 'COMPLETED' }, 1);
       } else {
         await api.post(`/task-occurrences/${task.occurrenceId}/undo`);
@@ -65,7 +65,7 @@ export default function TaskRow({
     // A div, not a fragment: the difficulty strip belongs to this row, and nesting a
     // second set of buttons inside the completion button would be invalid markup and
     // unusable with a keyboard.
-    <div className="rounded-xl" style={{ background: completed ? '#f5f4ff' : '#fff', border: '1px solid #e8e6f5' }}>
+    <div className="rounded-xl" style={{ background: completed ? 'var(--surface-2)' : 'var(--surface)', border: '1px solid var(--hairline)' }}>
       <button
         onClick={toggle}
         disabled={busy}
@@ -85,9 +85,9 @@ export default function TaskRow({
           style={{
             width: 24,
             height: 24,
-            background: completed ? 'linear-gradient(135deg, #7c3aed, #6d28d9)' : 'transparent',
-            border: completed ? 'none' : '2px solid #ddd0ff',
-            color: '#fff',
+            background: completed ? 'var(--accent)' : 'transparent',
+            border: completed ? 'none' : '2px solid var(--hairline-strong)',
+            color: 'var(--accent-ink)',
           }}
           aria-hidden="true"
         >
@@ -99,9 +99,9 @@ export default function TaskRow({
             className="block truncate"
             style={{
               fontSize: '0.9rem',
-              fontWeight: completed ? 500 : 600,
-              fontFamily: 'Plus Jakarta Sans, sans-serif',
-              color: completed ? '#8b88b0' : '#1a1635',
+              fontWeight: completed ? 400 : 500,
+              fontFamily: 'var(--font-sans)',
+              color: completed ? 'var(--text-muted)' : 'var(--text)',
               textDecoration: completed ? 'line-through' : 'none',
             }}
           >
@@ -113,8 +113,8 @@ export default function TaskRow({
                 className="ml-2 whitespace-nowrap"
                 style={{
                   fontSize: '0.75rem',
-                  fontWeight: 800,
-                  color: completed ? '#a8a5c8' : '#7c3aed',
+                  fontWeight: 600,
+                  color: completed ? 'var(--text-muted)' : 'var(--text-body)',
                   textDecoration: 'none',
                 }}
               >
@@ -125,7 +125,7 @@ export default function TaskRow({
           {(task.reminderTime || task.progression) && (
             <span
               className="flex items-center gap-1.5 mt-0.5"
-              style={{ fontSize: '0.7rem', color: '#b8b5d5' }}
+              style={{ fontSize: '0.7rem', color: 'var(--text-faint)' }}
             >
               {task.reminderTime && (
                 <span className="flex items-center gap-1">
@@ -143,13 +143,15 @@ export default function TaskRow({
         </span>
 
         <span className="relative flex-shrink-0">
-          <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#f59e0b' }}>
-            +{task.reward}🪙
+          <span style={{ fontSize: '0.75rem', fontWeight: 500, color: 'var(--text-muted)' }}>
+            +{task.reward}
           </span>
           {justEarned !== null && (
+            // The standing reward is quiet metadata; only the moment of earning
+            // is worth the accent, and it fades on its own.
             <span
               className="absolute right-0 -top-1 animate-coin-pop pointer-events-none"
-              style={{ fontSize: '0.8rem', fontWeight: 800, color: '#f59e0b' }}
+              style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--green)' }}
             >
               +{justEarned}
             </span>
@@ -224,8 +226,8 @@ function DifficultyStrip({
           className="inline-flex items-center gap-1.5"
           style={{
             fontSize: '0.7rem',
-            fontWeight: 600,
-            color: rating ? '#7c3aed' : '#b8b5d5',
+            fontWeight: 500,
+            color: rating ? 'var(--text-muted)' : 'var(--text-faint)',
             background: 'none',
             border: 'none',
             padding: '2px 0',
@@ -263,11 +265,11 @@ function DifficultyStrip({
             className="inline-flex items-center gap-1 rounded-full"
             style={{
               fontSize: '0.7rem',
-              fontWeight: 600,
+              fontWeight: 500,
               padding: '5px 10px',
-              background: chosen ? '#7c3aed' : '#f5f4ff',
-              color: chosen ? '#fff' : '#6b688f',
-              border: `1px solid ${chosen ? '#7c3aed' : '#e8e6f5'}`,
+              background: chosen ? 'var(--accent)' : 'var(--surface-2)',
+              color: chosen ? 'var(--accent-ink)' : 'var(--text-body)',
+              border: `1px solid ${chosen ? 'var(--accent)' : 'var(--hairline)'}`,
               cursor: busy ? 'wait' : 'pointer',
               opacity: busy ? 0.7 : 1,
             }}
@@ -282,7 +284,7 @@ function DifficultyStrip({
         onClick={() => setOpen(false)}
         style={{
           fontSize: '0.7rem',
-          color: '#b8b5d5',
+          color: 'var(--text-faint)',
           background: 'none',
           border: 'none',
           padding: '5px 4px',

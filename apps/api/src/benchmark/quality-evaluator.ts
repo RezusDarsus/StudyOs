@@ -1,5 +1,6 @@
-import { scorePlanQuality, type PlanQualityBreakdown, type QualityPlan } from '../ai/plan-quality.js';
-import { assessPlanningSufficiency, questionTopic } from '../ai/interview-plan.js';
+﻿import { scorePlanQuality, type PlanQualityBreakdown, type QualityPlan } from '../ai/plan-quality.js';
+import { questionTopic, type QuestionTopic } from '../ai/interview-plan.js';
+import { getRuntimeKnowledge, portMemo } from '../ai/runtime-knowledge.js';
 
 export interface InterviewItem { question: { prompt: string; type?: string; options?: string[] } }
 
@@ -54,8 +55,30 @@ export function scoreStructuralQuality(plan: QualityPlan, today = '2026-08-25'):
   return { score: issues.length ? Math.min(score, 50) : score, criticalFailure: issues.length > 0, issues };
 }
 
+/** Benchmark-scoring topics read from the runtime lexicon (offline scoring
+ *  policy, not core readiness). */
+const statedTopicsForScoring = (goalText: string): QuestionTopic[] => {
+  const patterns = portMemo(getRuntimeKnowledge(), 'stated-topic-patterns', () =>
+    getRuntimeKnowledge()
+      .getLexicon('stated-topic-pattern')
+      .patterns.filter(({ entry }) => entry.role)
+      .map(({ entry, regex }) => ({ topic: entry.role as QuestionTopic, pattern: regex })),
+  );
+  const text = goalText.toLowerCase();
+  return patterns.filter(({ pattern }) => pattern.test(text)).map(({ topic }) => topic);
+};
+
+export const planningSufficiencyForScoring = (goalText: string) => {
+  const known = statedTopicsForScoring(goalText);
+  const enough = known.length >= 2;
+  return {
+    enough,
+    known,
+    questionRange: enough ? { min: 0, max: 0 } : { min: 1, max: 2 },
+  };
+};
 export function scoreInterviewQuality(goalText: string, interview: InterviewItem[] = []): InterviewQuality {
-  const initial = assessPlanningSufficiency(goalText, []);
+  const initial = planningSufficiencyForScoring(goalText);
   const issues: string[] = [];
   let score: number;
   if (initial.enough) {

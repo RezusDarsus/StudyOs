@@ -16,6 +16,9 @@ import socialRoutes from './routes/social.js';
 import miscRoutes from './routes/misc.js';
 import realtimeRoutes from './routes/realtime.js';
 import copilotRoutes from './routes/copilot.js';
+import recommendationRoutes from './routes/recommendations.js';
+import { registerCapabilities } from './capabilities/index.js';
+import { installRuntimeContent } from './runtime-content.js';
 
 export interface AuthedUser {
   id: string;
@@ -33,6 +36,13 @@ declare module 'fastify' {
 }
 
 export async function buildServer() {
+  // Stage 3: the runtime-knowledge port is composed and installed explicitly,
+  // before any consumer can read it. Unconditional — the runtime-content flag
+  // gates consumption, not composition; with the flag off nothing reads it.
+  installRuntimeContent();
+  // Stage 4: capability definitions register once at boot. Duplicate names
+  // would throw here — before the first request, not after it.
+  registerCapabilities();
   const app = Fastify({
     logger: { level: process.env.LOG_LEVEL ?? 'info' },
     // Off unless TRUST_PROXY says otherwise — see lib/config-audit.ts. In this deployment
@@ -130,6 +140,7 @@ export async function buildServer() {
   await app.register(miscRoutes, { prefix: '/api' });
   await app.register(realtimeRoutes, { prefix: '/api' });
   await app.register(copilotRoutes, { prefix: '/api' });
+  await app.register(recommendationRoutes, { prefix: '/api' });
 
   return app;
 }

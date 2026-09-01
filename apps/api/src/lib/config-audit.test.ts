@@ -27,6 +27,24 @@ describe('auditConfig', () => {
     expect(findings.every((finding) => finding.severity === 'warning')).toBe(true);
   });
 
+  describe('removed Copilot feature flags (Stage 6)', () => {
+    it('a stray flag value in the environment is inert — no rule reads it', () => {
+      // The six staging flags are deleted; a leftover value in a deployed
+      // .env must neither warn nor change behavior. The audit has no rule
+      // for any of them, which is the proof of removal.
+      const stray: NodeJS.ProcessEnv = {
+        ...sound,
+        COPILOT_STRUCTURED_RECOMMENDATIONS: '1',
+        COPILOT_RECOMMENDATION_HISTORY_V2_WRITE_MODE: 'eager',
+        COPILOT_RECOMMENDATION_HISTORY_V2_READ: '1',
+        COPILOT_RUNTIME_DOMAIN_CONTENT: '1',
+        COPILOT_CAPABILITY_REGISTRY: '1',
+        COPILOT_REQUIREMENT_AST: '1',
+      };
+      expect(auditConfig(stray)).toEqual([]);
+    });
+  });
+
   describe('CORS', () => {
     it('refuses a wildcard origin', () => {
       const findings = at(auditConfig({ ...sound, WEB_ORIGIN: '*' }), 'WEB_ORIGIN');

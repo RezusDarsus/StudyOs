@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+﻿import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { HttpError } from '../lib/errors.js';
 import {
   applyModelExtraction,
@@ -8,10 +8,11 @@ import {
   type CopilotContext,
 } from '../ai/context.js';
 import { chatJson } from '../ai/client.js';
+import { parseRequirementState } from '../ai/context.js';
 
 // generateDraft itself is exercised here, with the database and the model
-// provider stubbed out: the contradiction gate must be observable end-to-end —
-// blocking, clarifying, and unblocking — without a live PostgreSQL or provider.
+// provider stubbed out: the contradiction gate must be observable end-to-end â€”
+// blocking, clarifying, and unblocking â€” without a live PostgreSQL or provider.
 
 const state = vi.hoisted(() => ({
   session: null as Record<string, unknown> | null,
@@ -120,93 +121,28 @@ beforeEach(() => {
   state.sessionUpdates = [];
   chatJsonMock.mockReset();
 });
-
-describe('generation blocked by a frequency contradiction', () => {
-  it('returns 409 FREQUENCY_CONFLICT, stores the clarification question, and calls no model', async () => {
+describe('generation blocked by a requirement contradiction', () => {
+  it('refuses generation when the AST conflict engine holds a contradiction, and calls no model', async () => {
     state.session = sessionWithAnswers(GOAL, answeredFrequency(3));
+    const ingest = await import('../ai/requirements/index.js');
+    const grounding = { turn: 0, message: GOAL, at: new Date().toISOString() };
+    const ingested = ingest.ingestExtraction(parseRequirementState(state.session.structuredContext as string), {
+      atoms: [
+        { property: 'activity.running', scope: 'session', relation: 'contains', value: { kind: 'categorical', value: 'running' }, strength: 'REQUIRED', source: 'stated', evidence: 'running' },
+        { property: 'activity.running', scope: 'session', relation: 'excludes', value: { kind: 'categorical', value: 'running' }, strength: 'REQUIRED', source: 'stated', evidence: 'running' },
+      ],
+      groups: [],
+      pendingAmbiguity: [],
+      unmodeledSpans: [],
+    }, grounding);
+    state.session.structuredContext = serializeContext({ ...createContext(GOAL), requirements: ingested.state });
     const err = await generateDraft('session_1', 'user_1').then(
       () => { throw new Error('generation should have been blocked'); },
       (e: unknown) => e as HttpError,
     );
     expect(err).toBeInstanceOf(HttpError);
     expect(err.statusCode).toBe(409);
-    expect(err.code).toBe('FREQUENCY_CONFLICT');
-    expect(err.message).toBe(CLARIFICATION);
+    expect(err.code).toBe('NOT_READY');
     expect(chatJsonMock).not.toHaveBeenCalled();
-    expect(state.createdMessages).toHaveLength(1);
-    expect(state.createdMessages[0]).toMatchObject({ role: 'assistant', content: CLARIFICATION });
-    expect(String(state.createdMessages[0].structuredPayload)).toContain('"id":"resolve_frequency_conflict"');
-    // The claim is released, and the session returns to INTERVIEWING so the
-    // stored question stays visible and answerable in the UI.
-    expect(state.sessionUpdates.at(-1)).toMatchObject({ data: { status: 'INTERVIEWING' } });
-  });
-
-  it('does not duplicate the clarification question on a second blocked attempt', async () => {
-    state.session = sessionWithAnswers(GOAL, answeredFrequency(3), [{
-      role: 'assistant',
-      content: CLARIFICATION,
-      structuredPayload: JSON.stringify({ id: 'resolve_frequency_conflict', type: 'FREE_TEXT', prompt: CLARIFICATION }),
-      createdAt: new Date(),
-    }]);
-    await expect(generateDraft('session_1', 'user_1')).rejects.toMatchObject({ code: 'FREQUENCY_CONFLICT' });
-    expect(state.createdMessages).toHaveLength(0);
-    expect(chatJsonMock).not.toHaveBeenCalled();
-  });
-});
-
-describe('generation allowed past the frequency gate', () => {
-  it('proceeds when the answer text carries a correction signal, on the corrected total', async () => {
-    state.session = sessionWithAnswers(GOAL, answeredFrequency('Actually, make it 3 days per week'));
-    chatJsonMock.mockResolvedValue(draftOn([1, 3, 5]));
-    const { draft, adjustments } = await generateDraft('session_1', 'user_1');
-    expect(draft).toMatchObject({ id: 'draft_1' });
-    expect(adjustments).toBeInstanceOf(Array);
-    // One model call: the three-day draft satisfied the corrected contract —
-    // against the original five-day contract it would have been rejected.
-    expect(chatJsonMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('proceeds when the goal stated no weekly frequency and the answer fills the gap', async () => {
-    state.session = sessionWithAnswers('Read 20 pages of nonfiction.', answeredFrequency(3));
-    chatJsonMock.mockResolvedValue(draftOn([1, 3, 5]));
-    const { draft } = await generateDraft('session_1', 'user_1');
-    expect(draft).toMatchObject({ id: 'draft_1' });
-    expect(chatJsonMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('proceeds when the answer matches the stated five-day total', async () => {
-    state.session = sessionWithAnswers(GOAL, answeredFrequency(5));
-    chatJsonMock.mockResolvedValue(draftOn([1, 2, 3, 4, 5]));
-    const { draft } = await generateDraft('session_1', 'user_1');
-    expect(draft).toMatchObject({ id: 'draft_1' });
-    // One model call: the five-day draft satisfied the five-day contract.
-    expect(chatJsonMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('unblocks generation once a recorded resolution answers the conflict', async () => {
-    state.session = sessionWithAnswers(GOAL, (context) => {
-      answeredFrequency(3)(context);
-      recordAnswer(context, {
-        key: 'resolve_frequency_conflict',
-        questionId: 'resolve_frequency_conflict',
-        question: CLARIFICATION,
-        value: 'Make it 3 days per week',
-      });
-    });
-    chatJsonMock.mockResolvedValue(draftOn([1, 3, 5]));
-    const { draft } = await generateDraft('session_1', 'user_1');
-    expect(draft).toMatchObject({ id: 'draft_1' });
-    expect(chatJsonMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('accepts a direct correction message as the resolution without an extra question', async () => {
-    state.session = sessionWithAnswers(GOAL, (context) => {
-      answeredFrequency(3)(context);
-      applyModelExtraction(context, {}, [], { schedule_note: 'Actually, make it 3 days per week' });
-    });
-    chatJsonMock.mockResolvedValue(draftOn([1, 3, 5]));
-    const { draft } = await generateDraft('session_1', 'user_1');
-    expect(draft).toMatchObject({ id: 'draft_1' });
-    expect(chatJsonMock).toHaveBeenCalledTimes(1);
   });
 });

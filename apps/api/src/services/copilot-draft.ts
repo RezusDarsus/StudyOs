@@ -1,4 +1,4 @@
-import { chatJson } from '../ai/client.js';
+﻿import { chatJson } from '../ai/client.js';
 import {
   PROMPT_VERSIONS,
   draftEditSystemPrompt,
@@ -15,6 +15,7 @@ import {
 import {
   DraftValidationError,
   rewardForTask,
+  validateAgainstAstContracts,
   validateAndNormalizeDraft,
   type NormalizedDraft,
   type NormalizedProgression,
@@ -22,35 +23,32 @@ import {
 import { todayIn } from '../domain/dates.js';
 import type { RecurrenceType } from '../domain/enums.js';
 import { validateRecurrence } from '../domain/recurrence.js';
-import { HttpError, badRequest, conflict, notFound } from '../lib/errors.js';
-import { describeExplicitConstraints, parseExplicitGoalConstraints } from '../ai/goal-constraints.js';
+import { badRequest, conflict, notFound } from '../lib/errors.js';
+import type { DbClient } from '../capabilities/types.js';
 import { prisma } from '../lib/prisma.js';
 import { ensureOccurrences } from './occurrences.js';
 import { createProgressionPlan } from './progression.js';
 import { recordEvent } from './copilot-analytics.js';
 import { extractPreferences, getPreferencesForPrompt } from './preferences.js';
-import { loadSession, sessionReadiness } from './copilot-session.js';
-import {
-  currentSessionFacts,
-  inferredValues,
-  parseContext,
-} from '../ai/context.js';
-import {
-  frequencyConflictClarification,
-  spokenUserStatements,
-  RESOLVE_FREQUENCY_CONFLICT_ID,
-} from '../ai/frequency-conflict.js';
+import { canForceGenerate, loadSession, sessionReadiness, HARD_MAX_QUESTIONS } from './copilot-session.js';
+import { currentSessionFacts, inferredValues, parseContext, parseRequirementState } from '../ai/context.js';
 import {
   classifyGoalText,
   MEMORY_GATE_CONFIDENCE,
   memoryGateCategory,
 } from '../ai/category.js';
 import { scorePlanQuality } from '../ai/plan-quality.js';
+import {
+  advisoryLinesFromState,
+  buildValidationSource,
+  contractsFromState,
+  evaluateAstReadiness,
+} from '../ai/requirements/index.js';
 
 const TRANSCRIPT_WINDOW = 20;
 
-async function userTimezone(userId: string) {
-  const profile = await prisma.profile.findUnique({ where: { userId } });
+async function userTimezone(userId: string, client: DbClient = prisma) {
+  const profile = await client.profile.findUnique({ where: { userId } });
   return profile?.timezone ?? 'UTC';
 }
 
@@ -61,6 +59,36 @@ function safeQuestionId(payload: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Constraint lines for the one informed repair retry, built from the AST
+ * projection (never from re-parsed prose).
+ */
+function astConstraintLines(contracts: ReturnType<typeof contractsFromState>): string[] {
+  const lines: string[] = [];
+  for (const [index, contract] of contracts.entries()) {
+    if (contract.exactWeekly !== undefined) lines.push(`exactly ${contract.exactWeekly} sessions per week`);
+    if (contract.maxWeekly !== undefined) lines.push(`at most ${contract.maxWeekly} sessions per week`);
+    if (contract.requiredWeekdays.length) {
+      const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      lines.push(`sessions on ${contract.requiredWeekdays.map((d) => names[d]).join(', ')}`);
+    }
+    if (contract.excludedWeekdays.length) {
+      const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      lines.push(`no sessions on ${contract.excludedWeekdays.map((d) => names[d]).join(', ')}`);
+    }
+    if (contract.maxMinutesPerSession !== undefined) lines.push(`sessions of at most ${contract.maxMinutesPerSession} minutes`);
+    if (contract.maxWeeklyMinutes !== undefined) lines.push(`at most ${contract.maxWeeklyMinutes} minutes per week`);
+    if (contract.deadline) lines.push(`deadline ${contract.deadline}`);
+    if (contract.monthly) lines.push(`a transfer every ${contract.monthly.intervalMonths} month(s)${contract.monthly.dayOfMonth !== undefined ? ` on day ${contract.monthly.dayOfMonth}` : ''}`);
+    if (contract.excludedMonths?.length) lines.push(`skipping months ${contract.excludedMonths.join(', ')}`);
+    if (contract.monthlyMoneyCap !== undefined) lines.push(`monthly contributions of at most ${contract.monthlyMoneyCap}`);
+    if (contract.roleMinWeekly.length) lines.push(contract.roleMinWeekly.map((r) => `at least ${r.minOccurrences} ${r.role} session(s) per week`).join(', '));
+    if (contract.forbiddenActivities.length) lines.push(`never schedule: ${contract.forbiddenActivities.join(', ')}`);
+    if (index > 0) break; // one variant describes the shared contract well enough
+  }
+  return lines;
 }
 
 /**
@@ -153,20 +181,53 @@ export async function generateDraft(
   }
 
   // The backend, not the model, decides when an interview is worth planning
-  // from. A session the readiness gate calls unfinished does not get a plan
-  // invented on its behalf — unless the user explicitly insists on one after
-  // having sat through at least two questions.
+  // from. The AST gate — ACTIVE atoms only — owns the verdict:
+  //
+  //   R1 containment: a failed extraction makes the state STALE. No force, no
+  //   conclusion, no generation until the next successful ingest.
+  //
+  //   Rev.3/Rev.4 force policy: `canForceGenerate` is the single predicate —
+  //   the same one the turn response reports. Force is only for the
+  //   safely-incomplete class (no conflict, no pending, no load-bearing
+  //   quarantine); post-claim safety/feasibility/contract gates always run.
+  const astState = parseRequirementState(session.structuredContext);
+  if (astState.meta?.lastTurnExtraction === 'failed') {
+    throw conflict(
+      "I couldn't process your latest message. Your answer is saved — send it again to continue.",
+      'NOT_READY',
+    );
+  }
+  const astReadiness = evaluateAstReadiness(astState, {
+    questionCount: session.questionCount,
+    maxQuestions: HARD_MAX_QUESTIONS,
+  });
   const readiness = sessionReadiness(session);
+  // Rev.4 B2: hard refusals are never force-overridable and never bypassed by
+  // the interview's own conclusion. A confirmed blocking conflict, an
+  // unresolved pending resolution, a load-bearing quarantine or a safety block
+  // refuses generation whatever the session status says.
+  if (astReadiness.conflicts.length || astReadiness.pending.length) {
+    const blocker =
+      astReadiness.conflicts[0]?.description ??
+      'an open question needs an answer';
+    throw conflict(
+      `The interview has not gathered enough information yet: ${blocker}`,
+      'NOT_READY',
+    );
+  }
   // An interview that has itself concluded as READY_TO_GENERATE has opened the
-  // gate: the hard question cap and the provider-outage fallback both end a
-  // vague interview there, with no next question left to ask. Refusing to
-  // generate then would dead-end the user, which the fallback question exists
-  // to prevent. The assumptions list already says the plan uses only what the
-  // user actually said.
+  // gate: the hard question cap ends a vague interview there, with no next
+  // question left to ask. Refusing to generate then would dead-end the user.
   const concluded = session.status === 'READY_TO_GENERATE';
-  const forced = concluded || (opts.force === true && session.questionCount >= 2);
-  if (!readiness.ready && !forced) {
-    throw conflict('The interview has not gathered enough information yet', 'NOT_READY');
+  const forced = concluded || (opts.force === true && canForceGenerate(session, astState));
+  if (!astReadiness.ready && !forced) {
+    const blocker = astReadiness.missing[0]
+      ? `the goal is missing required information (${astReadiness.missing.join(', ')})`
+      : 'the goal is missing required information';
+    throw conflict(
+      `The interview has not gathered enough information yet: ${blocker}`,
+      'NOT_READY',
+    );
   }
 
   // Claim the session before any model call. The conditional update is the
@@ -200,18 +261,12 @@ export async function generateDraft(
     return await buildDraft(session, userId, regenerate);
   } catch (err) {
     // Release the claim. The session goes back to the status it held before —
-    // never stuck at GENERATING, so the user can simply try again. The one
-    // exception is an unresolved frequency contradiction: the session is now
-    // blocked on a question the user must answer, so it returns to INTERVIEWING
-    // — READY_TO_GENERATE would let the snapshot hide the question and offer a
-    // Build button that can only fail again.
-    const releaseStatus = err instanceof HttpError && err.code === 'FREQUENCY_CONFLICT'
-      ? 'INTERVIEWING'
-      : session.status;
+    // never stuck at GENERATING, so the user can simply try again. Conflicts
+    // never get here: the AST readiness gate refuses them before the claim.
     await prisma.copilotSession
       .updateMany({
         where: { id: session.id, status: 'GENERATING' },
-        data: { status: releaseStatus },
+        data: { status: session.status },
       })
       .catch(() => {});
     throw err;
@@ -234,46 +289,27 @@ async function buildDraft(
   const sessionId = session.id;
   const timezone = await userTimezone(userId);
   const context = parseContext(session.structuredContext, session.initialGoalText);
+  const astState = parseRequirementState(session.structuredContext);
 
-  // Ground truth (what they literally answered or typed) is kept apart from
-  // everything inferred, so the prompt can rank them rather than seeing one
-  // flat blob. A direct message correction is the user speaking too, so it
-  // joins the answers — and the validation source — at the same authority.
-  const spoken = spokenUserStatements(context.entries);
-  const answers = spoken.reduce<Record<string, unknown>>((acc, entry) => {
-    acc[entry.key] = { question: entry.question ?? entry.key, answer: entry.value };
-    return acc;
-  }, {});
+  // Ground truth for the model prompt (what they literally answered or typed).
+  // The VALIDATION source is the AST-controlled canonical text (Rev.3 §A2):
+  // authoritative ACTIVE requirement evidence + bounded grounded unmodeled
+  // evidence + labeled assumptions. Raw goal text and transcript never reach
+  // a validator, and stale state cannot get here (the R1 gate above).
+  const answers = Object.entries(context.entries)
+    .filter(([, entry]) => entry.source === 'CURRENT_USER_ANSWER' || entry.source === 'CURRENT_USER_MESSAGE')
+    .reduce<Record<string, unknown>>((acc, [key, entry]) => {
+      acc[key] = { question: entry.question ?? key, answer: entry.value };
+      return acc;
+    }, {});
   const inferred = { ...currentSessionFacts(context), ...inferredValues(context) };
-  const validationSource = [
-    session.initialGoalText,
-    JSON.stringify(answers),
-  ].join('\n');
+  const validationSource = buildValidationSource(astState);
+  void session.initialGoalText;
 
-  // The original request and the interview can state two different weekly
-  // schedules ("every weekday" here, "3" there). The plan must not silently
-  // deviate from one of them, and nothing here gets to pick a side: a
-  // contradiction blocks generation with a clarification the user answers
-  // through the recorded resolve_frequency_conflict question (or a correction
-  // message), which parseExplicitGoalConstraints applies answer-last, so the
-  // resolved total becomes the contract on the next generate.
-  const frequencyConflict = frequencyConflictClarification(session.initialGoalText, spoken, todayIn(timezone));
-  if (frequencyConflict) {
-    const lastAssistant = [...session.messages].reverse().find((m) => m.role === 'assistant' && m.structuredPayload);
-    const alreadyAsked = !!lastAssistant?.structuredPayload && safeQuestionId(lastAssistant.structuredPayload) === RESOLVE_FREQUENCY_CONFLICT_ID;
-    if (!alreadyAsked) {
-      await prisma.copilotMessage.create({
-        data: {
-          sessionId,
-          role: 'assistant',
-          content: frequencyConflict.message,
-          structuredPayload: JSON.stringify(frequencyConflict.question),
-        },
-      });
-    }
-    // 409 with a distinct code — exactly how NOT_READY reaches the UI.
-    throw conflict(frequencyConflict.message, 'FREQUENCY_CONFLICT');
-  }
+  // Contradictions are owned by the AST conflict engine: the readiness gate
+  // above already refused on any of them, and the contract below is projected
+  // from ACTIVE atoms only.
+  const astContracts = astState.records.length > 0 ? contractsFromState(astState) : null;
 
   // Memory is gated on the user's own words, not the model's category guess.
   const gate = memoryGateCategory(session.initialGoalText, session.category);
@@ -338,7 +374,7 @@ async function buildDraft(
     }
   };
   try {
-    normalized = validateAndNormalizeDraft(raw, timezone, new Date(), validationSource);
+    normalized = validateAgainstAstContracts(raw, timezone, new Date(), validationSource, astContracts ?? []);
     requireUsefulPlan(normalized);
   } catch (err) {
     if (!(err instanceof DraftValidationError)) throw err;
@@ -346,9 +382,11 @@ async function buildDraft(
     // One informed retry: the model gets the exact violation plus the full list
     // of constraints parsed from the user's own words, so the replacement plan
     // is aimed at the real contract instead of guessing at a smaller plan.
-    const constraintLines = describeExplicitConstraints(
-      parseExplicitGoalConstraints(validationSource, todayIn(timezone)),
-    );
+    // Stage 5: under the AST the contract lines come from the projection —
+    // historical prose is never re-parsed to build them.
+    const constraintLines = astContracts
+      ? [...astConstraintLines(astContracts), ...advisoryLinesFromState(astState)]
+      : [];
     let repaired: GoalDraftInput = await chatJson(
       {
         purpose: 'DRAFT_GENERATION',
@@ -380,7 +418,7 @@ async function buildDraft(
     if (categoryGuess.category && categoryGuess.confidence >= MEMORY_GATE_CONFIDENCE) {
       repaired = { ...repaired, category: categoryGuess.category };
     }
-    normalized = validateAndNormalizeDraft(repaired, timezone, new Date(), validationSource);
+    normalized = validateAgainstAstContracts(repaired, timezone, new Date(), validationSource, astContracts ?? []);
     requireUsefulPlan(normalized);
   }
   const draft = await persistDraft({ userId, sessionId, draft: normalized });
@@ -409,8 +447,8 @@ async function buildDraft(
   return { draft, adjustments: normalized.adjustments };
 }
 
-export async function loadDraft(draftId: string, userId: string) {
-  const draft = await prisma.goalDraft.findUnique({
+export async function loadDraft(draftId: string, userId: string, client: DbClient = prisma) {
+  const draft = await client.goalDraft.findUnique({
     where: { id: draftId },
     include: { tasks: { orderBy: { sortOrder: 'asc' } } },
   });
@@ -447,7 +485,21 @@ export interface ManualDraftEdit {
 
 /** Editing by hand must not require the AI at all. */
 export async function applyManualEdit(draftId: string, userId: string, edit: ManualDraftEdit) {
-  const draft = await loadDraft(draftId, userId);
+  const result = await prisma.$transaction(async (tx) => applyManualEditInTx(draftId, userId, edit, tx));
+  await recordEvent({ userId, type: 'DRAFT_EDITED_MANUALLY', draftId });
+  return result;
+}
+
+/** The manual-edit writer — runs on the supplied client so the capability
+ *  executor can commit it atomically with its idempotency claim. Funnel
+ *  events fire post-commit in the caller. */
+export async function applyManualEditInTx(
+  draftId: string,
+  userId: string,
+  edit: ManualDraftEdit,
+  client: DbClient,
+) {
+  const draft = await loadDraft(draftId, userId, client);
   if (draft.status === 'CONFIRMED') throw badRequest('This draft has already been used');
 
   if (edit.tasks) {
@@ -474,8 +526,8 @@ export async function applyManualEdit(draftId: string, userId: string, edit: Man
       return byId ?? laddersByTitle.get(task.title.trim().toLowerCase()) ?? null;
     };
 
-    await prisma.goalDraftTask.deleteMany({ where: { draftId } });
-    await prisma.goalDraftTask.createMany({
+    await client.goalDraftTask.deleteMany({ where: { draftId } });
+    await client.goalDraftTask.createMany({
       data: edit.tasks.map((task, index) => {
         const progressionConfig = carriedLadder(task);
         return {
@@ -497,7 +549,7 @@ export async function applyManualEdit(draftId: string, userId: string, edit: Man
     });
   }
 
-  await prisma.goalDraft.update({
+  await client.goalDraft.update({
     where: { id: draftId },
     data: {
       title: edit.title?.trim(),
@@ -508,8 +560,7 @@ export async function applyManualEdit(draftId: string, userId: string, edit: Man
     },
   });
 
-  await recordEvent({ userId, type: 'DRAFT_EDITED_MANUALLY', draftId });
-  return loadDraft(draftId, userId);
+  return loadDraft(draftId, userId, client);
 }
 
 // ----------------------------------------------------------------- AI edits
@@ -570,6 +621,17 @@ export async function applyCopilotEdit(draftId: string, userId: string, message:
  * shows this instead of taking the assistant's word for it.
  */
 export async function applyPatch(draftId: string, userId: string, patch: DraftPatch) {
+  return prisma.$transaction(async (tx) => applyPatchInTx(draftId, userId, patch, tx));
+}
+
+/** The patch writer — runs entirely on the supplied client so the capability
+ *  executor can commit it atomically with its idempotency claim. */
+export async function applyPatchInTx(
+  draftId: string,
+  userId: string,
+  patch: DraftPatch,
+  client: DbClient,
+): Promise<{ draft: Awaited<ReturnType<typeof loadDraft>>; applied: string[] }> {
   const draft = await loadDraft(draftId, userId);
   const validIds = new Set(draft.tasks.map((t) => t.id));
   const applied: string[] = [];
@@ -578,7 +640,7 @@ export async function applyPatch(draftId: string, userId: string, patch: DraftPa
   for (const op of patch.operations) {
     switch (op.type) {
       case 'UPDATE_GOAL': {
-        await prisma.goalDraft.update({
+        await client.goalDraft.update({
           where: { id: draftId },
           data: {
             title: op.changes.title,
@@ -606,7 +668,7 @@ export async function applyPatch(draftId: string, userId: string, patch: DraftPa
           };
           validateRecurrence(recurrence.type, config);
         }
-        await prisma.goalDraftTask.update({
+        await client.goalDraftTask.update({
           where: { id: op.taskId },
           data: {
             title: op.changes.title,
@@ -641,7 +703,7 @@ export async function applyPatch(draftId: string, userId: string, patch: DraftPa
         // Never let an edit empty the plan entirely.
         if (draft.tasks.length <= 1) break;
         applied.push(`Removed “${titleOf(op.taskId)}”`);
-        await prisma.goalDraftTask.delete({ where: { id: op.taskId } });
+        await client.goalDraftTask.delete({ where: { id: op.taskId } });
         validIds.delete(op.taskId);
         break;
       }
@@ -657,7 +719,7 @@ export async function applyPatch(draftId: string, userId: string, patch: DraftPa
           intervalMonths: op.task.recurrence.intervalMonths,
         };
         validateRecurrence(op.task.recurrence.type, config);
-        const created = await prisma.goalDraftTask.create({
+        const created = await client.goalDraftTask.create({
           data: {
             draftId,
             title: op.task.title,
@@ -677,8 +739,8 @@ export async function applyPatch(draftId: string, userId: string, patch: DraftPa
     }
   }
 
-  await prisma.goalDraft.update({ where: { id: draftId }, data: { status: 'EDITING' } });
-  return { draft: await loadDraft(draftId, userId), applied };
+  await client.goalDraft.update({ where: { id: draftId }, data: { status: 'EDITING' } });
+  return { draft: await loadDraft(draftId, userId, client), applied };
 }
 
 // ---------------------------------------------------------------- confirm
@@ -690,36 +752,51 @@ export async function applyPatch(draftId: string, userId: string, patch: DraftPa
  * that manual creation uses — no duplicated creation logic lives in the AI module.
  */
 export async function confirmDraft(draftId: string, userId: string) {
-  const draft = await loadDraft(draftId, userId);
+  // Stage 4: the whole confirm sequence — claim, goal, tasks, ladders,
+  // occurrences, createdGoalId, session — commits in ONE transaction. A
+  // mid-sequence failure rolls back to a fully un-confirmed draft (retryable)
+  // instead of a CONFIRMED draft with no goal behind it.
+  const result = await prisma.$transaction(async (tx) => confirmDraftInTx(draftId, userId, tx));
+  if (!result.alreadyCreated) {
+    await recordEvent({
+      userId,
+      type: 'DRAFT_CONFIRMED',
+      draftId,
+      meta: { goalId: result.goalId },
+    });
+  }
+  return result;
+}
+
+/** The confirm writer — runs on the supplied client so the capability executor
+ *  commits claim + mutation + finalize atomically. Funnel events fire
+ *  post-commit in the caller. */
+export async function confirmDraftInTx(draftId: string, userId: string, client: DbClient) {
+  const draft = await loadDraft(draftId, userId, client);
   if (draft.status === 'CONFIRMED' && draft.createdGoalId) {
     return { goalId: draft.createdGoalId, alreadyCreated: true };
   }
   if (draft.tasks.length === 0) throw badRequest('This plan has no tasks');
 
   // Atomic claim: of any number of concurrent confirms, exactly one moves the
-  // draft into CONFIRMED and is allowed to create the Goal. Everyone else
-  // either sees that goal appear below or learns the draft was already used.
-  const claim = await prisma.goalDraft.updateMany({
+  // draft into CONFIRMED and is allowed to create the Goal. Within a
+  // transaction the update blocks on a racing confirm's row lock and then
+  // reads the committed state — a completed rival yields its goal id; a rolled-
+  // back rival leaves the draft claimable again.
+  const claim = await client.goalDraft.updateMany({
     where: { id: draftId, status: { not: 'CONFIRMED' } },
     data: { status: 'CONFIRMED' },
   });
   if (claim.count === 0) {
-    // The winner is usually still mid-creation here — creating a goal is
-    // several inserts — so wait briefly for the goal id to land rather than
-    // answer a double-click with an error.
-    const deadline = Date.now() + 3_000;
-    for (;;) {
-      const latest = await prisma.goalDraft.findUniqueOrThrow({ where: { id: draftId } });
-      if (latest.createdGoalId) return { goalId: latest.createdGoalId, alreadyCreated: true };
-      if (Date.now() > deadline) throw badRequest('This draft has already been used');
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+    const latest = await client.goalDraft.findUniqueOrThrow({ where: { id: draftId } });
+    if (latest.createdGoalId) return { goalId: latest.createdGoalId, alreadyCreated: true };
+    throw badRequest('This draft has already been used');
   }
 
-  const timezone = await userTimezone(userId);
+  const timezone = await userTimezone(userId, client);
   const startDate = todayIn(timezone);
 
-  const goal = await prisma.goal.create({
+  const goal = await client.goal.create({
     data: {
       ownerId: userId,
       title: draft.title,
@@ -772,7 +849,7 @@ export async function confirmDraft(draftId: string, userId: string) {
           metricType: ladder.metricType,
           unitLabel: ladder.unitLabel,
           stages: ladder.stages,
-        });
+        }, client);
       } catch {
         continue;
       }
@@ -781,27 +858,19 @@ export async function confirmDraft(draftId: string, userId: string) {
 
   // After the plans, deliberately. Occurrences are born carrying their stage's
   // target, so day one asks for the first rung instead of nothing.
-  await ensureOccurrences(goal.id);
+  await ensureOccurrences(goal.id, undefined, new Date(), client);
 
   // Status was set to CONFIRMED by the claim above; only the goal id lands here.
-  await prisma.goalDraft.update({
+  await client.goalDraft.update({
     where: { id: draftId },
     data: { createdGoalId: goal.id },
   });
   if (draft.sessionId) {
-    await prisma.copilotSession.update({
+    await client.copilotSession.update({
       where: { id: draft.sessionId },
       data: { status: 'CONFIRMED' },
     });
   }
-
-  await recordEvent({
-    userId,
-    type: 'DRAFT_CONFIRMED',
-    draftId,
-    sessionId: draft.sessionId ?? undefined,
-    meta: { goalId: goal.id },
-  });
 
   return { goalId: goal.id, alreadyCreated: false };
 }

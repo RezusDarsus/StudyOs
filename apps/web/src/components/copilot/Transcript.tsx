@@ -46,9 +46,9 @@ export default function Transcript({
             <div
               className="px-3.5 py-2.5 rounded-2xl animate-slide-up"
               style={{
-                background: bubble.role === 'user' ? '#7c3aed' : '#f5f4ff',
-                color: bubble.role === 'user' ? '#fff' : '#1a1635',
-                border: bubble.role === 'user' ? 'none' : '1px solid #e8e6f5',
+                background: bubble.role === 'user' ? 'var(--surface-3)' : 'var(--surface-2)',
+                color: bubble.role === 'user' ? 'var(--text)' : 'var(--text)',
+                border: bubble.role === 'user' ? 'none' : '1px solid var(--hairline)',
                 fontSize: '0.88rem',
                 lineHeight: 1.55,
                 borderBottomRightRadius: bubble.role === 'user' ? 6 : 16,
@@ -65,7 +65,7 @@ export default function Transcript({
           <div className="self-start">
             <div
               className="px-3.5 py-2.5 rounded-2xl flex items-center gap-1.5"
-              style={{ background: '#f5f4ff', border: '1px solid #e8e6f5' }}
+              style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}
             >
               {[0, 1, 2].map((i) => (
                 <span
@@ -74,13 +74,13 @@ export default function Transcript({
                   style={{
                     width: 6,
                     height: 6,
-                    background: '#b8b5d5',
+                    background: 'var(--text-faint)',
                     animationDelay: `${i * 0.15}s`,
                     animationDuration: '1s',
                   }}
                 />
               ))}
-              <span style={{ fontSize: '0.78rem', color: '#8b88b0', marginLeft: 4 }}>
+              <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginLeft: 4 }}>
                 {thinkingLabel}
               </span>
             </div>

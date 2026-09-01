@@ -66,12 +66,15 @@ async function logCall(entry: {
  * Call the model and parse its reply into a validated shape.
  *
  * If the model returns something that is not valid against the schema, it gets
- * up to two corrective retries with the parse error fed back. Anything still
- * broken surfaces as an error rather than being half-saved.
+ * up to two corrective retries with the parse error fed back (one for callers
+ * that pass a tighter budget — the Stage 5 interview turn allows at most one
+ * schema-repair call). Anything still broken surfaces as an error rather than
+ * being half-saved.
  */
 export async function chatJson<S extends z.ZodTypeAny>(
   request: Omit<ChatRequest, 'json'>,
   schema: S,
+  opts?: { maxAttempts?: number },
 ): Promise<z.infer<S>> {
   const provider = getProvider();
   if (!provider) throw new CopilotUnavailableError();
@@ -83,7 +86,7 @@ export async function chatJson<S extends z.ZodTypeAny>(
   // two — they need completely different fixes.
   const startedAt = Date.now();
 
-  const maxAttempts = 3;
+  const maxAttempts = Math.max(1, opts?.maxAttempts ?? 3);
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     let response;
     try {

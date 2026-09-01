@@ -12,6 +12,23 @@ import { X } from 'lucide-react';
 // Primitives shared across every screen. Colours, radii and shadows all come
 // from the tokens in index.css so nothing here invents new styling.
 
+/** One Up's supplied rising-step mark, isolated onto transparency for UI use. */
+export function UpMarker({ size = 36, inverse = false }: { size?: number; inverse?: boolean }) {
+  return (
+    <img className={`oneup-source-mark${inverse ? ' oneup-source-mark--inverse' : ''}`} src="/assets/oneup-mark-transparent.png" width={size} height={size} alt="" aria-hidden="true" />
+  );
+}
+
+/** Purpose-built empty-state character; intentionally abstract, never emoji. */
+export function MomentumCompanion() {
+  return (
+    <div className="momentum-companion" aria-hidden="true">
+      <span className="momentum-companion__body"><i /><i /></span>
+      <span className="momentum-companion__trail"><i /><i /><i /></span>
+    </div>
+  );
+}
+
 export function ProgressBar({ value, height = 8 }: { value: number; height?: number }) {
   const clamped = Math.max(0, Math.min(100, value));
   return (
@@ -46,25 +63,19 @@ export function ProgressCircle({
   return (
     <div className="relative flex items-center justify-center" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="-rotate-90" aria-hidden="true">
-        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="#ede9f8" strokeWidth={stroke} />
+        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="var(--surface-3)" strokeWidth={stroke} />
         <circle
           cx={size / 2}
           cy={size / 2}
           r={radius}
           fill="none"
-          stroke="url(#goalify-progress)"
+          stroke="var(--accent)"
           strokeWidth={stroke}
           strokeLinecap="round"
           strokeDasharray={circumference}
           strokeDashoffset={circumference - (clamped / 100) * circumference}
-          style={{ transition: 'stroke-dashoffset .8s cubic-bezier(.4,0,.2,1)' }}
+          style={{ transition: 'stroke-dashoffset .5s cubic-bezier(.4,0,.2,1)' }}
         />
-        <defs>
-          <linearGradient id="goalify-progress" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor="#7c3aed" />
-            <stop offset="100%" stopColor="#a855f7" />
-          </linearGradient>
-        </defs>
       </svg>
       <div className="absolute inset-0 flex items-center justify-center">{children}</div>
     </div>
@@ -79,11 +90,11 @@ export function Badge({
   tone?: 'neutral' | 'primary' | 'success' | 'warning' | 'danger';
 }) {
   const tones = {
-    neutral: { background: '#f5f4ff', color: '#6b688f', border: '#e8e6f5' },
-    primary: { background: '#f0ebff', color: '#7c3aed', border: '#ddd0ff' },
-    success: { background: '#e8f9f0', color: '#0f9d58', border: '#c6f0dc' },
-    warning: { background: '#fff5e6', color: '#b26a00', border: '#ffe3b8' },
-    danger: { background: '#ffeef0', color: '#c8253c', border: '#ffd3d9' },
+    neutral: { background: 'var(--surface-2)', color: 'var(--text-body)', border: 'var(--hairline)' },
+    primary: { background: 'var(--surface-3)', color: 'var(--text)', border: 'var(--hairline-strong)' },
+    success: { background: 'var(--green-tint)', color: 'var(--green)', border: 'var(--green-line)' },
+    warning: { background: 'var(--note-tint)', color: 'var(--note-ink)', border: 'var(--note-line)' },
+    danger: { background: 'var(--red-tint)', color: 'var(--red)', border: 'var(--red-line)' },
   }[tone];
 
   return (
@@ -94,8 +105,8 @@ export function Badge({
         color: tones.color,
         border: `1px solid ${tones.border}`,
         fontSize: 11,
-        fontWeight: 700,
-        fontFamily: 'Plus Jakarta Sans, sans-serif',
+        fontWeight: 500,
+        fontFamily: 'var(--font-sans)',
       }}
     >
       {children}
@@ -108,14 +119,15 @@ export function StreakBadge({ days, size = 'md' }: { days: number; size?: 'sm' |
     <span
       className="inline-flex items-center gap-1"
       style={{
-        color: '#f97316',
-        fontWeight: 700,
+        color: 'var(--text-body)',
+        fontWeight: 500,
         fontSize: size === 'sm' ? 11 : 13,
-        fontFamily: 'Plus Jakarta Sans, sans-serif',
+        fontFamily: 'var(--font-sans)',
+        fontVariantNumeric: 'tabular-nums',
       }}
       title={`${days} day streak`}
     >
-      <span aria-hidden="true">🔥</span>
+      <span className="mini-up-marker" aria-hidden="true"><i /><i /></span>
       {days} {size === 'sm' ? '' : days === 1 ? 'day' : 'days'}
     </span>
   );
@@ -144,9 +156,9 @@ export function Avatar({
       style={{
         width: size,
         height: size,
-        background: 'linear-gradient(135deg, #7c3aed, #a855f7)',
+        background: 'var(--surface-3)',
         fontSize: size * 0.45,
-        boxShadow: ring ? '0 0 0 3px #ddd0ff' : undefined,
+        boxShadow: ring ? '0 0 0 3px var(--hairline-strong)' : undefined,
       }}
       aria-hidden="true"
     >
@@ -162,7 +174,7 @@ export function AvatarGroup({ people, max = 4 }: { people: Array<{ avatarEmoji: 
     <div className="flex items-center">
       {shown.map((p, i) => (
         <div key={p.name + i} style={{ marginLeft: i === 0 ? 0 : -10 }} title={p.name}>
-          <div style={{ boxShadow: '0 0 0 2px #fff', borderRadius: 999 }}>
+          <div style={{ boxShadow: '0 0 0 2px var(--bg)', borderRadius: 999 }}>
             <Avatar emoji={p.avatarEmoji} size={28} />
           </div>
         </div>
@@ -174,11 +186,11 @@ export function AvatarGroup({ people, max = 4 }: { people: Array<{ avatarEmoji: 
             marginLeft: -10,
             width: 28,
             height: 28,
-            background: '#f0ebff',
-            color: '#7c3aed',
-            border: '2px solid #fff',
+            background: 'var(--surface-3)',
+            color: 'var(--text)',
+            border: '2px solid var(--bg)',
             fontSize: 10,
-            fontWeight: 700,
+            fontWeight: 500,
           }}
         >
           +{extra}
@@ -189,7 +201,7 @@ export function AvatarGroup({ people, max = 4 }: { people: Array<{ avatarEmoji: 
 }
 
 export function EmptyState({
-  emoji,
+  emoji: _emoji,
   title,
   body,
   action,
@@ -201,13 +213,11 @@ export function EmptyState({
 }) {
   return (
     <div className="card shadow-card flex flex-col items-center text-center px-6 py-12">
-      <div style={{ fontSize: 44 }} aria-hidden="true">
-        {emoji}
-      </div>
-      <h3 className="mt-3" style={{ fontSize: '1.15rem', fontWeight: 800, color: '#1a1635' }}>
+      <MomentumCompanion />
+      <h3 className="mt-3" style={{ fontSize: '1.15rem', fontWeight: 600, color: 'var(--text)' }}>
         {title}
       </h3>
-      <p className="mt-1.5 max-w-sm" style={{ fontSize: '.9rem', color: '#6b688f', lineHeight: 1.6 }}>
+      <p className="mt-1.5 max-w-sm" style={{ fontSize: '.9rem', color: 'var(--text-body)', lineHeight: 1.6 }}>
         {body}
       </p>
       {action && <div className="mt-5">{action}</div>}
@@ -222,7 +232,7 @@ export function Skeleton({ height = 16, width = '100%', radius = 10 }: { height?
         height,
         width,
         borderRadius: radius,
-        background: 'linear-gradient(90deg, #f0ebff 25%, #e8e6f5 37%, #f0ebff 63%)',
+        background: 'linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 37%, var(--surface-2) 63%)',
         backgroundSize: '400% 100%',
         animation: 'shimmer 1.4s ease infinite',
       }}
@@ -237,7 +247,7 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry?: ()
       <div style={{ fontSize: 34 }} aria-hidden="true">
         ⚠️
       </div>
-      <p className="mt-2" style={{ fontWeight: 700, color: '#1a1635' }}>
+      <p className="mt-2" style={{ fontWeight: 500, color: 'var(--text)' }}>
         {message}
       </p>
       {onRetry && (
@@ -280,7 +290,7 @@ export function Modal({
   return (
     <div
       className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4"
-      style={{ background: 'rgba(26,22,53,0.45)', backdropFilter: 'blur(4px)' }}
+      style={{ background: 'rgba(17,18,19,0.4)', backdropFilter: 'blur(4px)' }}
       onClick={onClose}
       role="dialog"
       aria-modal="true"
@@ -288,26 +298,26 @@ export function Modal({
     >
       <div
         className="card shadow-card-lg w-full sm:max-w-lg max-h-[85vh] overflow-y-auto animate-slide-up"
-        style={{ borderRadius: '20px 20px 0 0' }}
+        style={{ borderRadius: '10px 10px 0 0' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div
           className="sticky top-0 flex items-center justify-between px-5 py-4"
-          style={{ background: '#fff', borderBottom: '1px solid #e8e6f5' }}
+          style={{ background: 'var(--surface)', borderBottom: '1px solid var(--hairline)' }}
         >
-          <h2 style={{ fontSize: '1.05rem', fontWeight: 800, color: '#1a1635' }}>{title}</h2>
+          <h2 style={{ fontSize: '1.05rem', fontWeight: 600, color: 'var(--text)' }}>{title}</h2>
           <button
             onClick={onClose}
             aria-label="Close"
             className="flex items-center justify-center rounded-lg"
-            style={{ width: 32, height: 32, color: '#6b688f' }}
+            style={{ width: 32, height: 32, color: 'var(--text-body)' }}
           >
             <X size={18} />
           </button>
         </div>
         <div className="px-5 py-4">{children}</div>
         {footer && (
-          <div className="px-5 py-4 flex gap-3 justify-end" style={{ borderTop: '1px solid #e8e6f5' }}>
+          <div className="px-5 py-4 flex gap-3 justify-end" style={{ borderTop: '1px solid var(--hairline)' }}>
             {footer}
           </div>
         )}
@@ -351,13 +361,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {toasts.map((toast) => (
           <div
             key={toast.id}
-            className="animate-bounce-in px-4 py-2.5 rounded-xl shadow-card-lg flex items-center gap-2"
+            className="animate-resolve-in px-4 py-2.5 rounded-xl shadow-card-lg flex items-center gap-2"
             style={{
-              background: toast.tone === 'error' ? '#ffeef0' : '#1a1635',
-              color: toast.tone === 'error' ? '#c8253c' : '#fff',
-              border: toast.tone === 'error' ? '1px solid #ffd3d9' : 'none',
-              fontFamily: 'Plus Jakarta Sans, sans-serif',
-              fontWeight: 700,
+              background: toast.tone === 'error' ? 'var(--red-tint)' : 'var(--surface-2)',
+              color: toast.tone === 'error' ? 'var(--red)' : 'var(--text)',
+              border: `1px solid ${toast.tone === 'error' ? 'var(--red-line)' : 'var(--hairline-strong)'}`,
+              fontFamily: 'var(--font-sans)',
+              fontWeight: 500,
               fontSize: '.85rem',
             }}
           >

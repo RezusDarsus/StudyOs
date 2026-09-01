@@ -9,13 +9,12 @@ import {
   Trophy,
   User,
   Users,
-  Zap,
 } from 'lucide-react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { CopilotProvider } from './copilot/CopilotProvider';
 import { useAuth } from '../lib/auth';
 import { NotificationsProvider, useNotifications } from '../lib/notifications';
-import { ProgressBar } from './ui';
+import { ProgressBar, UpMarker } from './ui';
 
 const navItems = [
   { icon: Home, label: 'Home', to: '/app' },
@@ -43,28 +42,17 @@ function Sidebar() {
 
   return (
     <aside
-      className="hidden lg:flex flex-col h-full overflow-hidden"
-      style={{ width: 256, minWidth: 256, background: '#ffffff', borderRight: '1px solid #e8e6f5' }}
+      className="app-sidebar hidden lg:flex flex-col h-full overflow-hidden"
     >
       <div className="p-5">
-        <NavLink to="/app" className="flex items-center gap-2.5 mb-8">
-          <div
-            className="flex items-center justify-center rounded-xl"
-            style={{
-              width: 36,
-              height: 36,
-              background: 'linear-gradient(135deg, #7c3aed, #6d28d9)',
-              boxShadow: '0 4px 12px rgba(124,58,237,0.4)',
-            }}
-          >
-            <Zap size={18} fill="white" color="white" />
-          </div>
+        <NavLink to="/app" className="flex items-center gap-2.5 mb-8 brand-link">
+          <UpMarker size={36} />
           <span
             style={{
-              fontFamily: 'Plus Jakarta Sans',
-              fontWeight: 800,
+              fontFamily: 'var(--font-sans)',
+              fontWeight: 600,
               fontSize: '1.1rem',
-              color: '#1a1635',
+              color: 'var(--text)',
             }}
           >
             One Up
@@ -86,7 +74,7 @@ function Sidebar() {
         </nav>
       </div>
 
-      <div className="mt-auto p-5" style={{ borderTop: '1px solid #e8e6f5' }}>
+      <div className="mt-auto p-5" style={{ borderTop: '1px solid var(--hairline)' }}>
         <div className="flex flex-col gap-0.5 mb-4">
           <NavLink
             to="/app/notifications"
@@ -96,8 +84,8 @@ function Sidebar() {
               <Bell size={17} />
               {unread > 0 && (
                 <span
-                  className="absolute -top-1.5 -right-1.5 flex items-center justify-center rounded-full text-white"
-                  style={{ width: 14, height: 14, fontSize: 9, fontWeight: 700, background: '#7c3aed' }}
+                  className="absolute -top-1.5 -right-1.5 flex items-center justify-center rounded-full"
+                  style={{ width: 14, height: 14, fontSize: 9, fontWeight: 500, background: 'var(--accent)', color: 'var(--accent-ink)' }}
                 >
                   {unread}
                 </span>
@@ -108,11 +96,11 @@ function Sidebar() {
               <span
                 className="ml-auto rounded-full px-1.5 py-0.5"
                 style={{
-                  background: '#f0ebff',
-                  color: '#7c3aed',
+                  background: 'var(--surface-3)',
+                  color: 'var(--text)',
                   fontSize: 11,
-                  fontWeight: 700,
-                  fontFamily: 'Plus Jakarta Sans',
+                  fontWeight: 500,
+                  fontFamily: 'var(--font-sans)',
                 }}
               >
                 {unread}
@@ -143,27 +131,28 @@ function Sidebar() {
         <NavLink
           to="/app/profile"
           className="w-full flex items-center gap-3 p-3 rounded-xl transition-all"
-          style={{ background: '#f5f4ff', border: '1px solid #e8e6f5' }}
+          style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}
         >
           <div
             className="relative flex-shrink-0 rounded-full flex items-center justify-center"
             style={{
               width: 38,
               height: 38,
-              background: 'linear-gradient(135deg, #7c3aed, #a855f7)',
-              fontSize: 17,
+              background: 'var(--surface-3)',
+              fontSize: 12,
+              fontWeight: 700,
             }}
           >
-            {user?.avatarEmoji ?? '🐱'}
+            {(user?.name ?? 'You').slice(0, 2).toUpperCase()}
           </div>
           <div className="flex-1 min-w-0">
             <div
               className="truncate"
               style={{
-                fontFamily: 'Plus Jakarta Sans',
-                fontWeight: 700,
+                fontFamily: 'var(--font-sans)',
+                fontWeight: 500,
                 fontSize: '0.85rem',
-                color: '#1a1635',
+                color: 'var(--text)',
               }}
             >
               {user?.name ?? 'You'}
@@ -172,12 +161,12 @@ function Sidebar() {
               <div className="flex-1">
                 <ProgressBar value={user?.percent ?? 0} height={4} />
               </div>
-              <span style={{ fontSize: 10, color: '#8b88b0', fontWeight: 700 }}>
+              <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 500 }}>
                 Lv.{user?.level ?? 1}
               </span>
             </div>
           </div>
-          <ChevronRight size={14} style={{ color: '#b8b5d5' }} />
+          <ChevronRight size={14} style={{ color: 'var(--text-faint)' }} />
         </NavLink>
       </div>
     </aside>
@@ -189,10 +178,9 @@ function MobileNav() {
     <nav
       className="lg:hidden fixed bottom-0 left-0 right-0 flex items-center z-50"
       style={{
-        background: 'rgba(255,255,255,0.95)',
+        background: 'rgba(246,245,238,0.88)',
         backdropFilter: 'blur(20px)',
-        borderTop: '1px solid #e8e6f5',
-        boxShadow: '0 -4px 20px rgba(124,58,237,0.08)',
+        borderTop: '1px solid var(--hairline)',
         paddingBottom: 'env(safe-area-inset-bottom)',
       }}
       aria-label="Main"
@@ -212,18 +200,18 @@ function MobileNav() {
                 style={{
                   width: 32,
                   height: 32,
-                  background: isActive ? '#f0ebff' : 'transparent',
+                  background: isActive ? 'var(--surface-3)' : 'transparent',
                   transition: 'background 0.18s',
                 }}
               >
-                <Icon size={19} style={{ color: isActive ? '#7c3aed' : '#8b88b0' }} />
+                <Icon size={19} style={{ color: isActive ? 'var(--text)' : 'var(--text-muted)' }} />
               </div>
               <span
                 style={{
                   fontSize: 10,
-                  fontWeight: isActive ? 700 : 500,
-                  color: isActive ? '#7c3aed' : '#8b88b0',
-                  fontFamily: 'Plus Jakarta Sans',
+                  fontWeight: isActive ? 500 : 400,
+                  color: isActive ? 'var(--text)' : 'var(--text-muted)',
+                  fontFamily: 'var(--font-sans)',
                 }}
               >
                 {label}
@@ -245,19 +233,14 @@ function MobileHeader() {
     <header
       className="lg:hidden sticky top-0 z-40 flex items-center justify-between px-4 py-3"
       style={{
-        background: 'rgba(255,255,255,0.95)',
+        background: 'rgba(246,245,238,0.88)',
         backdropFilter: 'blur(20px)',
-        borderBottom: '1px solid #e8e6f5',
+        borderBottom: '1px solid var(--hairline)',
       }}
     >
       <NavLink to="/app" className="flex items-center gap-2">
-        <div
-          className="flex items-center justify-center rounded-lg"
-          style={{ width: 30, height: 30, background: 'linear-gradient(135deg, #7c3aed, #6d28d9)' }}
-        >
-          <Zap size={15} fill="white" color="white" />
-        </div>
-        <span style={{ fontFamily: 'Plus Jakarta Sans', fontWeight: 800, color: '#1a1635' }}>
+        <UpMarker size={30} />
+        <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 600, color: 'var(--text)' }}>
           One Up
         </span>
       </NavLink>
@@ -265,14 +248,14 @@ function MobileHeader() {
       <NavLink
         to="/app/notifications"
         className="relative flex items-center justify-center rounded-xl"
-        style={{ width: 38, height: 38, background: '#f5f4ff', border: '1px solid #e8e6f5' }}
+        style={{ width: 38, height: 38, background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}
         aria-label={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'}
       >
-        <Bell size={18} style={{ color: '#6b688f' }} />
+        <Bell size={18} style={{ color: 'var(--text-body)' }} />
         {unread > 0 && (
           <span
-            className="absolute top-1 right-1 flex items-center justify-center rounded-full text-white"
-            style={{ width: 15, height: 15, fontSize: 9, fontWeight: 700, background: '#7c3aed' }}
+            className="absolute top-1 right-1 flex items-center justify-center rounded-full"
+            style={{ width: 15, height: 15, fontSize: 9, fontWeight: 500, background: 'var(--accent)', color: 'var(--accent-ink)' }}
           >
             {unread}
           </span>
@@ -280,14 +263,14 @@ function MobileHeader() {
       </NavLink>
       <button
         className="flex items-center justify-center rounded-xl"
-        style={{ width: 38, height: 38, background: '#f5f4ff', border: '1px solid #e8e6f5' }}
+        style={{ width: 38, height: 38, background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}
         aria-label="Log out"
         onClick={async () => {
           await logout();
           navigate('/');
         }}
       >
-        <LogOut size={18} style={{ color: '#6b688f' }} />
+        <LogOut size={18} style={{ color: 'var(--text-body)' }} />
       </button>
       </div>
     </header>
@@ -300,7 +283,7 @@ export default function AppShell() {
     // and register pages: there is no session cookie to authenticate a connection there.
     <NotificationsProvider>
       <CopilotProvider>
-        <div className="flex h-screen overflow-hidden" style={{ background: '#f5f4ff' }}>
+        <div className="app-frame flex h-screen overflow-hidden" style={{ background: 'var(--bg)' }}>
           <a href="#main" className="skip-link">
             Skip to content
           </a>

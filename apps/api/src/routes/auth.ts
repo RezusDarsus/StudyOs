@@ -227,6 +227,32 @@ export default async function authRoutes(app: FastifyInstance) {
         preferences: true,
         notifications: true,
         rewards: true,
+        // Stage 2: the user's durable recommendation history is their data and
+        // belongs in the export. Account deletion removes it by cascade.
+        recommendationEvents: {
+          select: {
+            id: true,
+            entityType: true,
+            displayName: true,
+            attribution: true,
+            eventKind: true,
+            schemaVersion: true,
+            payload: true,
+            occurredAt: true,
+          },
+        },
+        // Stage 4: the capability execution audit is the user's action history.
+        capabilityExecutions: {
+          select: {
+            id: true,
+            capability: true,
+            operationId: true,
+            state: true,
+            confirmation: true,
+            errorCode: true,
+            createdAt: true,
+          },
+        },
       },
     });
     return { exportedAt: new Date().toISOString(), user };

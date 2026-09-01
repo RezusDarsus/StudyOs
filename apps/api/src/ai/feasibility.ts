@@ -11,6 +11,19 @@
 // narrow: a missed signal costs one extra question, a false alarm costs a plan.
 
 import { daysBetween, isDayString, todayIn } from '../domain/dates.js';
+import { getRuntimeKnowledge, portMemo } from './runtime-knowledge.js';
+
+// The feasibility gate: a deterministic check that the draft is chasing something
+// a schedule can actually deliver.
+//
+// The plan pipeline will happily build eight tasks for "become twice as creative
+// in 30 days" — the schedule is valid, and the goal is nonsense. Creativity has no
+// unit a build-up ladder can count, so any plan for it is theater. This gate reads
+// the user's own words (plus the draft's target/deadline) and refuses the two ways
+// a goal can be unplannable: quantifying the unquantifiable inside a short window
+// (NEEDS_REFRAME), or naming no measurable outcome at all (NEEDS_CLARIFICATION).
+// Like the rest of the deterministic layer, it is keyword-based and deliberately
+// narrow: a missed signal costs one extra question, a false alarm costs a plan.
 
 export type FeasibilityVerdict = 'OK' | 'NEEDS_CLARIFICATION' | 'NEEDS_REFRAME';
 
@@ -26,16 +39,21 @@ export interface FeasibilityAssessment {
   reason?: string;
 }
 
-/** Qualities with no unit to count, so "twice as" or "50% more" cannot be delivered. */
-const NON_MEASURABLE_QUALITIES = [
-  'creativity', 'creative', 'smarter', 'intelligence', 'charisma', 'confidence',
-  'happiness', 'talent', 'discipline', 'willpower', 'memory',
-];
-
+/** Stage 3: the quality-noun LIST is runtime data; the word-boundary frame and
+ *  case-insensitivity are unchanged mechanics. An absent pack degrades to the
+ *  generic never-match. */
+function qualityNoun(): RegExp {
+  return portMemo(getRuntimeKnowledge(), 'quality-noun', () => {
+    const words = getRuntimeKnowledge().getLexicon('non-measurable-quality').phrases;
+    return words.length
+      ? new RegExp(`\\b(?:${words.join('|')})\\b`, 'i')
+      : /(?!x)x/;
+  });
+}
 /** Comparative/percentage claims that promise a quantified jump. A trailing \b
  * only works after "percent" — "%" to "space" is no word boundary at all. */
 const COMPARATIVE_CLAIM = /\b(?:twice\s+as|double)\b|\d+(?:\.\d+)?\s*(?:%|percent\b)/i;
-const QUALITY_NOUN = new RegExp(`\\b(?:${NON_MEASURABLE_QUALITIES.join('|')})\\b`, 'i');
+
 /** "in 30 days", "within 12 weeks", "in 3 months" — a stated horizon in the text. */
 const STATED_WINDOW = /\b(?:in|within)\s+(\d+)\s+(day|week|month)s?\b/i;
 /** "by March 15" / "by March 15, 2027" — a named calendar date in the text. */
@@ -93,7 +111,7 @@ function isShortDeadline(deadline: string | null | undefined, today: string): bo
 export function assessFeasibility(input: FeasibilityInput): FeasibilityAssessment {
   const text = input.goalText.toLowerCase();
   const today = todayIn('UTC');
-  const quality = text.match(QUALITY_NOUN)?.[0];
+  const quality = text.match(qualityNoun())?.[0];
   const windowDays = statedWindowDays(text) ?? daysToStatedDate(text, today);
   const shortWindow =
     (windowDays !== null && windowDays >= 0 && windowDays <= SHORT_WINDOW_DAYS)

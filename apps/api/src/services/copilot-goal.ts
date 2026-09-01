@@ -1,16 +1,38 @@
-import { chatJson } from '../ai/client.js';
+﻿import { chatJson } from '../ai/client.js';
 import { PROMPT_VERSIONS, progressSystemPrompt } from '../ai/prompts.js';
-import { progressAnalysisSchema, type ProgressAnalysis } from '../ai/schemas.js';
+import {
+  progressAnalysisSchema,
+  progressAnalysisSchemaV7,
+  type ProgressAnalysis,
+  type ProgressAnalysisV7,
+} from '../ai/schemas.js';
 import { classifyIntentDeterministic, GOAL_HELP_STUB } from '../ai/intent-router.js';
 import { addDays } from '../domain/dates.js';
+import { randomUUID } from 'node:crypto';
 import type { ProgressionAction } from '../domain/enums.js';
 import { completionRate } from '../domain/progression.js';
 import { computeStreak, scoreDays } from '../domain/scoring.js';
+import { getRuntimeKnowledge, portMemo } from '../ai/runtime-knowledge.js';
 import { prisma } from '../lib/prisma.js';
 import { loadGoalForUser } from './goals.js';
 import { buildScoreInput, ensureOccurrences, goalToday } from './occurrences.js';
 import { getPreferencesForPrompt } from './preferences.js';
 import { recordEvent } from './copilot-analytics.js';
+import {
+  normalizeRecommendations,
+  priorRecommendationIdentities,
+  RecommendationValidationError,
+  recommendationIdentity,
+  serializePriorRecommendations,
+  validateRecommendationTurn,
+  type StructuredRecommendation,
+} from './copilot-recommendations.js';
+import {
+  loadGoalHasRecommendations,
+  loadKnownIdentities,
+  loadRecentRecommendationContext,
+  persistRecommendedEvents,
+} from './recommendation-history.js';
 import { feedbackSummariesForGoal } from './task-feedback.js';
 import {
   applyDecision,
@@ -78,62 +100,45 @@ export type GoalCopilotIntent = 'PROGRESS' | 'ADVICE' | 'ADJUSTMENT' | 'PRODUCT_
 export interface GoalCopilotHistoryEntry {
   role: 'user' | 'assistant';
   content: string;
+  /**
+   * The structured recommendations that came back with this turn, as the
+   * client mirrored them. The only recommendation memory this pipeline has —
+   * explanation prose is never scraped for identity. Absent on user entries;
+   * nullish is tolerated because that is what a nullish parse yields.
+   */
+  recommendations?: StructuredRecommendation[] | null;
 }
 
-const BOOK_FALLBACKS = [
-  ['Piranesi', 'Susanna Clarke', 'a short, imaginative mystery that is easy to return to'],
-  ['Project Hail Mary', 'Andy Weir', 'a fast-moving science-fiction adventure with short, compelling chapters'],
-  ['Born a Crime', 'Trevor Noah', 'an accessible and funny memoir built from engaging stories'],
-  ['Monster', 'Naoki Urasawa', 'a gripping manga thriller with a slow-burn story that is easy to commit to'],
-  ['Vinland Saga', 'Makoto Yukimura', 'an epic manga about growth and discipline with gorgeous art'],
-  ['Fullmetal Alchemist', 'Hiromu Arakawa', 'a complete manga adventure with a tight plot and steady pacing'],
-  ['Death Note', 'Tsugumi Ohba', 'a psychological manga that reads fast and hooks immediately'],
-  ['Convenience Store Woman', 'Sayaka Murata', 'a concise, unusual novel that works well for restarting a reading habit'],
-  ['The Thursday Murder Club', 'Richard Osman', 'a warm, approachable mystery with a lively cast'],
-  ['Educated', 'Tara Westover', 'a gripping memoir about learning, change, and independence'],
-  ['The Little Prince', 'Antoine de Saint-Exupéry', 'a brief classic with plenty to think about'],
-  ['Never Let Me Go', 'Kazuo Ishiguro', 'a thoughtful novel with clear prose and a strong emotional hook'],
-  ['The House in the Cerulean Sea', 'TJ Klune', 'a hopeful fantasy with an easy-to-follow story'],
-] as const;
+/** A regex that matches nothing — the generic degradation for a runtime
+ *  lexicon that is absent. Deliberately domain-neutral: no migrated vocabulary
+ *  may be reached for as a fallback, and no topic may keep routing on
+ *  hardcoded words. */
+const NEVER_MATCH = /(?!x)x/;
 
-/** Reading material words, covering manga and other formats the user may name. */
-const READING_MATERIAL = /\b(?:books?|novels?|manga|manhwa|webtoons?|comics?|graphic\s+novels?|light\s+novels?|read\s+next|reading\s+recommendation)\b/i;
-
-function requestedBookCount(message: string) {
-  const digit = message.match(/\b([1-5])\s+(?:different\s+)?(?:books?|novels?|manga|manhwa|comics?|webtoons?)\b/i)?.[1];
-  if (digit) return Number(digit);
-  if (/\b(?:one|a single)\s+(?:book|novel|manga|manhwa|comic|webtoon)\b/i.test(message)) return 1;
-  if (/\banother\b/i.test(message)) return 1;
-  return 3;
+/** Reading-material topic words, from the runtime port only. An absent pack is
+ *  the generic never-match degradation — never an inline vocabulary. */
+export function readingMaterial(): RegExp {
+  return portMemo(getRuntimeKnowledge(), 'recommendation-material', () =>
+    getRuntimeKnowledge().getLexicon('recommendation-material').patterns[0]?.regex ?? NEVER_MATCH);
 }
 
-function namedBookCount(text: string) {
-  return text.match(/\bby\s+[\p{L}]/giu)?.length ?? 0;
+/** Route the message without asking the model to infer what job it was given.
+ *  The topic-noun segment is runtime data (the port); the structural advice
+ *  verbs (suggest/recommend/…/how should) and the PROGRESS/ADJUSTMENT schedule
+ *  frames are core mechanics. */
+function advicePattern(): RegExp {
+  return portMemo(getRuntimeKnowledge(), 'goal-advice-pattern', () => {
+    // Degradation is generic and structural-only: an absent topic segment
+    // leaves the core advice verbs routing and adds no empty alternative
+    // (which would match every word boundary).
+    const topic = getRuntimeKnowledge().getLexicon('recommendation-topic').patterns[0]?.entry.phrase ?? '';
+    return new RegExp(
+      `\\b(?:suggest|recommend|recommendation|idea|ideas|advice|choose|what|which|how can|how should${topic ? `|${topic}` : ''})\\b`,
+      'i',
+    );
+  });
 }
 
-/** The medium the user asked about, so answers and prompts speak their words. */
-function readingMedium(message: string): string {
-  if (/\bmanga|manhwa\b/i.test(message)) return 'manga';
-  if (/\bwebtoons?\b/i.test(message)) return 'webtoons';
-  if (/\bcomics?\b/i.test(message)) return 'comics';
-  if (/\bgraphic\s+novels?\b/i.test(message)) return 'graphic novels';
-  if (/\blight\s+novels?\b/i.test(message)) return 'light novels';
-  return 'books';
-}
-
-function fallbackBookAnswer(history: GoalCopilotHistoryEntry[], count: number, medium: string) {
-  const prior = history.map((entry) => entry.content).join(' ').toLocaleLowerCase();
-  const pool = BOOK_FALLBACKS.filter(([, , note]) => medium === 'books' || note.includes(medium));
-  const usable = pool.length >= count ? pool : BOOK_FALLBACKS;
-  const fresh = usable.filter(([title]) => !prior.includes(title.toLocaleLowerCase()));
-  const choices = [...fresh, ...usable.filter(([title]) => prior.includes(title.toLocaleLowerCase()))]
-    .slice(0, count);
-  return choices
-    .map(([title, author, reason]) => `"${title}" by ${author} — ${reason}.`)
-    .join('\n');
-}
-
-/** Route the message without asking the model to infer what job it was given. */
 export function goalCopilotIntent(message: string): GoalCopilotIntent {
   if (/\b(?:how am i doing|progress|streak|completion|on track|falling behind|miss(?:ed|ing))\b/i.test(message)) {
     return 'PROGRESS';
@@ -141,7 +146,7 @@ export function goalCopilotIntent(message: string): GoalCopilotIntent {
   if (/\b(?:rest day|day off|change|adjust|reschedule|skip|remove|reduce|increase|shorten|extend|pause|resume|easier|harder|earlier|later)\b/i.test(message)) {
     return 'ADJUSTMENT';
   }
-  if (/\b(?:suggest|recommend|recommendation|idea|ideas|advice|choose|what|which|how can|how should|books?|novels?|manga|manhwa|webtoons?|comics?|graphic novels?|light novels?|read next|reading|recipes?|courses?|podcasts?|techniques?|resources?)\b/i.test(message)) {
+  if (advicePattern().test(message)) {
     return 'ADVICE';
   }
   return 'PROGRESS';
@@ -238,6 +243,9 @@ export async function buildProgressSummary(
     bestStreak: streak.best,
     mostMissedTasks,
     schedule: tasks.map((task) => ({
+      // Stage 4: server-owned stable reference. The model may echo this back in
+      // a suggestion; the executor validates it against the goal's own tasks.
+      taskId: task.id,
       title: task.title,
       recurrence: `${task.recurrenceType} ${task.recurrenceConfig}`,
       minutes: null,
@@ -269,82 +277,6 @@ export interface ProgressionProposal {
   applied: boolean;
 }
 
-/**
- * Put any proposed stage change on the record, without letting it take effect.
- *
- * The call to `applyDecision` is deliberate and is not a formality: it is the only
- * path that touches a stage, so routing the model's suggestion through it means the
- * refusal is enforced by the same code a scheduled review answers to, and the
- * proposal lands in the plan's decision history with the real completion numbers
- * attached. A suggestion the user can audit later beats one that vanishes.
- */
-async function recordProgressionProposals(
-  goalId: string,
-  participantId: string,
-  analysis: ProgressAnalysis,
-): Promise<ProgressionProposal[]> {
-  // STAY is dropped. It asks for nothing, and writing "no change proposed" into the
-  // history of every laddered task every time someone asks a question would bury the
-  // decisions that actually moved something.
-  const wanted = analysis.suggestions.filter(
-    (s) => s.proposedProgressionAction === 'ADVANCE' || s.proposedProgressionAction === 'REDUCE',
-  );
-  if (wanted.length === 0) return [];
-
-  const [plans, tasks] = await Promise.all([
-    loadPlansForGoal(goalId),
-    prisma.taskDefinition.findMany({
-      where: { goalId, archivedAt: null },
-      select: { id: true, title: true },
-    }),
-  ]);
-
-  // Matched by title because a title is all the model was ever given. It has no id
-  // to guess with, and the candidate set is one goal the caller already proved they
-  // can see — so a hallucinated task name finds nothing rather than something.
-  const titleById = new Map(tasks.map((task) => [task.id, task.title]));
-  const planByTitle = new Map<string, { plan: PlanWithStages; title: string }>();
-  for (const plan of plans) {
-    if (plan.status !== 'ACTIVE') continue;
-    const title = titleById.get(plan.taskDefinitionId);
-    if (title) planByTitle.set(title.trim().toLowerCase(), { plan, title });
-  }
-
-  const proposals: ProgressionProposal[] = [];
-  const seen = new Set<string>();
-  for (const suggestion of wanted) {
-    const match = planByTitle.get((suggestion.taskTitle ?? '').trim().toLowerCase());
-    // One proposal per plan: two suggestions naming the same task would otherwise
-    // write two rows saying the same thing.
-    if (!match || seen.has(match.plan.id)) continue;
-    seen.add(match.plan.id);
-
-    const requested = suggestion.proposedProgressionAction as 'ADVANCE' | 'REDUCE';
-    try {
-      const result = await applyDecision({
-        planId: match.plan.id,
-        participantId,
-        action: requested,
-        source: 'COPILOT',
-      });
-      proposals.push({
-        planId: match.plan.id,
-        taskTitle: match.title,
-        requested,
-        reviewAction: result.verdict.action,
-        stageLabel: progressionSummary(result.plan).stageLabel,
-        reason: result.reason,
-        applied: result.applied,
-      });
-    } catch {
-      // A plan that finished or was archived between building the summary and here.
-      // Not worth failing the user's question over.
-      continue;
-    }
-  }
-  return proposals;
-}
-
 /** A zeroed summary for the PRODUCT_HELP stub — no statistics are read, none invented. */
 function stubSummary(goal: { title: string; category: string }): GoalProgressSummary {
   return {
@@ -362,6 +294,62 @@ function stubSummary(goal: { title: string; category: string }): GoalProgressSum
 }
 
 /**
+ * The structured ADVICE pipeline: validate the structured collection,
+ * repair once with the violations stated, revalidate, then fail typed.
+ *
+ * This function is the whole of Stage 1's behavior change, kept as one region
+ * so the source-boundary test can prove it never references any legacy
+ * recommendation content — no catalogs, no prose scraping. Everything here is
+ * deterministic except the two model calls.
+ *
+ * Stage 2 extends it in exactly two ways, both gated by their own settings:
+ * `resolveDurableKnown` unions durable event history into the seen-identity
+ * set (UNION semantics — the client mirror keeps contributing), and the
+ * caller persists the fresh items after success.
+ */
+async function runStructuredAdviceTurn(input: {
+  analysis: ProgressAnalysisV7;
+  analyze: (content: string) => Promise<ProgressAnalysisV7>;
+  userPrompt: string;
+  priorIdentities: ReadonlySet<string>;
+  resolveDurableKnown?: (
+    candidates: readonly StructuredRecommendation[],
+  ) => Promise<ReadonlySet<string>>;
+}): Promise<ProgressAnalysis & { historyPersisted?: boolean }> {
+  const validate = async (analysis: ProgressAnalysisV7) => {
+    let priorIdentities = input.priorIdentities;
+    if (input.resolveDurableKnown) {
+      // Full-history duplicate protection without unbounded reads: only the
+      // candidate identity keys are looked up, on the (userId, identityKey)
+      // index. A Stage 1 mirrored item and a durable event reject alike.
+      const candidates = normalizeRecommendations(analysis.recommendations);
+      const durableKnown = await input.resolveDurableKnown(candidates);
+      if (durableKnown.size > 0) {
+        priorIdentities = new Set([...priorIdentities, ...durableKnown]);
+      }
+    }
+    return validateRecommendationTurn({ analysis, priorIdentities });
+  };
+
+  let result = await validate(input.analysis);
+  if (result.violations.length === 0) {
+    return { ...input.analysis, recommendations: result.items };
+  }
+  // Exactly one targeted repair, stating the violation class. No catalog, no
+  // fallback content: an unrepairable turn fails as RECOMMENDATIONS_INVALID.
+  const repair = await input.analyze(
+    `${input.userPrompt}
+
+Your previous reply was rejected: ${result.violations.join(' ')} Return the corrected JSON object now, following the RECOMMENDATIONS contract.`,
+  );
+  result = await validate(repair);
+  if (result.violations.length > 0) {
+    throw new RecommendationValidationError(result.violations);
+  }
+  return { ...repair, recommendations: result.items };
+}
+
+/**
  * Ask the Copilot about an existing goal.
  *
  * Returns an explanation and optional *proposals*. Nothing is applied — changing
@@ -376,19 +364,32 @@ export async function askGoalCopilot(
 ): Promise<{
   intent: GoalCopilotIntent;
   summary: GoalProgressSummary;
-  analysis: ProgressAnalysis;
+  analysis: ProgressAnalysis & { historyPersisted?: boolean };
   progressionProposals: ProgressionProposal[];
 }> {
   const historyText = history.map((entry) => entry.content).join('\n');
   const lastAssistant = [...history].reverse().find((entry) => entry.role === 'assistant');
-  const lastWasAdvice = !!lastAssistant && namedBookCount(lastAssistant.content) > 0;
-  // A thin continuation ("maybe some manga name", "another one") after a
+  // A thin continuation ("another one", "more like that") after a
   // recommendation turn is still that recommendation thread, not a stats question.
   const continuationStart = /\b(?:more|another|different|else|other|similar|also|instead|name|names|one)\b/i.test(message)
     || /^maybe\b/i.test(message);
-  const bookFollowUp = (READING_MATERIAL.test(message) || READING_MATERIAL.test(historyText))
+  // Durable recommendation context participates BEFORE continuation routing,
+  // so "another one" stays in the recommendation thread across sessions with
+  // no client history. The signal is deliberately goal-scoped — "the user has
+  // recommendations somewhere" never manufactures a thread — and it is only
+  // queried when the message already looks like a continuation, so ordinary
+  // turns pay nothing.
+  const durableGoalSignal =
+    continuationStart || readingMaterial().test(message)
+      ? await loadGoalHasRecommendations(goalId)
+      : false;
+  // Continuation detection uses the structured mirror and the durable goal
+  // context only — recommendation identity is never scraped from prose.
+  const lastHadRecommendations = (lastAssistant?.recommendations?.length ?? 0) > 0;
+  const lastWasAdvice = lastHadRecommendations || durableGoalSignal;
+  const bookFollowUp = (readingMaterial().test(message) || readingMaterial().test(historyText))
     && (/\b(?:more|another|different|else|other|similar|instead)\b/i.test(message) || continuationStart)
-    && (lastWasAdvice || READING_MATERIAL.test(message) || READING_MATERIAL.test(historyText));
+    && (lastWasAdvice || readingMaterial().test(message) || readingMaterial().test(historyText));
   // Interruption: a product-mechanics question in goal chat gets the honest
   // stub, not a model improvising statistics it was never given. No summary is
   // computed, no tokens spent; the UI renders the explanation without the stat
@@ -405,10 +406,31 @@ export async function askGoalCopilot(
   const thinContinuation = lastWasAdvice && continuationStart
     && !/\b(?:how am i doing|progress|streak|completion|behind|miss(?:ed|ing)|done)\b/i.test(message);
   const intent = bookFollowUp || thinContinuation ? 'ADVICE' : goalCopilotIntent(message);
+  // Continuation routing uses structured/durable signals; topic words come
+  // from the runtime port. The structural advice verbs are core mechanics.
+  const structuredTurn = intent === 'ADVICE';
   const summary = await buildProgressSummary(goalId, userId);
   const { goal, participant } = await loadGoalForUser(goalId, userId, 'participate');
   const preferences = await getPreferencesForPrompt(userId, goal.category);
 
+  // Two defenses against repeats: this block (generation avoids them) and the
+  // deterministic validator (which removes them anyway). Stage 2 feeds the
+  // block from durable memory first — the latest event per identity, server
+  // side — and lets the client's structured mirror contribute anything the
+  // events do not already cover. Built from structured data only; prose is
+  // never parsed. Reads only happen when the read setting is on.
+  const readEnabled = structuredTurn;
+  const durableContext = readEnabled ? await loadRecentRecommendationContext(userId) : [];
+  const contextSource = durableContext.length
+    ? [
+        {
+          recommendations: durableContext.map(
+            ({ entityType, displayName, attribution }) => ({ entityType, displayName, attribution }),
+          ),
+        },
+      ]
+    : [];
+  const priorBlock = structuredTurn ? serializePriorRecommendations([...history, ...contextSource]) : '';
   const userPrompt = `Goal statistics (authoritative — do not invent others):
 ${JSON.stringify(summary, null, 2)}
 
@@ -416,58 +438,93 @@ What this person prefers:
 ${preferences.map((p) => `- ${p.key}: ${p.value}`).join('\n') || '(nothing on file)'}
 
 Recent conversation (context only; it is not authoritative goal data):
-${history.map((entry) => `${entry.role.toUpperCase()}: ${entry.content}`).join('\n') || '(none)'}
+${history.map((entry) => `${entry.role.toUpperCase()}: ${entry.content}`).join('\n') || '(none)'}${priorBlock}
 
 They ask:
 "${message}"
 
 Request type: ${intent}`;
-  const analyze = (content: string) => chatJson(
-    {
-      purpose: 'PROGRESS_ANALYSIS',
-      promptVersion: PROMPT_VERSIONS.progress,
-      userId,
-      thinking: false,
-      temperature: intent === 'ADVICE' ? 0.65 : 0.3,
-      maxTokens: 2000,
-      timeoutMs: 60_000,
-      messages: [
-        { role: 'system', content: progressSystemPrompt() },
-        {
-          role: 'user',
-          content,
-        },
-      ],
-    },
-    progressAnalysisSchema,
-  );
-  let analysis = await analyze(userPrompt);
+  const analyze = (content: string): Promise<ProgressAnalysis> =>
+    structuredTurn
+      ? chatJson(
+          {
+            purpose: 'PROGRESS_ANALYSIS',
+            promptVersion: PROMPT_VERSIONS.progressStructured,
+            userId,
+            thinking: false,
+            temperature: 0.65,
+            maxTokens: 2000,
+            timeoutMs: 60_000,
+            messages: [
+              { role: 'system', content: progressSystemPrompt({ structuredRecommendations: true }) },
+              { role: 'user', content },
+            ],
+          },
+          progressAnalysisSchemaV7,
+        )
+      : chatJson(
+          {
+            purpose: 'PROGRESS_ANALYSIS',
+            promptVersion: PROMPT_VERSIONS.progress,
+            userId,
+            thinking: false,
+            temperature: 0.3,
+            maxTokens: 2000,
+            timeoutMs: 60_000,
+            messages: [
+              { role: 'system', content: progressSystemPrompt() },
+              {
+                role: 'user',
+                content,
+              },
+            ],
+          },
+          progressAnalysisSchema,
+        );
 
-  // A vague "pick a novel" is not a recommendation. Repair once. The deterministic
-  // list is only a last-resort provider-failure fallback; normal answers come from
-  // the model and use the person's request, preferences and recent conversation.
-  const asksForBook = READING_MATERIAL.test(message) || bookFollowUp;
-  const bookCount = requestedBookCount(message);
-  const medium = readingMedium(message) === 'books' && READING_MATERIAL.test(historyText) && !READING_MATERIAL.test(message)
-    ? readingMedium(historyText.split('"').slice(-2)[0] ?? '')
-    : readingMedium(message);
-  if (intent === 'ADVICE' && asksForBook && namedBookCount(analysis.explanation) < bookCount) {
-    analysis = await analyze(`${userPrompt}
-
-Your previous answer did not provide enough concrete choices. Recommend ${bookCount}
-actual ${bookCount === 1 ? medium : `${medium} from different authors`}, each using the exact form
-"Title" by Author followed by one short reason. Use the request and preferences above.
-Do not repeat a title from the recent conversation.`);
-    if (namedBookCount(analysis.explanation) < bookCount) {
-      analysis = {
-        ...analysis,
-        explanation: fallbackBookAnswer(history, bookCount, medium),
-      };
-    }
+  let analysis: ProgressAnalysis & { historyPersisted?: boolean };
+  if (structuredTurn) {
+    analysis = await runStructuredAdviceTurn({
+      analysis: (await analyze(userPrompt)) as ProgressAnalysisV7,
+      analyze: (content) => analyze(content) as Promise<ProgressAnalysisV7>,
+      userPrompt,
+      priorIdentities: priorRecommendationIdentities(history),
+      resolveDurableKnown: readEnabled
+        ? (candidates) => loadKnownIdentities(userId, candidates.map(recommendationIdentity))
+        : undefined,
+    });
+    // Durable recommendation history is part of the request (write mode
+    // "required" semantics are canonical since Stage 2 burn-in): a persistence
+    // failure is the typed retryable 503, never a silently forgotten answer.
+    const persisted = await persistRecommendedEvents(userId, goalId, analysis.recommendations ?? []);
+    analysis = { ...analysis, historyPersisted: persisted.committed };
+  } else {
+    analysis = await analyze(userPrompt);
   }
 
   await recordEvent({ userId, type: 'GOAL_COPILOT_ASKED', meta: { goalId } });
 
-  const progressionProposals = await recordProgressionProposals(goalId, participant!.id, analysis);
-  return { intent, summary, analysis, progressionProposals };
+  // Stage 4 canonical path: proposal recording routes through the registry
+  // (stable-ID resolution, claim, transaction, audit). This is the service-flow
+  // entrypoint — the Copilot proposes, the user applies via the ordinary
+  // /progression/decision route.
+  const { executeCapability } = await import('../capabilities/executor.js');
+  const outcome = await executeCapability<{ proposals: unknown[]; unresolved: number }>(
+    { userId, confirmed: true, correlationId: randomUUID() },
+    {
+      capability: 'progression.propose_from_suggestion',
+      input: {
+        goalId,
+        suggestions: (analysis.suggestions ?? []).map((s) => ({
+          taskId: s.taskId ?? null,
+          taskTitle: s.taskTitle ?? null,
+          proposedRecurrence: s.proposedRecurrence ?? null,
+          proposedMinutes: s.proposedMinutes ?? null,
+          proposedProgressionAction: s.proposedProgressionAction ?? null,
+        })),
+      },
+    },
+  );
+  const proposals = (outcome.status === 'failed' ? [] : outcome.result.proposals) as never[];
+  return { intent, summary, analysis, progressionProposals: proposals };
 }

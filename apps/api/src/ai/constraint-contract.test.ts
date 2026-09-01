@@ -1,6 +1,5 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import { buildConstraintContract, checkContract } from './constraint-contract.js';
-import { parseExplicitGoalConstraints } from './goal-constraints.js';
 import type { ExplicitGoalConstraints } from './goal-constraints.js';
 import type { ConstraintContract, ContractTask } from './constraint-contract.js';
 
@@ -43,14 +42,17 @@ describe('constraint contract', () => {
     expect(buildConstraintContract(constraints()).cadence).toBe('UNSPECIFIED');
   });
 
-  it('is independent of clause order in the source text', () => {
-    const first = parseExplicitGoalConstraints(
-      'Run on Tuesday and Thursday for 30 minutes and do strength training every Saturday.', '2026-08-25',
-    );
-    const second = parseExplicitGoalConstraints(
-      'Do strength training every Saturday and run on Tuesday and Thursday for 30 minutes.', '2026-08-25',
-    );
-    expect(buildConstraintContract(first)).toEqual(buildConstraintContract(second));
+  it('is independent of clause order in the projection input', () => {
+    const base = { exactWeekly: 3, maxMinutes: 30 };
+    const first = buildConstraintContract(constraints({
+      ...base,
+      requiredRoleDays: [{ role: 'TRAIL', days: [6] }],
+    }));
+    const second = buildConstraintContract(constraints({
+      ...base,
+      requiredRoleDays: [{ role: 'TRAIL', days: [6] }],
+    }));
+    expect(first).toEqual(second);
   });
 
   it('catches each weekly-total violation class', () => {

@@ -1,4 +1,5 @@
-import { GOAL_CATEGORY, type GoalCategory } from '../domain/enums.js';
+﻿import { GOAL_CATEGORY, type GoalCategory } from '../domain/enums.js';
+import { getRuntimeKnowledge, portMemo } from './runtime-knowledge.js';
 
 // Which stored memories get injected is decided from the USER's own words, not
 // from the category the model reported.
@@ -9,41 +10,7 @@ import { GOAL_CATEGORY, type GoalCategory } from '../domain/enums.js';
 // then using that category to choose what to show the model lets it talk itself
 // into any memory it likes. The gate's input has to come from outside the model.
 
-const KEYWORDS: Record<GoalCategory, string[]> = {
-  FITNESS: [
-    'fitness', 'fitter', 'get fit', 'gym', 'workout', 'exercise', 'run', 'jog', 'walk', 'swim', 'cycle',
-    'cycling', 'weight', 'muscle', 'strength', 'cardio', 'yoga', 'pilates', 'steps',
-    'marathon', '5k', '10k', 'training', 'lose weight', 'get in shape',
-  ],
-  HEALTH: [
-    'health', 'sleep', 'water', 'hydrat', 'meditat', 'stress', 'anxiety', 'diet',
-    'nutrition', 'eat', 'smoking', 'quit smoking', 'alcohol', 'mindful', 'therapy',
-    'doctor', 'wellbeing', 'wellness',
-  ],
-  STUDY: [
-    'study', 'exam', 'revise', 'revision', 'course', 'university', 'college',
-    'school', 'degree', 'homework', 'lecture', 'semester', 'test', 'certification',
-  ],
-  READING: ['read', 'book', 'novel', 'literature', 'pages', 'kindle', 'audiobook'],
-  CAREER: [
-    'career', 'job', 'work', 'promotion', 'interview', 'resume', 'cv', 'portfolio',
-    'network', 'freelance', 'business', 'startup', 'client', 'linkedin',
-  ],
-  FINANCE: [
-    'save', 'saving', 'money', 'budget', 'debt', 'spend', 'spending', 'expense',
-    'salary', 'cash', 'afford', 'financ', 'bill', 'subscription', 'cost', '$', '€', '£',
-  ],
-  PRODUCTIVITY: [
-    'productiv', 'focus', 'procrastinat', 'organis', 'organiz', 'routine', 'habit',
-    'time management', 'planning', 'inbox', 'declutter', 'tidy', 'morning routine',
-  ],
-  PERSONAL: [
-    'learn', 'language', 'spanish', 'french', 'german', 'guitar', 'piano', 'paint',
-    'draw', 'write', 'writing', 'hobby', 'skill', 'instrument', 'cook', 'garden',
-    'photography', 'dance', 'dancing', 'chess', 'code', 'programming',
-  ],
-  OTHER: [],
-};
+
 
 export interface CategoryGuess {
   category: GoalCategory | null;
@@ -53,15 +20,41 @@ export interface CategoryGuess {
 }
 
 /**
+ * The flag-ON source of the same table: the runtime knowledge port's
+ * `goal-category` lexicon, grouped by role. Roles are mapped through the one
+ * generic persisted-category filter — a runtime role that is not a stored
+ * GOAL_CATEGORY value can never influence classification, so a synthetic
+ * runtime domain is correctly invisible here while a real new domain is just
+ * data with a valid role. Memoized per port instance; a port replacement
+ * rebuilds from scratch.
+ */
+function runtimeCategoryKeywords(): Record<GoalCategory, string[]> {
+  const port = getRuntimeKnowledge();
+  return portMemo(port, 'goal-category-keywords', () => {
+    const table = {} as Record<GoalCategory, string[]>;
+    for (const category of GOAL_CATEGORY) table[category] = [];
+    for (const entry of port.getLexiconEntries('goal-category')) {
+      if (entry.role && (GOAL_CATEGORY as readonly string[]).includes(entry.role)) {
+        table[entry.role as GoalCategory].push(entry.phrase);
+      }
+    }
+    return table;
+  });
+}
+
+/**
  * Classify from the user's text alone. Deliberately keyword-based: it is
  * deterministic, auditable, free, and cannot be argued with by a model.
  */
 export function classifyGoalText(text: string): CategoryGuess {
+  // The keyword TABLE is runtime data (the port); the scoring mechanics
+  // (substring matching, ranking, confidence) are core.
+  const table = runtimeCategoryKeywords();
   const haystack = ` ${text.toLowerCase()} `;
   const scores = new Map<GoalCategory, string[]>();
 
   for (const category of GOAL_CATEGORY) {
-    const hits = KEYWORDS[category].filter((word) => haystack.includes(word));
+    const hits = table[category].filter((word) => haystack.includes(word));
     if (hits.length > 0) scores.set(category, hits);
   }
 
