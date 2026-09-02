@@ -8,7 +8,7 @@ import { recommendationIdentity } from './copilot-recommendations.js';
 import { askGoalCopilot, goalCopilotIntent } from './copilot-goal.js';
 
 // askGoalCopilot is exercised with the database and the model stubbed out, the
-// same way copilot-draft.test.ts does it — the Stage 1 flag behavior must be
+// same way copilot-draft.test.ts does it ï¿½ the Stage 1 flag behavior must be
 // observable end-to-end without a live PostgreSQL or provider.
 
 /** Stage 2 state: what the durable recommendation history answers per test. */
@@ -70,8 +70,19 @@ vi.mock('./occurrences.js', () => ({
   buildScoreInput: async () => ({ tasks: [], completions: [], from: '2026-08-01', to: '2026-08-30' }),
 }));
 
+/** What the preference-extraction path has recorded per test. */
+const prefState = vi.hoisted(() => ({
+  calls: [] as Array<Record<string, unknown>>,
+  extractError: null as Error | null,
+}));
+
 vi.mock('./preferences.js', () => ({
   getPreferencesForPrompt: async () => [],
+  extractPreferences: vi.fn(async (opts: Record<string, unknown>) => {
+    if (prefState.extractError) throw prefState.extractError;
+    prefState.calls.push(opts);
+    return 0;
+  }),
 }));
 
 vi.mock('./copilot-analytics.js', () => ({
@@ -201,7 +212,7 @@ describe('goal-coach prompt versions (Stage 1)', () => {
   });
 });
 
-describe('askGoalCopilot — ADVICE turns (structured canonical path)', () => {
+describe('askGoalCopilot ï¿½ ADVICE turns (structured canonical path)', () => {
   beforeEach(() => {
     chatJsonMock.mockReset();
     applyDecisionMock.mockReset();
@@ -262,7 +273,7 @@ describe('askGoalCopilot — ADVICE turns (structured canonical path)', () => {
     ).rejects.toMatchObject({ code: 'RECOMMENDATIONS_INVALID' });
     expect(chatJsonMock).toHaveBeenCalledTimes(2);
     // The prior structured item reached the prompt through the serialization
-    // block — not through prose (the explanation has no " by " pattern).
+    // block ï¿½ not through prose (the explanation has no " by " pattern).
     const firstPrompt = chatJsonMock.mock.calls[0][0].messages[1].content as string;
     expect(firstPrompt).toContain('Recent structured recommendations');
     expect(firstPrompt).toContain('displayName: Wheel Throwing for Beginners');
@@ -287,7 +298,7 @@ describe('askGoalCopilot — ADVICE turns (structured canonical path)', () => {
       { role: 'user' as const, content: 'Can you recommend a pottery class?' },
       { role: 'assistant' as const, content: 'A class that fits your schedule.', recommendations: [potteryItem] },
     ];
-    // The model answers with a different item — the routing is what this pins.
+    // The model answers with a different item ï¿½ the routing is what this pins.
     chatJsonMock.mockResolvedValue(
       v7Answer({ recommendations: [{ ...potteryItem, displayName: 'Hand-Building Basics' }] }),
     );
@@ -319,7 +330,7 @@ describe('askGoalCopilot — ADVICE turns (structured canonical path)', () => {
   });
 });
 
-describe('askGoalCopilot — flag ON, PROGRESS/ADJUSTMENT turns (unchanged)', () => {
+describe('askGoalCopilot ï¿½ flag ON, PROGRESS/ADJUSTMENT turns (unchanged)', () => {
   beforeEach(() => {
     chatJsonMock.mockReset();
   });
@@ -369,7 +380,7 @@ describe('source boundary (Stage 1 legacy isolation)', () => {
     );
   });
 
-  it('the continuation signal is the structured one — prose counting is gone', () => {
+  it('the continuation signal is the structured one ï¿½ prose counting is gone', () => {
     const text = source();
     const head = text.slice(
       text.indexOf('const continuationStart'),
@@ -395,7 +406,7 @@ describe('source boundary (Stage 1 legacy isolation)', () => {
   });
 });
 
-describe('askGoalCopilot — Stage 2 durable history (UNION reads, mode writes)', () => {
+describe('askGoalCopilot ï¿½ Stage 2 durable history (UNION reads, mode writes)', () => {
   const itemX: RecommendationItem = { ...potteryItem };
   const itemY: RecommendationItem = { ...potteryItem, displayName: 'Hand-Building Basics' };
   const itemZ: RecommendationItem = { ...potteryItem, displayName: 'Raku Firing Weekend' };
@@ -445,7 +456,7 @@ describe('askGoalCopilot — Stage 2 durable history (UNION reads, mode writes)', 
     state2.contextRows = [
       { userId: 'user_1', identityKey: recommendationIdentity(itemY), entityType: 'pottery_class', displayName: 'Hand-Building Basics', attribution: 'Clay House Studio', seq: 1 },
     ];
-    // The model returns the mirrored item X — it must still be rejected even
+    // The model returns the mirrored item X ï¿½ it must still be rejected even
     // though no event ever carried it.
     chatJsonMock
       .mockResolvedValueOnce(v7With([itemX]))
@@ -470,7 +481,7 @@ describe('askGoalCopilot — Stage 2 durable history (UNION reads, mode writes)', 
     expect(state2.written[0]).toMatchObject({ eventKind: 'recommended' });
   });
 
-  it('persistence failure fails typed and retryable — never a silently forgotten answer', async () => {
+  it('persistence failure fails typed and retryable ï¿½ never a silently forgotten answer', async () => {
     state2.failCreateMany = new Error('database down');
     chatJsonMock.mockResolvedValue(v7With([itemX]));
 
@@ -480,7 +491,49 @@ describe('askGoalCopilot — Stage 2 durable history (UNION reads, mode writes)', 
   });
 });
 
-describe('askGoalCopilot — Stage 2 durable routing (cross-session continuation)', () => {
+describe('askGoalCopilot ï¿½ background preference learning', () => {
+  beforeEach(() => {
+    chatJsonMock.mockReset();
+    prefState.calls = [];
+    prefState.extractError = null;
+  });
+
+  it('extracts durable preferences from the exchange, category-scoped and non-fatal', async () => {
+    chatJsonMock.mockResolvedValue({ explanation: 'A steady week overall.', suggestions: [] });
+    const history = [
+      { role: 'user' as const, content: 'I can only read in the evenings after work' },
+    ];
+    await askGoalCopilot('goal_1', 'user_1', 'How am I doing?', history);
+
+    // One background extraction fired with the recent window of the exchange.
+    expect(prefState.calls).toHaveLength(1);
+    const call = prefState.calls[0] as {
+      userId: string;
+      sessionId?: string;
+      category: string | null;
+      transcript: Array<{ role: string; content: string }>;
+    };
+    expect(call.userId).toBe('user_1');
+    expect(call.category).toBe('READING');
+    // Goal chat has no CopilotSession, so no sessionId is claimed.
+    expect(call.sessionId).toBeUndefined();
+    expect(call.transcript).toEqual([
+      { role: 'user', content: 'I can only read in the evenings after work' },
+      { role: 'user', content: 'How am I doing?' },
+      { role: 'assistant', content: 'A steady week overall.' },
+    ]);
+  });
+
+  it('an extraction failure never breaks the answer', async () => {
+    prefState.extractError = new Error('provider down');
+    chatJsonMock.mockResolvedValue({ explanation: 'A steady week overall.', suggestions: [] });
+    const result = await askGoalCopilot('goal_1', 'user_1', 'How am I doing?');
+    expect(result.intent).toBe('PROGRESS');
+    expect(result.analysis.explanation).toBe('A steady week overall.');
+  });
+});
+
+describe('askGoalCopilot â€” Stage 2 durable routing (cross-session continuation)', () => {
   const itemX: RecommendationItem = { ...potteryItem };
 
   beforeEach(() => {
@@ -495,7 +548,7 @@ describe('askGoalCopilot — Stage 2 durable routing (cross-session continuation)'
     recommendationEventMocks.createMany.mockClear();
   });
 
-  it('routes "another one" to ADVICE from durable goal context alone — no client history', async () => {
+  it('routes "another one" to ADVICE from durable goal context alone ï¿½ no client history', async () => {
     state2.goalHasEvents = true;
     chatJsonMock.mockResolvedValue(v7Answer({ recommendations: [{ ...itemX, displayName: 'A New Pick' }] }));
 

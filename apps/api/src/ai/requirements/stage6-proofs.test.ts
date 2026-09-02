@@ -136,6 +136,90 @@ describe('Stage 6: the desired outcome is never fabricated', () => {
   });
 });
 
+// --------------------------------------------- provenance coverage authority (RC-P1-B)
+
+describe('Stage 6: MODEL_INFERRED cannot satisfy authoritative coverage', () => {
+  // The exact live defect: the model "repairs" a placeholder frequency atom by
+  // fabricating a number, with its own question as the evidence quote. Ungrounded
+  // → MODEL_INFERRED. The provenance hierarchy says that is never user
+  // authority; the coverage gate must agree or the hierarchy is cosmetic.
+  const fabricatedFrequency = {
+    property: 'schedule.frequency.count', scope: 'schedule' as const, relation: 'eq' as const,
+    value: { kind: 'count' as const, value: 3 }, strength: 'REQUIRED' as const,
+    source: 'stated' as const, evidence: 'How many days per week would you like to read?',
+  };
+
+  it('a MODEL_INFERRED atom stays ACTIVE as context but never closes its coverage group', () => {
+    let state = emptyRequirementState();
+    state = ingest(state, frag([fabricatedFrequency]), G({
+      turn: 0, message: 'I want to read more',
+    })).state;
+    const record = state.records.find((r) => r.property === 'schedule.frequency.count')!;
+    // The record exists, is ACTIVE, and is honestly labeled — useful context.
+    expect(record.status).toBe('ACTIVE');
+    expect(record.provenance).toBe('MODEL_INFERRED');
+    // But the required WEEKLY_CAPACITY group is still missing: the gate asks.
+    const readiness = evaluateAstReadiness(state, { questionCount: 0, maxQuestions: HARD_MAX_QUESTIONS });
+    expect(readiness.missing).toContain('WEEKLY_CAPACITY');
+    expect(readiness.ready).toBe(false);
+    expect(readiness.nextQuestion?.id).toBe('gap_desired_outcome');
+  });
+
+  it('control: the SAME atom grounded in the user\'s words is USER_EXPLICIT and DOES close coverage', () => {
+    let state = emptyRequirementState();
+    state = ingest(state, frag([freqAtom(3, 'three days a week')]), G({
+      turn: 1, message: 'three days a week suits me',
+    })).state;
+    const record = state.records.find((r) => r.property === 'schedule.frequency.count')!;
+    expect(record.provenance).toBe('USER_EXPLICIT');
+    const readiness = evaluateAstReadiness(state, { questionCount: 1, maxQuestions: HARD_MAX_QUESTIONS });
+    expect(readiness.missing).not.toContain('WEEKLY_CAPACITY');
+  });
+
+  it('no user-authority frequency anywhere + a later genuine answer: the gate still opens exactly then', () => {
+    // The fabricated atom first, then the user actually answers the gap
+    // question — the grounded answer closes coverage the ungrounded one could not.
+    let state = emptyRequirementState();
+    state = ingest(state, frag([fabricatedFrequency]), G({
+      turn: 0, message: 'I want to read more',
+    })).state;
+    state = ingest(state, frag([freqAtom(4, '4')]), G({
+      turn: 1, answer: { questionId: 'gap_weekly_capacity', text: '4' },
+    })).state;
+    const readiness = evaluateAstReadiness(state, { questionCount: 1, maxQuestions: HARD_MAX_QUESTIONS });
+    expect(readiness.missing).not.toContain('WEEKLY_CAPACITY');
+    // The grounded record outranked the fabricated one on the same slot.
+    const freq = state.records.filter((r) => r.status === 'ACTIVE' && r.property === 'schedule.frequency.count');
+    expect(freq.every((r) => r.provenance === 'USER_EXPLICIT')).toBe(true);
+  });
+
+  it('a placeholder value object (kind only) cannot even enter the state — the schema refuses it', () => {
+    const result = requirementFragmentSchema.safeParse({
+      atoms: [{
+        property: 'schedule.frequency.count', scope: 'schedule', relation: 'eq',
+        value: { kind: 'count' }, strength: 'REQUIRED', source: 'stated',
+        evidence: 'How many days per week would you like to read?',
+      }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('asking for a frequency emits no frequency atom: the question itself represents the gap', () => {
+    // The post-fix model contract: a valid turn that asks the gap question and
+    // extracts only what the user stated (the outcome). No frequency atom.
+    let state = emptyRequirementState();
+    state = ingest(state, frag([outcomeAtom('read more', 'read more')]), G({
+      turn: 0, message: 'I want to read more',
+    })).state;
+    expect(state.records.some((r) => r.property === 'schedule.frequency.count')).toBe(false);
+    const readiness = evaluateAstReadiness(state, { questionCount: 0, maxQuestions: HARD_MAX_QUESTIONS });
+    expect(readiness.missing).toContain('WEEKLY_CAPACITY');
+    // The stated outcome closed its own group; capacity is the next gap.
+    expect(readiness.missing).not.toContain('DESIRED_OUTCOME');
+    expect(readiness.nextQuestion?.id).toBe('gap_weekly_capacity');
+  });
+});
+
 // --------------------------------------------------- stale extraction pins (R1)
 
 describe('Stage 6: stale-extraction containment (R1) — Pin A/B', () => {

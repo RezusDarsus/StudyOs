@@ -70,6 +70,17 @@ export class StubProvider implements AiChatProvider {
     return this;
   }
 
+  /**
+   * Fail every call for a purpose with a thrown provider error — how a test
+   * reproduces a genuine provider outage without touching the network.
+   */
+  fail(purpose: AiPurpose, error: Error): this {
+    this.standing.set(purpose, () => {
+      throw error;
+    });
+    return this;
+  }
+
   async chat(request: ChatRequest): Promise<ChatResponse> {
     this.requests.push(request);
 

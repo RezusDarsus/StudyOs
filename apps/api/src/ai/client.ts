@@ -178,7 +178,11 @@ export async function chatJson<S extends z.ZodTypeAny>(
         role: 'user',
         content:
           `That response did not match the required schema: ${lastError}. ` +
-          'Reply again with ONLY the corrected JSON object. No prose, no markdown fences.',
+          'Reply again with ONLY the corrected JSON object. No prose, no markdown fences. ' +
+          'If an atom represents information the user has not actually stated, remove that atom ' +
+          'completely — never invent a value just to satisfy the schema, never replace a missing ' +
+          'number with 0 or another guess, never create a placeholder value. ' +
+          'Return only requirements grounded in user-provided information.',
       });
     }
   }

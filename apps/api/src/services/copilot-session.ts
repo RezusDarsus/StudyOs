@@ -294,12 +294,20 @@ async function runInterviewTurn(
         thinking: false,
         temperature: 0.4,
         maxTokens: 1400,
-        // Measured: median 2.9s, p90 7.6s, p99 18.5s. A 20s cap sat exactly on
-        // p99 and killed calls that were about to succeed; 25s still catches a
-        // genuine hang (the observed outlier was 44s) without clipping the
-        // tail. This is an interactive button, so never leave it spinning
-        // through two minute-long attempts.
-        timeoutMs: 6_000,
+        // The cap must sit ABOVE the provider's observed latency tail, or it
+        // kills calls that were about to succeed. History: 25s was calibrated
+        // to a 44s outlier; b985069 then raised it to 60s because NVIDIA can
+        // take longer than 25s under normal load; f6eb683 later dropped it to
+        // 6s while tuning fallback latency, which made EVERY interview turn
+        // time out (P1 — "I want to read more" failed 5/5) with the provider
+        // perfectly healthy. Re-measured 2026-09-02: median ~12s, p90 ~34s,
+        // p95 ~40s, max 47s. 60s covers the whole observed tail, matches the
+        // goal-chat calls, and a timeout is a single bounded wait (retryTransient
+        // is false; the second attempt exists only for schema repair), inside
+        // the "never leave it spinning through two minute-long attempts"
+        // ceiling and far under nginx's 300s. Never lower this without new
+        // measurements.
+        timeoutMs: 60_000,
         retryTransient: false,
         messages: [
           { role: 'system', content: systemPrompt },

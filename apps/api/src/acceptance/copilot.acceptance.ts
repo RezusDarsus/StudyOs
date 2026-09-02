@@ -13,10 +13,12 @@
 //   51  A message containing a slash reaches the model unaltered.
 //   52  A plan that gets harder over time starts at its first rung.
 //   59  One goal's memory does not leak into an unrelated goal.
+//   60  Goal chat learns durable preferences into the visible memory panel.
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { addDays, todayIn } from '../domain/dates.js';
 import { AiProviderError } from '../ai/provider.js';
+import { parseRequirementState } from '../ai/context.js';
 import { prisma } from '../lib/prisma.js';
 import { createProgressionPlan } from '../services/progression.js';
 import { useHarness } from './harness.js';
@@ -703,6 +705,65 @@ describe('Copilot acceptance', () => {
     expect(stored.every((p) => p.category === 'FITNESS')).toBe(true);
   });
 
+  // ------------------------------------------------------------------- PART 60
+
+  it('PART 60 — goal chat learns durable preferences into memory', async () => {
+    const user = await h.createUser({ timezone: TZ });
+    const { goal } = await h.ok(user, 'POST', '/api/goals', {
+      title: 'Read More Books',
+      category: 'READING',
+      targetType: 'HABIT',
+      tasks: [{
+        title: 'Read',
+        recurrenceType: 'TIMES_PER_WEEK',
+        recurrenceConfig: { timesPerWeek: 2 },
+      }],
+    });
+
+    // The extraction runs in the background, so the answer arrives first; give
+    // the floating promise a beat to land before asserting on the table.
+    h.ai.respond('PROGRESS_ANALYSIS', {
+      explanation: 'Two sessions a week is a solid start.',
+      suggestions: [],
+    });
+    h.ai.queue('PREFERENCE_EXTRACTION', {
+      preferences: [
+        {
+          key: 'preferred_time_of_day',
+          value: 'evenings',
+          scope: 'CATEGORY',
+          category: 'READING',
+          confidence: 0.9,
+          persistence: 'LONG_TERM',
+        },
+      ],
+    });
+
+    const answer = await h.ok(user, 'POST', `/api/goals/${goal.id}/copilot`, {
+      message: 'I can only read in the evenings after work — how am I doing?',
+    });
+    expect(answer.intent).toBe('PROGRESS');
+
+    await vi.waitFor(async () => {
+      const stored = await prisma.userPreference.findMany({ where: { userId: user.id } });
+      expect(stored).toHaveLength(1);
+    });
+    const stored = await prisma.userPreference.findMany({ where: { userId: user.id } });
+    expect(stored[0]).toMatchObject({
+      key: 'preferred_time_of_day',
+      value: 'evenings',
+      scope: 'CATEGORY',
+      category: 'READING',
+      confidence: 0.9,
+      source: 'COPILOT',
+    });
+
+    // The panel's read endpoint serves exactly what was learned.
+    const panel = await h.ok(user, 'GET', '/api/copilot/preferences');
+    expect(panel.preferences).toHaveLength(1);
+    expect(panel.preferences[0]).toMatchObject({ key: 'preferred_time_of_day', value: 'evenings' });
+  });
+
   // ------------------------------------------------- P0 correctness fixes
   //
   // Four behaviours the interview and draft flow are now required to have:
@@ -1066,4 +1127,155 @@ expect(generateResponses.every((r) => r.status === 200 || r.status === 409)).toB
     expect(answered.questionCount).toBe(2);
     expect(h.ai.countOf('INTERVIEW')).toBe(2);
   });
+
+  // ------------------------------------------------------- release regression
+
+  it('starts the interview for "I want to read more" when the model extraction is valid', async () => {
+    const user = await h.createUser({ timezone: TZ });
+
+    // The exact production defect: this CREATE_GOAL input returned the generic
+    // saved-answer failure on every attempt because the interview turn's
+    // provider timeout was set below the model's real latency. A valid model
+    // extraction must enter the interview instead.
+    h.ai.queue(
+      'INTERVIEW',
+      asksWithReq(
+        { id: 'days_per_week', type: 'NUMBER', prompt: 'How many days a week would you like to read?' },
+        [{ property: 'goal.outcome', scope: 'goal', relation: 'contains', value: { kind: 'text', value: 'read more' }, strength: 'REQUIRED', source: 'stated', evidence: 'read more' }],
+        'Reading more is a great habit to build.',
+      ),
+    );
+
+    const started = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
+      goal: 'I want to read more',
+    });
+
+    // The interview opened: a real question is pending, the turn is not the
+    // generic saved-answer failure, and the state is fresh.
+    expect(started.extractionFailed).toBe(false);
+    expect(started.assistantMessage).not.toBe(
+      "I couldn't process that just now — your answer is saved. Try again in a moment.",
+    );
+    expect(started.question).not.toBeNull();
+    expect(started.status).toBe('INTERVIEWING');
+
+    // The extraction was ingested: the stated outcome is ACTIVE and the gate
+    // is asking its deterministic next question.
+    expect(started.requirements.ready).toBe(false);
+    expect(started.requirements.activeRecords).toBeGreaterThan(0);
+
+    // The fix itself: the interview turn must be sent with a timeout above
+    // the provider's measured latency tail — never the 6s cap that timed every
+    // call out.
+    const interviewRequest = h.ai.requests.find((r) => r.purpose === 'INTERVIEW');
+    expect(interviewRequest?.timeoutMs).toBe(60_000);
+  });
+
+  it('RC-P1-C — a vague opening asks its gap question without inventing requirements (e2e)', async () => {
+    const user = await h.createUser({ timezone: TZ });
+
+    // The post-fix model contract, as a valid turn: the model asks its
+    // frequency question and extracts ONLY what the user stated (the outcome).
+    // No frequency atom exists — unknown information is a gap, not an atom.
+    h.ai.queue(
+      'INTERVIEW',
+      asksWithReq(
+        { id: 'days_per_week', type: 'NUMBER', prompt: 'How many days a week would you like to read?' },
+        [{ property: 'goal.outcome', scope: 'goal', relation: 'contains', value: { kind: 'text', value: 'read more' }, strength: 'REQUIRED', source: 'stated', evidence: 'read more' }],
+        'Reading more is a great habit to build.',
+      ),
+    );
+
+    const started = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
+      goal: 'I want to read more',
+    });
+
+    // The interview opened with a genuine question.
+    expect(started.question?.id).toBe('days_per_week');
+    expect(started.extractionFailed).toBe(false);
+
+    // The stated outcome closed its group; weekly capacity is still a gap.
+    expect(started.requirements.missing).toContain('WEEKLY_CAPACITY');
+    expect(started.requirements.missing).not.toContain('DESIRED_OUTCOME');
+
+    // RC-P1-B, end to end: even when the model DOES emit a fabricated
+    // frequency atom (ungrounded evidence), it may not close coverage.
+    h.ai.queue(
+      'INTERVIEW',
+      asksWithReq(
+        { id: 'session_length', type: 'NUMBER', prompt: 'How many minutes per session?' },
+        [
+          // Grounded outcome re-affirmation...
+          { property: 'goal.outcome', scope: 'goal', relation: 'contains', value: { kind: 'text', value: 'read more' }, strength: 'REQUIRED', source: 'stated', evidence: 'read more' },
+          // ...and a fabricated frequency whose "evidence" is not the user's words.
+          { property: 'schedule.frequency.count', scope: 'schedule', relation: 'eq', value: { kind: 'count', value: 3 }, strength: 'REQUIRED', source: 'stated', evidence: 'How many days a week would you like to read?' },
+        ],
+        'How many minutes per session?',
+      ),
+    );
+    const answered = await h.ok(user, 'POST', `/api/goal-sessions/${started.sessionId}/answers`, {
+      questionId: 'days_per_week',
+      answer: 3,
+    });
+
+    // The user's OWN answer grounded the frequency; the fabricated one could
+    // not close it before, and cannot outrank the user's answer now.
+    expect(answered.requirements.missing).not.toContain('WEEKLY_CAPACITY');
+    const sessionRow = await prisma.copilotSession.findUniqueOrThrow({
+      where: { id: started.sessionId },
+    });
+    const state = parseRequirementStateOf(sessionRow);
+    const freq = state.records.filter(
+      (r) => r.status === 'ACTIVE' && r.property === 'schedule.frequency.count',
+    );
+    expect(freq.length).toBeGreaterThan(0);
+    expect(freq.every((r) => r.provenance === 'USER_EXPLICIT')).toBe(true);
+
+    // Generation is refused while required gaps remain open — the gate asks on.
+    const refused = await h.call(user, 'POST', `/api/goal-sessions/${started.sessionId}/generate`, {});
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe('NOT_READY');
+  });
+
+  it('still saves the answer and refuses to generate when the extraction genuinely fails (R1)', async () => {
+    const user = await h.createUser({ timezone: TZ });
+
+    // The stale-extraction safety behavior is untouched by the fix: a genuine
+    // provider failure on the first turn still saves the message, marks the
+    // state stale, and generates nothing.
+    h.ai.fail('INTERVIEW', new AiProviderError('The AI took too long to respond', 'TIMEOUT'));
+
+    const started = await h.call(user, 'POST', '/api/copilot/goal-sessions', {
+      goal: 'I want to read more',
+    });
+    expect(started.status).toBe(200);
+    expect(started.body.assistantMessage).toBe(
+      "I couldn't process that just now — your answer is saved. Try again in a moment.",
+    );
+    expect(started.body.extractionFailed).toBe(true);
+    expect(started.body.canForce).toBe(false);
+
+    // The message was persisted before the model call, exactly as designed.
+    const session = await prisma.copilotSession.findUniqueOrThrow({
+      where: { id: started.body.sessionId },
+      include: { messages: true },
+    });
+    expect(session.messages.map((m) => m.content)).toContain('I want to read more');
+    expect(parseRequirementStateOf(session).meta?.lastTurnExtraction).toBe('failed');
+
+    // Generation is refused from stale state, and force is unavailable.
+    const refused = await h.call(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${started.body.sessionId}/generate`,
+      { force: true },
+    );
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe('NOT_READY');
+  });
 });
+
+/** The stored requirement state of a session row, for the R1 assertions. */
+function parseRequirementStateOf(session: { structuredContext: string }) {
+  return parseRequirementState(session.structuredContext);
+}

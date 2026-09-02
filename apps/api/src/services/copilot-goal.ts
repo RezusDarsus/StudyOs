@@ -16,7 +16,7 @@ import { getRuntimeKnowledge, portMemo } from '../ai/runtime-knowledge.js';
 import { prisma } from '../lib/prisma.js';
 import { loadGoalForUser } from './goals.js';
 import { buildScoreInput, ensureOccurrences, goalToday } from './occurrences.js';
-import { getPreferencesForPrompt } from './preferences.js';
+import { extractPreferences, getPreferencesForPrompt } from './preferences.js';
 import { recordEvent } from './copilot-analytics.js';
 import {
   normalizeRecommendations,
@@ -114,6 +114,10 @@ export interface GoalCopilotHistoryEntry {
  *  may be reached for as a fallback, and no topic may keep routing on
  *  hardcoded words. */
 const NEVER_MATCH = /(?!x)x/;
+
+/** How much recent conversation the background preference extraction sees —
+ *  bounded the same way the interview pipeline bounds its transcript window. */
+const TRANSCRIPT_WINDOW = 20;
 
 /** Reading-material topic words, from the runtime port only. An absent pack is
  *  the generic never-match degradation — never an inline vocabulary. */
@@ -526,5 +530,20 @@ Request type: ${intent}`;
     },
   );
   const proposals = (outcome.status === 'failed' ? [] : outcome.result.proposals) as never[];
+
+  // Learn durable preferences from the exchange in the background — the same
+  // non-blocking, non-fatal contract the draft pipeline uses. Goal chat has no
+  // CopilotSession, so no sessionId. The transcript is capped to the recent
+  // window, mirroring how the interview pipeline bounds what it sends.
+  void extractPreferences({
+    userId,
+    category: goal.category,
+    transcript: [
+      ...history.slice(-TRANSCRIPT_WINDOW),
+      { role: 'user', content: message },
+      { role: 'assistant', content: analysis.explanation },
+    ],
+  });
+
   return { intent, summary, analysis, progressionProposals: proposals };
 }

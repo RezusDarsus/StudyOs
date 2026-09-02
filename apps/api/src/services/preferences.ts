@@ -87,14 +87,16 @@ export async function deletePreference(userId: string, id: string) {
 }
 
 /**
- * Extract durable preferences from a finished interview.
+ * Extract durable preferences from a finished conversation.
  *
- * Runs after the draft is generated so it never slows the interview down, and a
- * failure here is non-fatal — the plan is already built.
+ * Called after a draft is generated (interview pipeline) and after a goal-chat
+ * turn, so it never slows either down; a failure here is non-fatal — the plan
+ * or the answer is already built. There is no CopilotSession for a goal-chat
+ * turn, so sessionId is optional.
  */
 export async function extractPreferences(opts: {
   userId: string;
-  sessionId: string;
+  sessionId?: string;
   category: string | null;
   transcript: Array<{ role: string; content: string }>;
 }) {
@@ -104,7 +106,7 @@ export async function extractPreferences(opts: {
         purpose: 'PREFERENCE_EXTRACTION',
         promptVersion: PROMPT_VERSIONS.preference,
         userId: opts.userId,
-        sessionId: opts.sessionId,
+        ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
         thinking: false,
         temperature: 0.2,
         maxTokens: 700,

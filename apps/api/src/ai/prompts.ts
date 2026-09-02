@@ -43,9 +43,17 @@ for planning constraints, so be precise and conservative.
         interview_prep), activity.<name> for the activity itself
     "scope": "goal" | "schedule" | "session",
     "relation": "eq" | "ne" | "in" | "contains" | "excludes" | "gte" | "lte",
-    "value": { "kind": "text"|"categorical"|"boolean"|"count"|"quantity"|"date"|"weekdaySet"|"timeOfDay", ... }
-        quantity: { "kind": "quantity", "value": 30, "unit": "minute" }  (unit: minute|hour|km|mi|page|rep|session|eur|usd|gbp)
+    "value": a COMPLETE RequirementValue — every kind's exact shape:
+        text:       { "kind": "text", "value": "read more consistently" }
+        categorical:{ "kind": "categorical", "value": "evening" }
+        boolean:    { "kind": "boolean", "value": true }
+        count:      { "kind": "count", "value": 3 }
+        quantity:   { "kind": "quantity", "value": 45, "unit": "minute" }
+                     (unit: minute|hour|km|mi|page|rep|session|eur|usd|gbp)
+        date:       { "kind": "date", "value": "2026-12-01" }
         weekdaySet: { "kind": "weekdaySet", "days": [1,3] }  (0=Sunday..6=Saturday)
+        timeOfDay:  { "kind": "timeOfDay", "minutes": 1200 }  (minutes since midnight)
+        A kind alone is INVALID — each value carries its full payload.
     "strength": "REQUIRED" | "PREFERRED" | "OPTIONAL" | "EXCLUDED"
         (for an excluded thing use relation "excludes" and strength "REQUIRED")
     "source": "stated" if the user said it in THIS turn, "inferred" if you derived it,
@@ -61,6 +69,11 @@ for planning constraints, so be precise and conservative.
 
 Hard rules for "requirements":
 - ONLY requirements stated or changed in THIS turn. Never restate older turns.
+- An atom represents KNOWN information: a complete value the user has actually
+  supplied. UNKNOWN information is a gap the question asks about — emit NO atom
+  for it. Never represent unknown information with a placeholder, a guessed
+  number, or a kind-only object; if you are about to ask the user for the value,
+  the question represents the gap and no requirement atom exists yet.
 - "evidence" MUST be copied verbatim from THIS turn's user words — it is
   verified against them and rejected otherwise.
 - Never invent numbers. "as needed", "some", "a lot" are not values.

@@ -221,10 +221,26 @@ function valueLabelOf(record: RequirementRecord): string {
   return repr.startsWith('q:') ? repr.slice(2) : repr.replace(/^[a-z]+(:[a-z]+)?:/, '');
 }
 
+/**
+ * The provenance an atom needs before it may close a coverage group.
+ *
+ * MODEL_INFERRED is an ungrounded claim — the model asserting something the
+ * user never said. It never claims user authority anywhere else (validation
+ * lines, contract projection), and coverage is no exception: a fabricated
+ * frequency with the model's own question as "evidence" must not close
+ * WEEKLY_CAPACITY. STORED_CONTEXT and SYSTEM_ASSUMPTION keep their existing
+ * behavior — the demonstrated leak was MODEL_INFERRED only, and reopening
+ * their policy is not this fix.
+ */
+function mayCloseCoverage(record: RequirementRecord): boolean {
+  return record.provenance !== 'MODEL_INFERRED';
+}
+
 function satisfiesGroup(group: CoverageGroup, view: ProjectionView): boolean {
   for (const atom of view.atoms) {
     const { record } = atom;
     if (atom.negated) continue;
+    if (!mayCloseCoverage(record)) continue;
     if (group.propertyPatterns.some((pattern) => pattern.test(record.property))) return true;
   }
   return false;

@@ -1,5 +1,5 @@
 ﻿import { describe, expect, it } from 'vitest';
-import { safeParseJson } from './client.js';
+import { safeParseJson, setProvider } from './client.js';
 import { stripThinking } from './nvidia-provider.js';
 import {
   copilotQuestionSchema,
@@ -1264,5 +1264,71 @@ describe('progress analysis schema (Stage 1 additive fields)', () => {
     expect(() =>
       progressAnalysisSchemaV7.parse({ ...baseAnalysis, recommendsItems: false, recommendations: [] }),
     ).not.toThrow();
+  });
+});
+
+describe('chatJson bounded repair contract (RC-P1-C)', () => {
+  // The live-model defect this pins: a placeholder requirement value fails the
+  // schema, and the model's cheapest "repair" is to invent a number. The
+  // repair message must therefore say what to do with an ungrounded atom —
+  // remove it — and forbid fabricated values explicitly. This is the only
+  // channel that reaches the model on a schema failure.
+  const responses: string[] = [];
+  const requests: Array<{ messages: Array<{ role: string; content: string }> }> = [];
+  const provider = {
+    name: 'stub',
+    model: 'stub',
+    chat: async (req: { messages: Array<{ role: string; content: string }> }) => {
+      requests.push(req);
+      return {
+        content: responses.shift() ?? '{}',
+        latencyMs: 1,
+      };
+    },
+  };
+  setProvider(provider as never);
+
+  it('the repair prompt forbids fabrication and demands atom removal for unstated values', async () => {
+    const { chatJson } = await import('./client.js');
+    const z3 = await import('zod');
+    // First reply carries the exact live defect: a kind-only count placeholder.
+    // The schema mirrors the production RequirementValue contract: a count
+    // without its number is invalid.
+    responses.push(
+      JSON.stringify({ requirements: { atoms: [
+        { property: 'schedule.frequency.count', scope: 'schedule', relation: 'eq',
+          value: { kind: 'count' }, strength: 'REQUIRED', source: 'stated',
+          evidence: 'How many days per week would you like to read?' },
+      ] } }),
+    );
+    // The repair (per the clarified contract) drops the ungrounded atom.
+    responses.push(JSON.stringify({ requirements: { atoms: [] } }));
+
+    const schema = z3.z.object({
+      requirements: z3.z.object({
+        atoms: z3.z.array(z3.z.object({
+          value: z3.z.discriminatedUnion('kind', [
+            z3.z.object({ kind: z3.z.literal('count'), value: z3.z.number() }),
+          ]),
+        })),
+      }),
+    });
+    const parsed = await chatJson(
+      {
+        purpose: 'INTERVIEW',
+        promptVersion: 'test',
+        messages: [{ role: 'user', content: 'build' }],
+      },
+      schema,
+      { maxAttempts: 2 },
+    );
+    expect(parsed.requirements.atoms).toHaveLength(0);
+    expect(requests).toHaveLength(2);
+    const repair = requests[1].messages[requests[1].messages.length - 1].content;
+    expect(repair).toContain('did not match the required schema');
+    expect(repair).toContain('remove that atom');
+    expect(repair).toMatch(/never invent a value/i);
+    expect(repair).toMatch(/never.*placeholder value/i);
+    setProvider(null);
   });
 });
