@@ -62,7 +62,7 @@ const freqAtom = (n: number, evidence: string) => ({
   value: { kind: 'count', value: n }, strength: 'REQUIRED', source: 'stated', evidence,
 });
 const lengthAtom = (minutes: number, evidence = 'session length') => ({
-  property: 'schedule.session.length', scope: 'schedule', relation: 'lte',
+  property: 'schedule.session.length', scope: 'schedule', relation: 'eq',
   value: { kind: 'quantity', value: minutes, unit: 'minute' }, strength: 'REQUIRED', source: 'stated', evidence,
 });
 const deadlineAtom = (date: string, evidence: string) => ({
@@ -116,7 +116,10 @@ describe('Copilot acceptance', () => {
     const user = await h.createUser({ timezone: TZ });
 
     // The extraction carries the stated outcome, so the gap engine never
-    // asks for it: the first asked question is the weekly-capacity gap.
+    // asks for it: the first asked question is the weekly-capacity gap. Every
+    // later atom is grounded in the exact turn it arrives in (the opening
+    // message or the literal answer text) — anything else degrades to
+    // MODEL_INFERRED and closes nothing (RC-P1-B).
     h.ai.queue(
       'INTERVIEW',
       asksWithReq(
@@ -127,11 +130,15 @@ describe('Copilot acceptance', () => {
         },
         [outcomeAtom('lose weight', 'lose weight')],
       ),
-      readyWithReq([
-        freqAtom(3, '3 days'),
-        lengthAtom(45),
-        deadlineAtom(day(30), 'next month'),
-      ]),
+      asksWithReq(
+        { id: 'session_minutes', type: 'NUMBER', prompt: 'How many minutes per session?' },
+        [freqAtom(3, '3 days')],
+      ),
+      asksWithReq(
+        { id: 'deadline', type: 'DATE', prompt: 'By when do you want to reach it?' },
+        [deadlineAtom(day(30), day(30))],
+      ),
+      readyWithReq([lengthAtom(45, '45')]),
     );
 
     const first = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
@@ -139,11 +146,30 @@ describe('Copilot acceptance', () => {
     });
     expect(first.question.id).toBe('gap_weekly_capacity');
 
-    const readyTurn = await h.ok(
+    const sessionTurn = await h.ok(
       user,
       'POST',
       `/api/copilot/goal-sessions/${first.sessionId}/answers`,
       { questionId: first.question.id, answer: '3 days' },
+    );
+    // The frequency landed; the next blocking gap is the timeframe.
+    expect(sessionTurn.question?.id).toBe('gap_timeframe');
+
+    const deadlineTurn = await h.ok(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${first.sessionId}/answers`,
+      { questionId: sessionTurn.question.id, answer: day(30) },
+    );
+    // Required coverage is met; the HIGH session-shape gap is still worth
+    // one question before the interview concludes.
+    expect(deadlineTurn.question?.id).toBe('gap_session_shape');
+
+    const readyTurn = await h.ok(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${first.sessionId}/answers`,
+      { questionId: deadlineTurn.question.id, answer: 45 },
     );
 
     expect(readyTurn.question).toBeNull();
@@ -153,30 +179,60 @@ describe('Copilot acceptance', () => {
     it('does not display a capped question after the interview becomes ready', async () => {
     const user = await h.createUser({ timezone: TZ });
 
-    // The extractions state the outcome, the weekly capacity and the
-    // timeframe; the AST gate concludes when required coverage is met.
+    // Every atom is grounded in the exact turn it arrives in: the stated
+    // outcome closes its group; the later answers ground frequency, deadline
+    // and session length one by one until required coverage is met and the
+    // AST gate concludes without ever showing a capped question.
     h.ai.queue(
       'INTERVIEW',
       asksWithReq(
         { id: 'desired_outcome', type: 'FREE_TEXT', prompt: 'What result would make this goal successful?' },
         [],
       ),
-      readyWithReq([
-        outcomeAtom('Lose weight', 'Lose weight'),
-        freqAtom(5, 'five days a week'),
-        lengthAtom(45),
-        deadlineAtom(day(60), 'in two months'),
-      ]),
+      asksWithReq(
+        { id: 'days_per_week', type: 'NUMBER', prompt: 'How many days per week can you commit to?' },
+        [outcomeAtom('Lose weight', 'Lose weight')],
+      ),
+      asksWithReq(
+        { id: 'deadline', type: 'DATE', prompt: 'By when do you want to reach it?' },
+        [freqAtom(5, '5')],
+      ),
+      asksWithReq(
+        { id: 'session_minutes', type: 'NUMBER', prompt: 'How long should a typical session be, in minutes?' },
+        [deadlineAtom(day(60), day(60))],
+      ),
+      readyWithReq([lengthAtom(45, '45')]),
     );
 
     const first = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
       goal: 'I want to get fitter',
     });
-    const readyTurn = await h.ok(
+    const outcomeTurn = await h.ok(
       user,
       'POST',
       `/api/copilot/goal-sessions/${first.sessionId}/answers`,
       { questionId: first.question.id, answer: 'Lose weight' },
+    );
+    expect(outcomeTurn.question?.id).toBe('gap_weekly_capacity');
+    const freqTurn = await h.ok(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${first.sessionId}/answers`,
+      { questionId: outcomeTurn.question.id, answer: 5 },
+    );
+    expect(freqTurn.question?.id).toBe('gap_timeframe');
+    const deadlineTurn = await h.ok(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${first.sessionId}/answers`,
+      { questionId: freqTurn.question.id, answer: day(60) },
+    );
+    expect(deadlineTurn.question?.id).toBe('gap_session_shape');
+    const readyTurn = await h.ok(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${first.sessionId}/answers`,
+      { questionId: deadlineTurn.question.id, answer: 45 },
     );
 
     expect(readyTurn.question).toBeNull();
@@ -221,21 +277,22 @@ describe('Copilot acceptance', () => {
     it('PART 48 Ã¢â‚¬â€ a goal built in the widget is an ordinary goal', async () => {
     const user = await h.createUser({ timezone: TZ });
 
-    // A vague everyday goal: the extraction carries the stated outcome and
-    // weekly rhythm; the AST gate concludes and the plan becomes an ordinary
-    // Phase 1 goal indistinguishable from a hand-made one.
+    // A vague everyday goal stated with enough specifics for the AST gate to
+    // conclude at once: every atom below is grounded in the user's exact
+    // opening words, so required coverage closes and the plan becomes an
+    // ordinary Phase 1 goal indistinguishable from a hand-made one.
     h.ai.queue(
       'INTERVIEW',
       readyWithReq([
-        outcomeAtom('regular movement', 'become fitter'),
-        freqAtom(3, 'boxing and gym'),
-        lengthAtom(45),
-        deadlineAtom(day(60), 'next month'),
+        outcomeAtom('become fitter', 'become fitter'),
+        freqAtom(3, '3 days a week'),
+        lengthAtom(45, '45 minutes'),
+        deadlineAtom(day(60), day(60)),
       ]),
     );
 
     const first = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
-      goal: 'I want to become fitter',
+      goal: 'I want to become fitter — 3 days a week, 45 minutes, by ' + day(60),
     });
     expect(first.question).toBeNull();
     expect(first.canGenerate).toBe(true);
@@ -424,20 +481,22 @@ describe('Copilot acceptance', () => {
     it('PART 52 — a progressive plan starts on its first rung', async () => {
     const user = await h.createUser({ timezone: TZ });
 
-    // Everything the opening message states is already in the AST: the gate
-    // concludes at zero questions and the Copilot goes straight to a plan.
+    // Everything the opening message states is already in the AST — outcome,
+    // frequency, session length and deadline, all grounded in the user's
+    // exact words — so the gate concludes at zero questions and the Copilot
+    // goes straight to a plan.
     h.ai.queue(
       'INTERVIEW',
       readyWithReq([
         { property: 'goal.target', scope: 'goal', relation: 'eq', value: { kind: 'quantity', value: 10, unit: 'page' }, strength: 'REQUIRED', source: 'stated', evidence: '10 pages' },
         freqAtom(7, 'every day'),
-        lengthAtom(20),
+        lengthAtom(20, '20 minutes'),
         deadlineAtom(day(90), 'for the next three months'),
       ]),
     );
 
     const session = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
-      goal: 'I want to read 10 pages every day at 9pm for the next three months',
+      goal: 'I want to read 10 pages every day for 20 minutes at 9pm for the next three months',
     });
     expect(session.questionCount).toBe(0);
     expect(session.question).toBeNull();
@@ -782,29 +841,25 @@ describe('Copilot acceptance', () => {
   it('P0 Ã¢â‚¬â€ a provider outage is a 503, and no fake plan is left behind', async () => {
     const user = await h.createUser({ timezone: TZ });
 
-    // Walk the interview to a legitimately ready state: two answers given, and
-    // the model extracting the desired outcome it just heard about. Evidence
-    // quotes must be spans of the turn they arrived in ('fitter' is in the
-    // opening message; the numbers are the literal answers).
+    // Walk the interview to a legitimately ready state, one grounded atom per
+    // turn: the stated outcome arrives with the opening message ('get fitter'
+    // is in it), and each answer turn re-affirms only what ITS answer text
+    // grounds — the numbers and the date are the literal answers.
     h.ai.queue(
       'INTERVIEW',
-      frequencyQuestion,
+      asksWithReq(
+        { id: 'days_per_week', type: 'NUMBER', prompt: 'How many days a week can you train?' },
+        [outcomeAtom('get fitter', 'get fitter')],
+      ),
       asksWithReq(
         { id: 'session_minutes', type: 'NUMBER', prompt: 'How many minutes per session?' },
-        [outcomeAtom('get fitter', 'fitter')],
+        [freqAtom(3, '3')],
       ),
-      readyWithReq([
-        outcomeAtom('get fitter', 'fitter'),
-        freqAtom(3, '3'),
-        lengthAtom(30, '30'),
-        deadlineAtom(day(60), 'by ' + day(60)),
-      ]),
-      readyWithReq([
-        outcomeAtom('get fitter', 'fitter'),
-        freqAtom(3, '3'),
-        lengthAtom(30, '30'),
-        deadlineAtom(day(60), 'by ' + day(60)),
-      ]),
+      asksWithReq(
+        { id: 'deadline', type: 'DATE', prompt: 'By when do you want to reach it?' },
+        [deadlineAtom(day(60), day(60))],
+      ),
+      readyWithReq([lengthAtom(30, '30')]),
     );
 
     const started = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
@@ -813,6 +868,10 @@ describe('Copilot acceptance', () => {
     await h.ok(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/answers`, {
       questionId: 'gap_weekly_capacity',
       answer: 3,
+    });
+    await h.ok(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/answers`, {
+      questionId: 'gap_timeframe',
+      answer: day(60),
     });
     const finished = await h.ok(
       user,
@@ -851,20 +910,17 @@ describe('Copilot acceptance', () => {
       'INTERVIEW',
       asksWithReq(
         { id: 'days_per_week', type: 'NUMBER', prompt: 'How many days a week can you train?' },
-        [outcomeAtom('get fitter', 'fitter')],
+        [outcomeAtom('get fitter', 'get fitter')],
       ),
-      readyWithReq([
-        outcomeAtom('get fitter', 'fitter'),
-        freqAtom(3, '3'),
-        lengthAtom(30, '30'),
-        deadlineAtom(day(60), 'by ' + day(60)),
-      ]),
-      readyWithReq([
-        outcomeAtom('get fitter', 'fitter'),
-        freqAtom(3, '3'),
-        lengthAtom(30, '30'),
-        deadlineAtom(day(60), 'by ' + day(60)),
-      ]),
+      asksWithReq(
+        { id: 'session_minutes', type: 'NUMBER', prompt: 'How many minutes per session?' },
+        [freqAtom(3, '3')],
+      ),
+      asksWithReq(
+        { id: 'deadline', type: 'DATE', prompt: 'By when do you want to reach it?' },
+        [deadlineAtom(day(60), day(60))],
+      ),
+      readyWithReq([lengthAtom(30, '30')]),
     );
 
     const started = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
@@ -873,6 +929,10 @@ describe('Copilot acceptance', () => {
     await h.ok(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/answers`, {
       questionId: 'gap_weekly_capacity',
       answer: 3,
+    });
+    await h.ok(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/answers`, {
+      questionId: 'gap_timeframe',
+      answer: day(60),
     });
     await h.ok(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/answers`, {
       questionId: 'gap_session_shape',
@@ -1190,8 +1250,10 @@ expect(generateResponses.every((r) => r.status === 200 || r.status === 409)).toB
       goal: 'I want to read more',
     });
 
-    // The interview opened with a genuine question.
-    expect(started.question?.id).toBe('days_per_week');
+    // The interview opened with a genuine question. The deterministic gate
+    // replaces the model's own frequency question with the registered gap
+    // question for the same slot — that replacement IS the architecture.
+    expect(started.question?.id).toBe('gap_weekly_capacity');
     expect(started.extractionFailed).toBe(false);
 
     // The stated outcome closed its group; weekly capacity is still a gap.
@@ -1213,8 +1275,8 @@ expect(generateResponses.every((r) => r.status === 200 || r.status === 409)).toB
         'How many minutes per session?',
       ),
     );
-    const answered = await h.ok(user, 'POST', `/api/goal-sessions/${started.sessionId}/answers`, {
-      questionId: 'days_per_week',
+    const answered = await h.ok(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/answers`, {
+      questionId: 'gap_weekly_capacity',
       answer: 3,
     });
 
@@ -1232,7 +1294,7 @@ expect(generateResponses.every((r) => r.status === 200 || r.status === 409)).toB
     expect(freq.every((r) => r.provenance === 'USER_EXPLICIT')).toBe(true);
 
     // Generation is refused while required gaps remain open — the gate asks on.
-    const refused = await h.call(user, 'POST', `/api/goal-sessions/${started.sessionId}/generate`, {});
+    const refused = await h.call(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/generate`, {});
     expect(refused.status).toBe(409);
     expect(refused.body.code).toBe('NOT_READY');
   });
