@@ -420,10 +420,23 @@ export function temporalLabel(state: RequirementState, recordId: string): string
 // ------------------------------------------------- deterministic gap resolution
 //
 // Rev.3: model-free ingestion exists ONLY for semantically fixed structured
-// answers — the three typed gap questions below. Arbitrary FREE_TEXT (desired
-// outcome, baseline, preferences) and conflict/pending clarifications always
+// answers — the registered gap questions below. The contract of each
+// registered question is fixed and mechanical: the answer maps to an atom
+// without interpretation, or the question does not resolve (nothing is ever
+// fabricated, clamped, or guessed). Conflict/pending clarifications always
 // require free-text extraction; on provider failure they take the stale-AST
-// containment path instead. Nothing is ever fabricated.
+// containment path instead.
+//
+// RC-P1-D (2026-09-02): gap_desired_outcome is registered because the live
+// production model (nemotron-3.5-lightning-30b-a3b) empirically emits ZERO
+// requirement atoms for this turn shape (reproduced across old and new prompt
+// wording, opening messages and answer turns) while the AST gate REQUIRES
+// DESIRED_OUTCOME to close before generate. The result was a livelock: the
+// gate re-asked gap_desired_outcome until the hard cap with no atom ever
+// landing. The fixed contract here — the user's trimmed, non-trivial answer
+// IS the outcome, verbatim, in their own words — is exactly the mechanical
+// shape this mechanism exists for, and it fabricates nothing: the value is
+// the user's literal answer text.
 
 export interface GapResolutionCandidate {
   property: string;
@@ -434,8 +447,11 @@ export interface GapResolutionCandidate {
 
 type RequirementValue2 = RequirementRecord['value'];
 
+/** The minimum length an outcome answer must have to be a real answer. */
+const MIN_OUTCOME_LENGTH = 3;
+
 /**
- * Parse a structured answer to one of the three registered gap questions.
+ * Parse a structured answer to one of the registered gap questions.
  * Returns null when the id is not registered or the answer does not satisfy
  * the question's fixed contract.
  */
@@ -457,6 +473,13 @@ export function deterministicGapResolution(
     const text = String(answer ?? '').trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
     return { property: 'goal.deadline', scope: 'goal', relation: 'eq', value: { kind: 'date', value: text } };
+  }
+  if (questionId === 'gap_desired_outcome') {
+    // The user's own words, verbatim and trimmed — the literal answer is the
+    // outcome. Never a model summary, never a fabrication: value === answer.
+    const text = String(answer ?? '').trim();
+    if (text.length < MIN_OUTCOME_LENGTH || text.length > 400) return null;
+    return { property: 'goal.outcome', scope: 'goal', relation: 'contains', value: { kind: 'text', value: text.toLowerCase() } };
   }
   return null;
 }

@@ -1299,6 +1299,64 @@ expect(generateResponses.every((r) => r.status === 200 || r.status === 409)).toB
     expect(refused.body.code).toBe('NOT_READY');
   });
 
+  it('RC-P1-D — a model that extracts nothing cannot livelock the outcome question (e2e)', async () => {
+    const user = await h.createUser({ timezone: TZ });
+
+    // The exact live production failure shape, reproduced with the stub: the
+    // model parses fine but its requirements channel carries ZERO atoms —
+    // what nemotron-3.5-lightning-30b-a3b actually returns today. Pre-fix,
+    // gap_desired_outcome re-asked forever because DESIRED_OUTCOME (required
+    // coverage) had no ingest path other than model extraction.
+    const emptyExtraction = () => ({
+      state: 'NEEDS_MORE_INFORMATION',
+      assistantMessage: 'What result would make this goal successful?',
+      question: {
+        id: 'some_model_question',
+        type: 'FREE_TEXT',
+        prompt: 'What result would make this goal successful?',
+        allowCustomAnswer: true,
+        optional: false,
+      },
+      extractedContext: {},
+      requirements: { atoms: [], groups: [], pendingAmbiguity: [] },
+    });
+    h.ai.respond('INTERVIEW', emptyExtraction);
+
+    const started = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
+      goal: 'I want to get fitter',
+    });
+    expect(started.question?.id).toBe('gap_desired_outcome');
+
+    // The user answers the outcome question in their own words.
+    const answered = await h.ok(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${started.sessionId}/answers`,
+      {
+        questionId: 'gap_desired_outcome',
+        answer: 'A noticeable improvement within ten weeks',
+      },
+    );
+
+    // RC-P1-D: the deterministic ingest closes DESIRED_OUTCOME from the
+    // literal answer even though the model extracted nothing — the gate
+    // moves ON instead of re-asking the same question.
+    expect(answered.requirements.missing).not.toContain('DESIRED_OUTCOME');
+    expect(answered.question?.id).not.toBe('gap_desired_outcome');
+    expect(answered.requirements.activeRecords).toBeGreaterThan(0);
+
+    // The outcome record is the user's own words at USER_EXPLICIT.
+    const sessionRow = await prisma.copilotSession.findUniqueOrThrow({
+      where: { id: started.sessionId },
+    });
+    const state = parseRequirementStateOf(sessionRow);
+    const outcome = state.records.find(
+      (r) => r.property === 'goal.outcome' && r.status === 'ACTIVE',
+    );
+    expect(outcome?.provenance).toBe('USER_EXPLICIT');
+    expect((outcome?.value as { value: string }).value).toContain('noticeable improvement');
+  });
+
   it('still saves the answer and refuses to generate when the extraction genuinely fails (R1)', async () => {
     const user = await h.createUser({ timezone: TZ });
 

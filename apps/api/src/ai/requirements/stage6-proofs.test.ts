@@ -85,9 +85,30 @@ describe('Stage 6: deterministic gap parser — the three registered questions',
     expect(deterministicGapResolution('gap_timeframe', '30/02/2026')).toBeNull();
   });
 
-  it('unregistered question ids never resolve — model-free ingestion is closed', () => {
-    expect(deterministicGapResolution('gap_desired_outcome', 'anything')).toBeNull();
+  it('gap_desired_outcome resolves the user\'s literal answer as the outcome (RC-P1-D)', () => {
+    // The live defect this pins: the production model emitted ZERO atoms for
+    // outcome turns, so the required DESIRED_OUTCOME group could never close
+    // and the gate re-asked the same question to the hard cap. The registered
+    // contract: the answer IS the outcome, verbatim, in the user's own words.
+    expect(deterministicGapResolution('gap_desired_outcome', 'A noticeable improvement in ten weeks')).toEqual({
+      property: 'goal.outcome', scope: 'goal', relation: 'contains',
+      value: { kind: 'text', value: 'a noticeable improvement in ten weeks' },
+    });
+    // Out of contract: no fabrication from empty, trivial, or oversized input.
+    expect(deterministicGapResolution('gap_desired_outcome', 'ok')).toBeNull();
+    expect(deterministicGapResolution('gap_desired_outcome', '   ')).toBeNull();
+    expect(deterministicGapResolution('gap_desired_outcome', null)).toBeNull();
+    expect(deterministicGapResolution('gap_desired_outcome', 'x'.repeat(401))).toBeNull();
+  });
+
+  it('unregistered question ids never resolve — model-free ingestion stays closed', () => {
+    // RC-P1-D note: gap_desired_outcome moved from this list to the block
+    // above — a documented architecture change, not a silent weakening. It is
+    // the ONLY free-text gap question the deterministic gate itself asks as a
+    // BLOCKING gap, and its contract (value === the user's answer) is fixed
+    // and mechanical. Everything else here stays closed.
     expect(deterministicGapResolution('gap_baseline', 'anything')).toBeNull();
+    expect(deterministicGapResolution('gap_preferences', 'anything')).toBeNull();
     expect(deterministicGapResolution('days_per_week', 3)).toBeNull();
     expect(deterministicGapResolution('gap_timeframe', '')).toBeNull();
   });
