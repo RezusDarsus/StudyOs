@@ -304,14 +304,16 @@ const DAY_NAME_TO3 = {
 /**
  * Fixed answer-date fallback, computed once per run: today + 10 weeks.
  *
- * RC-P1-F harness alignment: this used to be isoDaysAgo(70) — 70 days in the
- * PAST — which fed every DATE answer that promptDate could not extract. The
- * interview now (correctly) rejects a non-future deadline at ingest, so a
- * past fallback would manufacture pastDeadlineAccepted pressure that is the
- * harness's fault, not the product's. A future fallback is what a real user
- * answering "by when?" would actually type.
+ * NOTE (2026-09-03, post-sign-error review): despite its name, isoDaysAgo
+ * ADDS days (Date.now() + days*86400000), so isoDaysAgo(70) is 70 days in
+ * the FUTURE. An earlier "alignment" edit flipped it to -70, silently
+ * turning every fallback DATE answer into a past deadline — which the
+ * RC-P1-F product fix correctly refuses at ingest, so TIMEFRAME could never
+ * close and the whole run collapsed to NOT_READY. The product was right;
+ * the harness was wrong. Keep the sign POSITIVE: a user answering "by
+ * when?" types a future date.
  */
-const DEFAULT_DATE = isoDaysAgo(-70);
+const DEFAULT_DATE = isoDaysAgo(70);
 
 function promptDate(prompt) {
   const month = prompt.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),?\s+(20\d{2})\b/i);
