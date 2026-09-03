@@ -1493,6 +1493,91 @@ expect(generateResponses.every((r) => r.status === 200 || r.status === 409)).toB
     // The gate's own question is what the user sees — coherent by construction.
     expect(started.assistantMessage).toBe(started.question?.prompt);
   });
+
+  it('RC-P1-H — a deterministically-ingested answer survives its provider timeout (e2e)', async () => {
+    const user = await h.createUser({ timezone: TZ });
+
+    // The exact live failure (frozen-100 cases 3, 4, 9, 17, 30, 97, 7, 21, 98,
+    // 99): the user answers a registered gap question; the deterministic
+    // ingest writes the atom; the answer turn's MODEL call then times out.
+    // The answer is genuinely saved — the state is fresh, not stale — so the
+    // interview must move on, generate must be possible, and the just-answered
+    // question must never be re-presented.
+    let turns = 0;
+    h.ai.respond('INTERVIEW', () => {
+      turns += 1;
+      if (turns === 1) {
+        return {
+          state: 'NEEDS_MORE_INFORMATION',
+          assistantMessage: 'What result would make this goal successful?',
+          question: { id: 'any_q', type: 'FREE_TEXT', prompt: 'What result would make this goal successful?', allowCustomAnswer: true, optional: false },
+          extractedContext: {},
+          requirements: { atoms: [], groups: [], pendingAmbiguity: [] },
+        };
+      }
+      throw new AiProviderError('The AI took too long to respond', 'TIMEOUT');
+    });
+
+    const started = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
+      goal: 'prepare for an exam',
+    });
+    expect(started.question?.id).toBe('gap_desired_outcome');
+
+    const answered = await h.ok(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${started.sessionId}/answers`,
+      {
+        questionId: 'gap_desired_outcome',
+        answer: 'A pass on the certification exam',
+      },
+    );
+
+    // The deterministic ingest closed DESIRED_OUTCOME even though the answer
+    // turn's model call died. The state is NOT stale: the gate runs on it.
+    expect(answered.requirements.missing).not.toContain('DESIRED_OUTCOME');
+    // The just-answered question is never re-presented.
+    expect(answered.question?.id).not.toBe('gap_desired_outcome');
+    expect(answered.assistantMessage).not.toMatch(/hiccup/i);
+
+    // Generation is not blocked by a stale-extraction flag the answer already
+    // survived: required coverage can close and generate succeeds.
+    const cap = await h.ok(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/answers`, {
+      questionId: answered.question?.id ?? 'gap_weekly_capacity',
+      answer: 3,
+    });
+    const timed = await h.ok(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/answers`, {
+      questionId: cap.question?.id ?? 'gap_timeframe',
+      answer: day(60),
+    });
+
+    h.ai.queue('DRAFT_GENERATION', {
+      title: 'Certification Prep',
+      description: 'Steady exam preparation.',
+      category: 'STUDY',
+      targetType: 'HABIT',
+      deadline: day(60),
+      rationale: 'Built from the answers you gave.',
+      tasks: [{
+        title: 'Study — exam prep',
+        description: 'Focused review.',
+        recurrence: { type: 'TIMES_PER_WEEK', timesPerWeek: 3 },
+        estimatedMinutes: 30,
+        reason: 'Matches the days you gave.',
+      }],
+    });
+    // Answer turns keep timing out; the DRAFT call must still be possible.
+    const generated = await h.call(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${started.sessionId}/generate`,
+      {},
+    );
+    // Ready coverage closed deterministically, so generate succeeds even
+    // though interview model turns have been failing.
+    expect(generated.status).toBe(200);
+    expect(generated.body.draft?.title).toBe('Certification Prep');
+  });
 });
 
 /** The stored requirement state of a session row, for the R1 assertions. */

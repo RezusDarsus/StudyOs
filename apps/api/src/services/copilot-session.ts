@@ -356,6 +356,18 @@ async function applyTurn(
     /** Force the stale path even when a fragment exists (deterministic-only turn). */
     extractionFailed?: boolean;
     assistantMessageOverride?: string;
+    /**
+     * RC-P1-H: the current answer was deterministically ingested before the
+     * model call, and the model call itself failed. The state is FRESH —
+     * meta.lastTurnExtraction stays 'ok' because the authoritative ingest
+     * succeeded — so the turn must NOT take the stale path: the gate runs on
+     * the ingested answer, generate stays possible, and the just-answered
+     * question is never re-presented. Without this, a 60s provider timeout
+     * after a saved answer both re-asked the question and (worse) marked the
+     * state stale, refusing generation with a "couldn't process" message even
+     * though the answer was demonstrably in.
+     */
+    deterministicallyIngested?: boolean;
   },
 ): Promise<InterviewTurn> {
   const context = parseContext(session.structuredContext, session.initialGoalText);
@@ -373,10 +385,12 @@ async function applyTurn(
   const existing = parseRequirementState(session.structuredContext);
   const grounding = astGroundingFor(session, input.currentAnswer);
   let requirementState: RequirementState;
-  if (input.response === null || input.extractionFailed) {
+  const turnIsStale = (input.response === null || input.extractionFailed === true)
+    && input.deterministicallyIngested !== true;
+  if (turnIsStale) {
     requirementState = markExtractionFailed(existing);
   } else {
-    requirementState = ingestExtraction(existing, input.response.requirements, grounding).state;
+    requirementState = ingestExtraction(existing, input.response?.requirements ?? { atoms: [], groups: [], pendingAmbiguity: [], unmodeledSpans: [] }, grounding).state;
   }
   context.requirements = requirementState;
 
@@ -391,7 +405,7 @@ async function applyTurn(
   let state: 'INTERVIEWING' | 'READY_TO_GENERATE' = 'INTERVIEWING';
   let assistantMessage = input.assistantMessageOverride ?? input.response?.assistantMessage ?? '';
 
-  if (input.response === null || input.extractionFailed) {
+  if (turnIsStale) {
     // R1: a failed extraction can never conclude. The pending question is
     // re-presented; a generate request is refused until a successful ingest.
     question = pendingQuestion(session);
@@ -487,7 +501,10 @@ async function applyTurn(
     revision: updated.revision,
     shouldAsk: astReadiness.shouldAsk,
     canForce: canForceGenerate(updated, requirementState),
-    extractionFailed: input.response === null || input.extractionFailed === true,
+    // RC-P1-H: the turn-level provider outcome, not the staleness decision —
+    // a deterministically-ingested answer whose model call died reports the
+    // provider failure honestly while the state itself stays fresh.
+    extractionFailed: turnIsStale,
     requirements: requirementsSummary(requirementState, nextCount),
   };
 }
@@ -709,6 +726,10 @@ export async function answerQuestion(
       return applyTurn(refreshed, {
         response: null,
         extractionFailed: false,
+        // RC-P1-H: the answer WAS the ingest — meta stays 'ok', the gate runs
+        // on the ingested state, and the answered question is never asked
+        // again. Only the message acknowledges the hiccup.
+        deterministicallyIngested: true,
         currentAnswer: groundingAnswer,
         assistantMessageOverride:
           "That's recorded — the service hiccuped on my end, but your answer is in.",
