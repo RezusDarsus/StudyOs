@@ -237,6 +237,44 @@ describe('the interview inside the widget', () => {
     expect(await screen.findByText('Setting up your plan')).toBeInTheDocument();
     expect(screen.queryByText(/of ~/)).toBeNull();
   });
+
+  it('RC-P1-E — a READY turn never renders an unanswerable question: Build Plan replaces the input', async () => {
+    // The coherence contract: question === null + canGenerate === true is
+    // the plan phase. The server must send a wrap-up message (pinned on the
+    // API side); even if a stale question-looking bubble ever arrived, the
+    // widget must render the Build Plan action and NO answer control.
+    turn = {
+      ...turn,
+      status: 'READY_TO_GENERATE',
+      question: null,
+      canGenerate: true,
+      assistantMessage: "That's everything I need.",
+    };
+    const user = renderWidget();
+    await send(user, 'I want to read more');
+
+    expect(await screen.findByText("That's everything I need.")).toBeInTheDocument();
+    // The build action is what the phase offers.
+    expect(screen.getByRole('button', { name: /Build my plan/i })).toBeInTheDocument();
+    // No question control remains: the pending-question options from the
+    // fixture's question object must not render.
+    expect(screen.queryByRole('button', { name: 'Weekdays' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Continue/ })).toBeNull();
+  });
+
+  it('RC-P1-E — an INTERVIEWING turn with a question keeps the answer control available', async () => {
+    // The other direction of the coherence rule: while the structured turn
+    // carries a question, the answer input must exist and be usable. The
+    // Continue button waits for a selection by design (pinned above), so
+    // "usable" means: pick an option and it unlocks.
+    const user = renderWidget();
+    await send(user, 'I want to get fitter');
+
+    expect(await screen.findByText('Got it. Which days suit you?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Weekdays' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Weekdays' }));
+    expect(screen.getByRole('button', { name: /Continue/ })).not.toBeDisabled();
+  });
 });
 
 describe('routing a message that is not obviously a goal', () => {

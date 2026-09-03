@@ -1,4 +1,5 @@
 import type { CopilotQuestion } from '../schemas.js';
+import { isDayString, todayIn } from '../../domain/dates.js';
 import {
   isAuthoritativeRecord,
   temporalKey,
@@ -447,6 +448,26 @@ export interface GapResolutionCandidate {
 
 type RequirementValue2 = RequirementRecord['value'];
 
+/**
+ * The only answer shape a deterministic numeric slot may accept: a BARE
+ * integer, with nothing else. (RC-P1-G, the lossless-parsing rule.)
+ *
+ * parseInt-style prefix parsing collapsed "5-6" into exactly 5 and "30-40"
+ * into exactly 30 — silent semantic corruption of a user-stated constraint.
+ * A number carrying ANY other semantics (a range, a bound, a hedge, trailing
+ * words, a unit) is not deterministically parseable: the parser returns null
+ * and the answer takes the extraction/clarification path instead. The parser
+ * accepts only what it can preserve exactly.
+ */
+function bareIntegerOf(answer: unknown): number | null {
+  if (typeof answer === 'number' && Number.isInteger(answer)) return answer;
+  if (typeof answer !== 'string') return null;
+  const text = answer.trim();
+  if (!/^-?\d+$/.test(text)) return null;
+  const n = Number.parseInt(text, 10);
+  return Number.isSafeInteger(n) ? n : null;
+}
+
 /** The minimum length an outcome answer must have to be a real answer. */
 const MIN_OUTCOME_LENGTH = 3;
 
@@ -454,24 +475,46 @@ const MIN_OUTCOME_LENGTH = 3;
  * Parse a structured answer to one of the registered gap questions.
  * Returns null when the id is not registered or the answer does not satisfy
  * the question's fixed contract.
+ *
+ * `now`/`timezone` (RC-P1-F): the timeframe answer must satisfy the SAME
+ * domain validity the downstream draft validator enforces — a calendar-real
+ * date strictly in the future, observed in the user's timezone, the same
+ * `todayIn` the draft uses. A date that would be silently deleted at draft
+ * time must never close TIMEFRAME at interview time; the gate re-asks with
+ * the correction instead. When the caller supplies no clock the resolver
+ * degrades to UTC "now" — still calendar-valid and future-checked.
  */
 export function deterministicGapResolution(
   questionId: string,
   answer: unknown,
+  opts: { now?: Date; timezone?: string } = {},
 ): GapResolutionCandidate | null {
   if (questionId === 'gap_weekly_capacity') {
-    const n = typeof answer === 'number' ? answer : Number.parseInt(String(answer ?? ''), 10);
-    if (!Number.isInteger(n) || n < 1 || n > 7) return null;
+    // RC-P1-G: only a bare exact integer is an exact frequency. "5-6",
+    // "about 5", "at least 5", "5+" and friends carry semantics this slot
+    // cannot represent exactly, so they never ingest deterministically.
+    const n = bareIntegerOf(answer);
+    if (n === null || n < 1 || n > 7) return null;
     return { property: 'schedule.frequency.count', scope: 'schedule', relation: 'eq', value: { kind: 'count', value: n } };
   }
   if (questionId === 'gap_session_shape') {
-    const n = typeof answer === 'number' ? answer : Number.parseInt(String(answer ?? ''), 10);
-    if (!Number.isInteger(n) || n < 5 || n > 300) return null;
+    // RC-P1-G: same lossless rule — "30-40" is a range, never exactly 30.
+    const n = bareIntegerOf(answer);
+    if (n === null || n < 5 || n > 300) return null;
     return { property: 'schedule.session.length', scope: 'schedule', relation: 'eq', value: { kind: 'quantity', value: n, unit: 'minute' } };
   }
   if (questionId === 'gap_timeframe') {
     const text = String(answer ?? '').trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+    // Calendar-real date first: 2026-02-30 and 2026-13-01 never resolve
+    // (isDayString probes the actual calendar, not the regex shape).
+    if (!isDayString(text)) return null;
+    // RC-P1-F domain validity: the same rule the draft validator applies —
+    // a deadline must be strictly in the future, observed in the product
+    // timezone. Today itself is INVALID (a "deadline" of today is already
+    // over at plan time); the draft deletes `deadline <= today`, so the
+    // interview must not accept it as authoritative either.
+    const today = todayIn(opts.timezone ?? 'UTC', opts.now ?? new Date());
+    if (text <= today) return null;
     return { property: 'goal.deadline', scope: 'goal', relation: 'eq', value: { kind: 'date', value: text } };
   }
   if (questionId === 'gap_desired_outcome') {

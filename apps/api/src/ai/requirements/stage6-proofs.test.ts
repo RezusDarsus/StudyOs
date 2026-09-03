@@ -59,10 +59,17 @@ describe('Stage 6: deterministic gap parser — the three registered questions',
       property: 'schedule.frequency.count', scope: 'schedule', relation: 'eq',
       value: { kind: 'count', value: 3 },
     });
-    expect(deterministicGapResolution('gap_weekly_capacity', '4 days')).toEqual({
+    // RC-P1-G honest pin update: '4 days' previously prefix-parsed to exactly
+    // 4 via parseInt. That was the lossless-parsing violation — trailing text
+    // can carry semantics ("4 days", "4 days maybe") the eq slot cannot
+    // represent, so a qualified answer is NOT deterministically parseable
+    // and takes the extraction path instead. The NUMBER UI sends the bare
+    // integer; prose answers were never this parser's contract.
+    expect(deterministicGapResolution('gap_weekly_capacity', '4')).toEqual({
       property: 'schedule.frequency.count', scope: 'schedule', relation: 'eq',
       value: { kind: 'count', value: 4 },
     });
+    expect(deterministicGapResolution('gap_weekly_capacity', '4 days')).toBeNull();
     // Out of contract: never a partial or clamped ingest.
     expect(deterministicGapResolution('gap_weekly_capacity', 0)).toBeNull();
     expect(deterministicGapResolution('gap_weekly_capacity', 8)).toBeNull();
@@ -111,6 +118,123 @@ describe('Stage 6: deterministic gap parser — the three registered questions',
     expect(deterministicGapResolution('gap_preferences', 'anything')).toBeNull();
     expect(deterministicGapResolution('days_per_week', 3)).toBeNull();
     expect(deterministicGapResolution('gap_timeframe', '')).toBeNull();
+  });
+});
+
+// ------------------------------------------ lossless deterministic parsing (RC-P1-G)
+
+describe('Stage 6: deterministic gap parsers are lossless — no prefix-parse semantic collapse', () => {
+  // The permanent genericity rule: if the parser accepts an answer it must
+  // preserve the semantics it claims (equality, bounds, range, exclusion,
+  // temporal meaning, unit, scope); if it cannot, it must return null and
+  // leave the answer to the extraction/clarification path. NEVER partially
+  // parse a range and silently promote one endpoint to an exact value.
+  //
+  // The observed live defect: parseInt("5-6") → 5 and parseInt("30-40") → 30,
+  // silently storing "exactly 5 days/week" for a stated "5-6 days/week".
+  const RANGE_ANSWERS = [
+    '5-6', '5 – 6', '5 to 6', 'between 5 and 6', '30-40', '30 to 40',
+    '30-40 minutes', '30 to 40 mins', '5-6 days', 'about 5', 'at least 5',
+    'max 5', 'maximum 5', '5+', '5 or more', 'less than 5', 'up to 5',
+    '5abc', '5 days maybe', '30 mins-ish', '3ish',
+  ];
+
+  it('a stated range/bound/qualified number NEVER collapses to an exact count', () => {
+    for (const answer of RANGE_ANSWERS) {
+      expect(deterministicGapResolution('gap_weekly_capacity', answer), answer).toBeNull();
+    }
+    // The control: a bare exact number still ingests exactly.
+    expect(deterministicGapResolution('gap_weekly_capacity', '5')).toEqual({
+      property: 'schedule.frequency.count', scope: 'schedule', relation: 'eq',
+      value: { kind: 'count', value: 5 },
+    });
+    expect(deterministicGapResolution('gap_weekly_capacity', 5)).toEqual({
+      property: 'schedule.frequency.count', scope: 'schedule', relation: 'eq',
+      value: { kind: 'count', value: 5 },
+    });
+  });
+
+  it('a stated range/bound/qualified length NEVER collapses to an exact quantity', () => {
+    for (const answer of ['30-40', '30 – 40', '30 to 40', 'between 30 and 40',
+      '30-40 minutes', 'about 30', 'at least 30', 'max 30', '30+', '45ish',
+      '30 mins-ish', '30abc', '30 minutes maybe']) {
+      expect(deterministicGapResolution('gap_session_shape', answer), answer).toBeNull();
+    }
+    // The control: a bare exact number still ingests exactly.
+    expect(deterministicGapResolution('gap_session_shape', '40')).toEqual({
+      property: 'schedule.session.length', scope: 'schedule', relation: 'eq',
+      value: { kind: 'quantity', value: 40, unit: 'minute' },
+    });
+  });
+});
+
+// ------------------------------------------ temporal validity of the timeframe (RC-P1-F)
+
+describe('Stage 6: the timeframe answer is domain-valid before it becomes authority', () => {
+  // The interview must never accept a deadline the plan validator will delete
+  // later ("interview: valid" vs "draft: invalid" is state incoherence). The
+  // same future-facing rule the draft applies (deadline > today in the
+  // product timezone) must hold at ingest.
+  const pastDate = (() => {
+    const d = new Date();
+    d.setUTCFullYear(d.getUTCFullYear() - 23);
+    return d.toISOString().slice(0, 10);
+  })();
+  const tomorrow = (() => {
+    const d = new Date(Date.now() + 86_400_000);
+    return d.toISOString().slice(0, 10);
+  })();
+
+  it('a past date never closes TIMEFRAME — the gate re-asks instead of trusting it', () => {
+    expect(deterministicGapResolution('gap_timeframe', '2003-12-04')).toBeNull();
+    expect(deterministicGapResolution('gap_timeframe', pastDate)).toBeNull();
+  });
+
+  it('an impossible calendar date never closes TIMEFRAME', () => {
+    expect(deterministicGapResolution('gap_timeframe', '2026-02-30')).toBeNull();
+    expect(deterministicGapResolution('gap_timeframe', '2026-13-01')).toBeNull();
+  });
+
+  it('a genuine future date resolves normally', () => {
+    expect(deterministicGapResolution('gap_timeframe', tomorrow)).toEqual({
+      property: 'goal.deadline', scope: 'goal', relation: 'eq',
+      value: { kind: 'date', value: tomorrow },
+    });
+  });
+
+  it('the today boundary is pinned: TODAY IS INVALID, the draft deletes deadline <= today', () => {
+    // Injected clock, fixed timezone: 2026-09-03 12:00 UTC. In Asia/Tbilisi
+    // (UTC+4) it is still 2026-09-03 — today there equals today in UTC, so
+    // both readings pin the same boundary. A deadline of today is already
+    // over at plan time (the draft validator removes deadline <= today), so
+    // the interview refusing it is coherence, not an off-by-one.
+    const now = new Date('2026-09-03T12:00:00Z');
+    expect(deterministicGapResolution('gap_timeframe', '2026-09-03', { now, timezone: 'Asia/Tbilisi' })).toBeNull();
+    expect(deterministicGapResolution('gap_timeframe', '2026-09-03', { now, timezone: 'UTC' })).toBeNull();
+    // Tomorrow is valid in both.
+    expect(deterministicGapResolution('gap_timeframe', '2026-09-04', { now, timezone: 'Asia/Tbilisi' })).toEqual({
+      property: 'goal.deadline', scope: 'goal', relation: 'eq',
+      value: { kind: 'date', value: '2026-09-04' },
+    });
+  });
+
+  it('the timezone boundary is consistent with the draft validator\'s todayIn', () => {
+    // 23:30 UTC on Sep 3 is already Sep 4 in Asia/Tbilisi (UTC+4): today there
+    // is 2026-09-04. Sep 4 is INVALID in Tbilisi (their today) but VALID in
+    // UTC (still Sep 3 there) — the resolver must observe the SAME wall
+    // clock the draft will, not UTC by accident.
+    const lateEvening = new Date('2026-09-03T23:30:00Z');
+    expect(deterministicGapResolution('gap_timeframe', '2026-09-04', { now: lateEvening, timezone: 'Asia/Tbilisi' })).toBeNull();
+    expect(deterministicGapResolution('gap_timeframe', '2026-09-05', { now: lateEvening, timezone: 'Asia/Tbilisi' })).not.toBeNull();
+    expect(deterministicGapResolution('gap_timeframe', '2026-09-04', { now: lateEvening, timezone: 'UTC' })).not.toBeNull();
+  });
+
+  it('leap-year boundaries are calendar-correct', () => {
+    // Injected clock so the assertions never depend on the real today.
+    const now = new Date('2026-01-01T00:00:00Z');
+    expect(deterministicGapResolution('gap_timeframe', '2028-02-29', { now })).not.toBeNull(); // real leap day
+    expect(deterministicGapResolution('gap_timeframe', '2027-02-29', { now })).toBeNull();     // not a leap year
+    expect(deterministicGapResolution('gap_timeframe', '2026-02-29', { now })).toBeNull();     // not a leap year
   });
 });
 

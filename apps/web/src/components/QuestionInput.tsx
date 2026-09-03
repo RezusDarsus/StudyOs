@@ -168,13 +168,21 @@ export default function QuestionInput({
   // badInput false, so `canSubmit` never sees the text and Send stays greyed out with
   // nothing to explain why. inputMode still brings up the numeric keypad on a phone.
   const numeric = question.type === 'NUMBER';
+  const isDate = question.type === 'DATE';
   const inputType = numeric
     ? 'text'
-    : question.type === 'DATE'
+    : isDate
       ? 'date'
       : question.type === 'TIME'
         ? 'time'
         : 'text';
+  // Defense-in-depth only (RC-P1-F): the backend is the authority on deadline
+  // validity, but the picker should not even offer dates the plan would
+  // reject. Tomorrow in the product's usual local reading — today itself is
+  // not a future deadline.
+  const minDate = isDate
+    ? new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)
+    : undefined;
 
   return (
     <div className={shell}>
@@ -182,6 +190,7 @@ export default function QuestionInput({
         <input
           type={inputType}
           inputMode={numeric ? 'decimal' : undefined}
+          min={minDate}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {

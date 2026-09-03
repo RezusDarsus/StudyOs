@@ -1393,6 +1393,106 @@ expect(generateResponses.every((r) => r.status === 200 || r.status === 409)).toB
     expect(refused.status).toBe(409);
     expect(refused.body.code).toBe('NOT_READY');
   });
+
+  it('RC-P1-E — no ghost question: a discarded model question never survives as the visible message (e2e)', async () => {
+    const user = await h.createUser({ timezone: TZ });
+
+    // The exact live defect: the user's final answer closes all blocking and
+    // HIGH gaps, so the gate concludes — but the model's reply STILL asks a
+    // discretionary question ("Which days of the week suit your reading
+    // sessions?"). Pre-fix, the gate discarded the question object while
+    // keeping the model's question prose as assistantMessage: the UI showed
+    // an unanswerable question next to the Build Plan button.
+    h.ai.queue(
+      'INTERVIEW',
+      asksWithReq(
+        { id: 'days_per_week', type: 'NUMBER', prompt: 'How many days a week would you like to read?' },
+        [outcomeAtom('read more', 'read more')],
+      ),
+      // Intermediate turns the model produces while the gate walks its own
+      // remaining questions (timeframe, then session shape). Their atoms are
+      // empty: every required value comes from the deterministic ingests.
+      asksWithReq({ id: 'when_by', type: 'DATE', prompt: 'By when?' }, []),
+      asksWithReq({ id: 'how_long', type: 'NUMBER', prompt: 'How long per session?' }, []),
+      // The model asks a discretionary weekday question exactly when the
+      // final HIGH answer arrived — the gate must discard it COHERENTLY.
+      {
+        state: 'NEEDS_MORE_INFORMATION',
+        assistantMessage: 'Which days of the week suit your reading sessions?',
+        question: {
+          id: 'weekdays_pref',
+          type: 'MULTI_SELECT',
+          prompt: 'Which days of the week suit your reading sessions?',
+          options: ['Monday', 'Wednesday', 'Friday'],
+          allowCustomAnswer: true,
+          optional: true,
+        },
+        extractedContext: {},
+        requirements: { atoms: [], groups: [], pendingAmbiguity: [] },
+      },
+    );
+
+    const started = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
+      goal: 'I want to read more',
+    });
+    expect(started.question?.id).toBe('gap_weekly_capacity');
+
+    // The gate's own walk: capacity, timeframe, session shape — every answer
+    // deterministically ingested, so all blocking AND HIGH gaps close.
+    const capped = await h.ok(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/answers`, {
+      questionId: 'gap_weekly_capacity', answer: 3,
+    });
+    expect(capped.question?.id).toBe('gap_timeframe');
+    const timed = await h.ok(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/answers`, {
+      questionId: 'gap_timeframe', answer: day(60),
+    });
+    expect(timed.question?.id).toBe('gap_session_shape');
+    const finished = await h.ok(user, 'POST', `/api/copilot/goal-sessions/${started.sessionId}/answers`, {
+      questionId: 'gap_session_shape', answer: 45,
+    });
+
+    // Coherent READY state: no question object, generation unlocked, and the
+    // visible message is NOT the discarded question.
+    expect(finished.question).toBeNull();
+    expect(finished.canGenerate).toBe(true);
+    expect(finished.status).toBe('READY_TO_GENERATE');
+    expect(finished.assistantMessage).not.toContain('Which days');
+    expect(finished.assistantMessage).not.toMatch(/\?\s*$/);
+
+    // The persisted transcript bubble carries the same coherent message.
+    const sessionRow = await prisma.copilotSession.findUniqueOrThrow({
+      where: { id: started.sessionId },
+      include: { messages: true },
+    });
+    const lastAssistant = [...sessionRow.messages]
+      .reverse()
+      .find((m) => m.role === 'assistant')!;
+    expect(lastAssistant.content).toBe(finished.assistantMessage);
+    expect(lastAssistant.structuredPayload).toBeNull();
+  });
+
+  it('RC-P1-E control — a BLOCKING model question is never discarded while gaps remain', async () => {
+    const user = await h.createUser({ timezone: TZ });
+
+    // The coherence fix must not overreach: while a required gap is open, the
+    // gate still replaces the model's question with the deterministic one for
+    // the blocker (that replacement is the architecture), and the message the
+    // user sees matches that question.
+    h.ai.queue(
+      'INTERVIEW',
+      asksWithReq(
+        { id: 'days_per_week', type: 'NUMBER', prompt: 'How many days a week would you like to read?' },
+        [outcomeAtom('read more', 'read more')],
+      ),
+    );
+
+    const started = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
+      goal: 'I want to read more',
+    });
+    expect(started.question?.id).toBe('gap_weekly_capacity');
+    // The gate's own question is what the user sees — coherent by construction.
+    expect(started.assistantMessage).toBe(started.question?.prompt);
+  });
 });
 
 /** The stored requirement state of a session row, for the R1 assertions. */

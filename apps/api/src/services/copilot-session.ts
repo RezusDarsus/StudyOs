@@ -400,9 +400,14 @@ async function applyTurn(
       input.assistantMessageOverride ??
       "I couldn't process that just now — your answer is saved. Try again in a moment.";
   } else if (session.questionCount >= HARD_MAX_QUESTIONS) {
-    // The absolute ceiling terminates the interview no matter what.
+    // The absolute ceiling terminates the interview no matter what. Same
+    // coherence rule as the concluded branch (RC-P1-E): a discarded model
+    // question never survives as the visible message.
     question = null;
     state = 'READY_TO_GENERATE';
+    if (input.response?.question || /\?\s*$/.test(assistantMessage.trim())) {
+      assistantMessage = "That's everything I need.";
+    }
   } else if (astReadiness.conflicts.length || astReadiness.pending.length || !astReadiness.ready) {
     // BLOCKING: the deterministic question for the top blocker replaces
     // whatever the model asked — a generic question cannot resolve it.
@@ -417,8 +422,17 @@ async function applyTurn(
     state = 'INTERVIEWING';
     assistantMessage = question?.prompt ?? assistantMessage;
   } else {
+    // The gate concluded. The model may have asked a discretionary question
+    // in the same breath (RC-P1-E) — the gate discards the question OBJECT,
+    // and discarding must be coherent: the visible message cannot keep asking
+    // it, or the UI shows an unanswerable question next to Build Plan. The
+    // safe replacement is the fixed wrap-up; the model's non-question prose
+    // (a wrap-up of its own) survives only when it does not ask anything.
     question = null;
     state = 'READY_TO_GENERATE';
+    if (input.response?.question || /\?\s*$/.test(assistantMessage.trim())) {
+      assistantMessage = "That's everything I need.";
+    }
   }
 
   const status = state === 'READY_TO_GENERATE' ? 'READY_TO_GENERATE' : 'INTERVIEWING';
@@ -635,7 +649,15 @@ export async function answerQuestion(
       .reverse()
       .map((m) => (m.structuredPayload ? safeParse(m.structuredPayload) : null))
       .find((p) => p?.id === input.questionId);
-    const resolution = deterministicGapResolution(input.questionId, input.answer);
+    // RC-P1-F: the timeframe validity check observes the user's timezone —
+    // the same `todayIn` the draft validator will apply later, so a date the
+    // interview accepts is a date the draft keeps.
+    const [userProfile] = await prisma.$queryRaw<Array<{ timezone: string | null }>>`
+      SELECT timezone FROM "Profile" WHERE "userId" = ${session.userId}
+    `.catch(() => [{ timezone: null }] as Array<{ timezone: string | null }>);
+    const resolution = deterministicGapResolution(input.questionId, input.answer, {
+      timezone: userProfile?.timezone ?? 'UTC',
+    });
     if (resolution && pendingForAnswer) {
       const state = parseRequirementState(session.structuredContext);
       const { state: next } = ingestExtraction(
