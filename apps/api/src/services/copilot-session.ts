@@ -188,12 +188,15 @@ export function askedTopics(messages: SessionMessage[]): QuestionTopic[] {
 function astGroundingFor(
   session: { initialGoalText: string; questionCount: number },
   answer?: { questionId: string; text: string },
-): { turn: number; message?: string; answer?: { questionId: string; text: string }; at: string } {
+  /** RC-P1-F2: product timezone for the deadline domain gate. */
+  timezone?: string,
+): { turn: number; message?: string; answer?: { questionId: string; text: string }; at: string; timezone?: string } {
   const at = new Date().toISOString();
+  const tz = timezone ? { timezone } : {};
   if (session.questionCount === 0) {
-    return { turn: 0, message: session.initialGoalText, at };
+    return { turn: 0, message: session.initialGoalText, at, ...tz };
   }
-  return { turn: session.questionCount, answer, at };
+  return { turn: session.questionCount, answer, at, ...tz };
 }
 
 /** Compact AST summary for API payloads. */
@@ -368,6 +371,8 @@ async function applyTurn(
      * though the answer was demonstrably in.
      */
     deterministicallyIngested?: boolean;
+    /** RC-P1-F2: product timezone for the deadline domain gate. */
+    timezone?: string;
   },
 ): Promise<InterviewTurn> {
   const context = parseContext(session.structuredContext, session.initialGoalText);
@@ -383,7 +388,7 @@ async function applyTurn(
   // unmodeled evidence — the single source of planning truth. meta marks the
   // state fresh or stale (R1).
   const existing = parseRequirementState(session.structuredContext);
-  const grounding = astGroundingFor(session, input.currentAnswer);
+  const grounding = astGroundingFor(session, input.currentAnswer, input.timezone);
   let requirementState: RequirementState;
   const turnIsStale = (input.response === null || input.extractionFailed === true)
     && input.deterministicallyIngested !== true;
@@ -552,6 +557,12 @@ function pendingQuestion(
 }
 
 export async function startSession(userId: string, goalText: string): Promise<InterviewTurn> {
+  // RC-P1-F2: the deadline domain gate needs the product timezone, fetched
+  // once for the whole turn flow (applyTurn ingests the model fragment).
+  const [profile] = await prisma.$queryRaw<Array<{ timezone: string | null }>>`
+    SELECT timezone FROM "Profile" WHERE "userId" = ${userId}
+  `.catch(() => [{ timezone: null }] as Array<{ timezone: string | null }>);
+  const timezone = profile?.timezone ?? 'UTC';
   const session = await prisma.copilotSession.create({
     data: {
       userId,
@@ -577,9 +588,10 @@ export async function startSession(userId: string, goalText: string): Promise<In
       response: null,
       extractionFailed: true,
       injectedPreferences: preferences,
+      timezone,
     });
   }
-  return applyTurn(session, { response: result, injectedPreferences: preferences });
+  return applyTurn(session, { response: result, injectedPreferences: preferences, timezone });
 }
 
 export async function answerQuestion(
@@ -631,6 +643,13 @@ export async function answerQuestion(
 
   const answerText = input.skipped ? '(skipped)' : formatAnswer(input.answer);
 
+  // RC-P1-F / RC-P1-F2: the product timezone, observed by BOTH deadline
+  // channels (deterministic parser and model-fragment ingest) — the same
+  // `todayIn` the draft validator applies. Fetched once for this turn.
+  const [userProfile] = await prisma.$queryRaw<Array<{ timezone: string | null }>>`
+    SELECT timezone FROM "Profile" WHERE "userId" = ${session.userId}
+  `.catch(() => [{ timezone: null }] as Array<{ timezone: string | null }>);
+
   await prisma.copilotMessage.create({
     data: {
       sessionId: session.id,
@@ -669,9 +688,6 @@ export async function answerQuestion(
     // RC-P1-F: the timeframe validity check observes the user's timezone —
     // the same `todayIn` the draft validator will apply later, so a date the
     // interview accepts is a date the draft keeps.
-    const [userProfile] = await prisma.$queryRaw<Array<{ timezone: string | null }>>`
-      SELECT timezone FROM "Profile" WHERE "userId" = ${session.userId}
-    `.catch(() => [{ timezone: null }] as Array<{ timezone: string | null }>);
     const resolution = deterministicGapResolution(input.questionId, input.answer, {
       timezone: userProfile?.timezone ?? 'UTC',
     });
@@ -690,7 +706,7 @@ export async function answerQuestion(
             evidence: answerText,
           }],
         }),
-        astGroundingFor(session, { questionId: input.questionId, text: answerText }),
+        astGroundingFor(session, { questionId: input.questionId, text: answerText }, userProfile?.timezone ?? 'UTC'),
       );
       context.requirements = next;
     }
@@ -731,6 +747,7 @@ export async function answerQuestion(
         // again. Only the message acknowledges the hiccup.
         deterministicallyIngested: true,
         currentAnswer: groundingAnswer,
+        timezone: userProfile?.timezone ?? 'UTC',
         assistantMessageOverride:
           "That's recorded — the service hiccuped on my end, but your answer is in.",
       });
@@ -739,12 +756,14 @@ export async function answerQuestion(
       response: null,
       extractionFailed: true,
       currentAnswer: groundingAnswer,
+      timezone: userProfile?.timezone ?? 'UTC',
     });
   }
   return applyTurn(refreshed, {
     response: result,
     injectedPreferences: preferences,
     currentAnswer: groundingAnswer,
+    timezone: userProfile?.timezone ?? 'UTC',
   });
 }
 /** Human-readable rendering of a structured answer, for the transcript. */

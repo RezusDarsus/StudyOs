@@ -1,4 +1,41 @@
 import { groundEvidence, normalizeFragment, normalizeRequirementValue, requirementFragmentSchema, type GroundingContext, type RequirementFragment } from './extract-schema.js';
+import { isDayString, todayIn } from '../../domain/dates.js';
+import type { NormalizedFragment } from './extract-schema.js';
+
+/**
+ * RC-P1-F2: the goal.deadline slot carries one domain rule everywhere — a
+ * deadline must be a calendar-real date strictly in the future, observed in
+ * the product timezone (the same `todayIn` the draft validator uses). This is
+ * the MODEL-extraction channel's copy of the deterministic parser's RC-P1-F
+ * gate: an atom that fails it is dropped before it can become authority, so
+ * the interview can never close TIMEFRAME with a date the plan validator
+ * would silently delete ("interview accepts X / draft deletes X" is the state
+ * incoherence RC-P1-F exists to prevent). Dropping — not fabricating a
+ * replacement — leaves the gap open for the honest re-ask.
+ */
+function domainValidAtoms(
+  fragment: NormalizedFragment,
+  grounding: GroundingContext,
+): { atoms: NormalizedFragment['atoms']; andGroups: NormalizedFragment['andGroups']; orGroups: NormalizedFragment['orGroups']; notGroups: NormalizedFragment['notGroups']; conditionalGroups: NormalizedFragment['conditionalGroups'] } {
+  const today = todayIn(grounding.timezone ?? 'UTC', new Date(grounding.at));
+  const deadlineOk = (atom: { property: string; value: { kind: string; value?: unknown } }): boolean => {
+    if (atom.property !== 'goal.deadline') return true;
+    if (atom.value.kind !== 'date') return true;
+    const value = String(atom.value.value ?? '');
+    if (!isDayString(value)) return false;
+    return value > today;
+  };
+  const mapAtoms = (atoms: NormalizedFragment['atoms']) => atoms.filter(deadlineOk);
+  return {
+    atoms: mapAtoms(fragment.atoms),
+    andGroups: fragment.andGroups.map((g) => ({ atoms: mapAtoms(g.atoms) })).filter((g) => g.atoms.length > 0),
+    orGroups: fragment.orGroups.map((g) => ({ branches: g.branches.map(mapAtoms) })).filter((g) => g.branches.length > 0),
+    notGroups: fragment.notGroups.filter((g) => deadlineOk(g.atom)),
+    conditionalGroups: fragment.conditionalGroups
+      .map((g) => ({ guard: g.guard, atoms: mapAtoms(g.atoms) }))
+      .filter((g) => g.atoms.length > 0),
+  };
+}
 import { ingestFragment, ingestPendingAmbiguity, type MergeEvent, type MergeResult } from './merge.js';
 import { emptyRequirementState, type RequirementState } from './types.js';
 
@@ -102,7 +139,7 @@ export function ingestExtraction(
     events.push(...result.events);
   }
 
-  const normalized = normalizeFragment(fragment);
+  const normalized = domainValidAtoms(normalizeFragment(fragment), grounding);
   const merged = ingestFragment(current, { fragment: normalized, grounding });
 
   // Unmodeled evidence: keep only spans that ground against the CURRENT turn,

@@ -236,6 +236,68 @@ describe('Stage 6: the timeframe answer is domain-valid before it becomes author
     expect(deterministicGapResolution('gap_timeframe', '2027-02-29', { now })).toBeNull();     // not a leap year
     expect(deterministicGapResolution('gap_timeframe', '2026-02-29', { now })).toBeNull();     // not a leap year
   });
+
+  it('RC-P1-F2 — the MODEL channel also refuses a past deadline: one domain rule, both channels', () => {
+    // The live defect: the deterministic parser rejected "2003-12-04" but the
+    // model's answer-turn extraction ingested the very same date as a
+    // grounded USER_EXPLICIT atom (evidence "2003-12-04" is verbatim in the
+    // answer), closing TIMEFRAME with a date the draft validator silently
+    // deletes — the interview/draft mismatch, arriving through the other door.
+    // The ingest layer now applies the same rule to the model fragment.
+    const g2003 = G({ turn: 2, answer: { questionId: 'gap_timeframe', text: 'my deadline is 2003-12-04' }, at: '2026-09-03T12:00:00.000Z', timezone: 'Asia/Tbilisi' });
+    let state = emptyRequirementState();
+    state = ingest(state, requirementFragmentSchema.parse({
+      atoms: [{
+        property: 'goal.deadline', scope: 'goal', relation: 'eq',
+        value: { kind: 'date', value: '2003-12-04' }, strength: 'REQUIRED',
+        source: 'stated', evidence: '2003-12-04',
+      }],
+    }), g2003).state;
+    expect(state.records.some((r) => r.property === 'goal.deadline')).toBe(false);
+    // TIMEFRAME never closed from the invalid date.
+    const readiness = evaluateAstReadiness(state, { questionCount: 2, maxQuestions: HARD_MAX_QUESTIONS });
+    expect(readiness.missing).toContain('TIMEFRAME');
+
+    // Control: a genuine future date through the SAME channel still ingests.
+    const gFuture = G({ turn: 2, answer: { questionId: 'gap_timeframe', text: 'by 2026-12-01' }, at: '2026-09-03T12:00:00.000Z', timezone: 'Asia/Tbilisi' });
+    let s2 = emptyRequirementState();
+    s2 = ingest(s2, requirementFragmentSchema.parse({
+      atoms: [{
+        property: 'goal.deadline', scope: 'goal', relation: 'eq',
+        value: { kind: 'date', value: '2026-12-01' }, strength: 'REQUIRED',
+        source: 'stated', evidence: '2026-12-01',
+      }],
+    }), gFuture).state;
+    expect(s2.records.some((r) => r.property === 'goal.deadline' && r.status === 'ACTIVE')).toBe(true);
+
+    // The timezone boundary holds on this channel too: 23:30 UTC, a date that
+    // is already "today" in Tbilisi must not ingest there.
+    const gEdge = G({ turn: 2, answer: { questionId: 'gap_timeframe', text: 'by 2026-09-04' }, at: '2026-09-03T23:30:00.000Z', timezone: 'Asia/Tbilisi' });
+    let s3 = emptyRequirementState();
+    s3 = ingest(s3, requirementFragmentSchema.parse({
+      atoms: [{
+        property: 'goal.deadline', scope: 'goal', relation: 'eq',
+        value: { kind: 'date', value: '2026-09-04' }, strength: 'REQUIRED',
+        source: 'stated', evidence: '2026-09-04',
+      }],
+    }), gEdge).state;
+    expect(s3.records.some((r) => r.property === 'goal.deadline')).toBe(false);
+  });
+
+  it('RC-P1-F2 — non-deadline date atoms are untouched: the gate scopes to the goal.deadline slot', () => {
+    // Only the deadline slot carries the future rule; a date elsewhere (e.g. a
+    // custom property) is other semantics and must flow normally.
+    const g = G({ turn: 1, message: 'I started on 2020-01-01', at: '2026-09-03T12:00:00.000Z', timezone: 'UTC' });
+    let state = emptyRequirementState();
+    state = ingest(state, requirementFragmentSchema.parse({
+      atoms: [{
+        property: 'goal.baseline', scope: 'goal', relation: 'contains',
+        value: { kind: 'text', value: 'started on 2020-01-01' }, strength: 'REQUIRED',
+        source: 'stated', evidence: 'started on 2020-01-01',
+      }],
+    }), g).state;
+    expect(state.records.some((r) => r.property === 'goal.baseline' && r.status === 'ACTIVE')).toBe(true);
+  });
 });
 
 // ------------------------------------------------- desired outcome (no fabrication)

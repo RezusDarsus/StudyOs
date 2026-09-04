@@ -172,6 +172,15 @@ export interface GroundingContext {
   /** The user's literal answer to the pending question, with its id. */
   answer?: { questionId: string; text: string };
   at: string;
+  /**
+   * RC-P1-F2 (2026-09-03): the product timezone the deadline domain-validity
+   * check observes — the same wall clock the draft validator applies. Absent
+   * degrades to UTC. Threading it here lets the ingest layer reject a past
+   * deadline from EITHER channel (model extraction as well as the
+   * deterministic parser) with one rule, so the interview can never accept a
+   * date the downstream plan validator would silently delete.
+   */
+  timezone?: string;
 }
 
 /**
