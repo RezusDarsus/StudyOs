@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, api } from './api';
 import { canSubmit } from './slash';
 import { newOperationId } from './operation-id';
@@ -37,15 +37,34 @@ export const GOAL_QUICK_ASKS = [
 export function useGoalCopilot(goalId: string, onError: (message: string) => void) {
   const [entries, setEntries] = useState<GoalCopilotEntry[]>([]);
   const [busy, setBusy] = useState(false);
+  const inFlight = useRef(false);
+  const epoch = useRef(0);
+  const errorHandler = useRef(onError);
+  errorHandler.current = onError;
+  // Keep the same operation ID after an ambiguous network failure. The server
+  // can then replay the committed result without recording a second event.
+  const consumptionOperations = useRef(new Map<string, { id: string; pending: boolean; done: boolean }>());
   // Durable state the user created through the action cards. Server events are
   // the source of truth; this set only keeps the UI honest between renders.
   const [consumedIdentities, setConsumedIdentities] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    epoch.current++;
+    inFlight.current = false;
+    consumptionOperations.current.clear();
+    setEntries([]);
+    setConsumedIdentities(new Set());
+    setBusy(false);
+    return () => { epoch.current++; };
+  }, [goalId]);
 
   const ask = useCallback(
     async (text: string) => {
       // A slash is a normal character here: "am I hitting 5/7 days?" is a fair
       // question, so anything non-empty is sent through verbatim.
-      if (!canSubmit(text) || busy) return null;
+      if (!canSubmit(text) || inFlight.current) return null;
+      inFlight.current = true;
+      const operation = epoch.current;
       const question = text.trim();
       setBusy(true);
       try {
@@ -63,19 +82,20 @@ export function useGoalCopilot(goalId: string, onError: (message: string) => voi
             },
           ]),
         });
+        if (operation !== epoch.current) return null;
         setEntries((prev) => [...prev, { question, answer }]);
         return answer;
       } catch (err) {
-        onError(err instanceof ApiError ? err.message : 'The Copilot could not answer');
+        if (operation === epoch.current) errorHandler.current(err instanceof ApiError ? err.message : 'The Copilot could not answer');
         return null;
       } finally {
-        setBusy(false);
+        if (operation === epoch.current) {
+          inFlight.current = false;
+          setBusy(false);
+        }
       }
     },
-    // `onError` is a fresh closure each render in both callers; excluding it
-    // keeps `ask` stable, and it is only ever read at call time.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [goalId, busy, entries],
+    [goalId, entries],
   );
 
   /**
@@ -86,30 +106,40 @@ export function useGoalCopilot(goalId: string, onError: (message: string) => voi
   const markConsumed = useCallback(
     async (item: StructuredRecommendation): Promise<RecommendationActionResult | null> => {
       const identity = recommendationIdentity(item);
+      const operation = epoch.current;
+      const claim = consumptionOperations.current.get(identity) ?? { id: newOperationId(), pending: false, done: false };
+      if (claim.pending || claim.done) return null;
+      claim.pending = true;
+      consumptionOperations.current.set(identity, claim);
       try {
         const result = await api.post<RecommendationActionResult>('/recommendations/events', {
           action: 'mark_consumed',
-          operationId: newOperationId(),
+          operationId: claim.id,
           entityType: item.entityType,
           displayName: item.displayName,
           attribution: item.attribution ?? null,
           goalId,
         });
+        if (operation !== epoch.current) return null;
+        claim.done = true;
         setConsumedIdentities((prev) => new Set(prev).add(identity));
         return result;
       } catch (err) {
-        onError(err instanceof ApiError ? err.message : 'The Copilot could not save that');
+        if (operation === epoch.current) errorHandler.current(err instanceof ApiError ? err.message : 'The Copilot could not save that');
         return null;
+      } finally {
+        claim.pending = false;
       }
     },
-    // `onError` is a fresh closure each render; see `ask` above.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [goalId],
   );
 
   const clear = useCallback(() => {
+    epoch.current++;
+    inFlight.current = false;
+    setBusy(false);
     setEntries([]);
-    setConsumedIdentities(new Set());
+    // Clearing chat does not undo durable "used" actions or their retry IDs.
   }, []);
 
   return { entries, latest: entries[entries.length - 1] ?? null, busy, ask, markConsumed, consumedIdentities, clear };

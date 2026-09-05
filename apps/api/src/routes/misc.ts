@@ -8,10 +8,33 @@ import { loadGoalForUser, participantSummary } from '../services/goals.js';
 import { notificationPayload } from '../services/notifications.js';
 import { goalToday } from '../services/occurrences.js';
 import { publicUser } from './auth.js';
+import { isAdminEmail } from '../lib/admin.js';
+import { forbidden } from '../lib/errors.js';
 
 const timeOfDay = z.string().refine(isTimeString, 'Use HH:MM, 24-hour');
 
 export default async function miscRoutes(app: FastifyInstance) {
+  app.get('/admin/registration-ips', { preHandler: app.requireAuth }, async (req, reply) => {
+    if (!isAdminEmail(req.user!.email)) throw forbidden();
+    reply.header('Cache-Control', 'no-store');
+    const { page } = z.object({ page: z.coerce.number().int().min(1).max(100000).default(1) }).parse(req.query);
+    const pageSize = 50;
+    const groupsQuery = prisma.user.groupBy({
+      by: ['registrationIp'], where: { registrationIp: { not: null } },
+      _count: { _all: true as const },
+      orderBy: [{ _count: { registrationIp: 'desc' } }, { registrationIp: 'asc' }],
+      skip: (page - 1) * pageSize, take: pageSize + 1,
+    });
+    const [groups, totalAccounts, unknownAccounts] = await prisma.$transaction([
+      groupsQuery,
+      prisma.user.count(),
+      prisma.user.count({ where: { registrationIp: null } }),
+    ]);
+    return {
+      totalAccounts, unknownAccounts, page, hasMore: groups.length > pageSize,
+      groups: groups.slice(0, pageSize).map((group) => ({ ip: group.registrationIp, accounts: group._count._all })),
+    };
+  });
   // ------------------------------------------------------------ discover
 
   /** Public challenges only. A private goal can never appear here. */

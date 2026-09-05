@@ -14,6 +14,7 @@ import { badRequest, conflict, tooManyRequests, unauthorized } from '../lib/erro
 import { AttemptWindow, describeWait } from '../lib/rate-limit.js';
 import { prisma } from '../lib/prisma.js';
 import { levelProgress } from '../services/engagement.js';
+import { isAdminEmail } from '../lib/admin.js';
 
 // Throttles. Each limit is chosen so that no real person meets it: a user who mistypes a
 // password four times is not stopped, and one who mistypes it twenty times across every
@@ -124,6 +125,7 @@ export async function publicUser(userId: string, viewerId?: string) {
   return {
     ...base,
     email: user.email,
+    isAdmin: isAdminEmail(user.email),
     timezone: user.profile?.timezone ?? 'UTC',
     notifications: {
       taskReminders: user.profile?.notifyTaskReminders ?? true,
@@ -155,6 +157,7 @@ export default async function authRoutes(app: FastifyInstance) {
     const user = await prisma.user.create({
       data: {
         email: body.email,
+        registrationIp: req.ip.replace(/^::ffff:(?=\d+\.)/i, ''),
         name: body.name,
         passwordHash: await hashPassword(body.password),
         profile: { create: { timezone } },

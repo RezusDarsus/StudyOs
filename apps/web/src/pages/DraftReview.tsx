@@ -1,4 +1,4 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Check,
@@ -44,7 +44,9 @@ export default function DraftReview() {
     [id],
   );
 
-  const [busy, setBusy] = useState<null | 'confirm' | 'regenerate' | 'edit'>(null);
+  const [busy, setBusy] = useState<null | 'confirm' | 'regenerate' | 'edit' | 'discard'>(null);
+  const discardPending = useRef(false);
+  const feedbackPending = useRef(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [editing, setEditing] = useState<DraftTask | null>(null);
   const [feedback, setFeedback] = useState<boolean | null>(null);
@@ -100,14 +102,30 @@ export default function DraftReview() {
   }
 
   async function discard() {
+    if (busy || discardPending.current) return;
     if (!window.confirm('Discard this plan?')) return;
-    await api.post(`/copilot/goal-drafts/${id}/discard`, {}).catch(() => {});
-    navigate('/app/goals', { replace: true });
+    discardPending.current = true;
+    setBusy('discard');
+    try {
+      await api.post(`/copilot/goal-drafts/${id}/discard`, {});
+      navigate('/app/goals', { replace: true });
+    } catch (err) {
+      push(err instanceof ApiError ? err.message : 'Could not discard this plan. Try again.', 'error');
+    } finally {
+      discardPending.current = false;
+      setBusy(null);
+    }
   }
 
   async function rate(useful: boolean) {
-    setFeedback(useful);
-    await api.post(`/copilot/goal-drafts/${id}/feedback`, { useful }).catch(() => {});
+    if (feedbackPending.current) return;
+    feedbackPending.current = true;
+    try {
+      await api.post(`/copilot/goal-drafts/${id}/feedback`, { useful });
+      setFeedback(useful);
+    } catch (err) {
+      push(err instanceof ApiError ? err.message : 'Could not save your feedback. Try again.', 'error');
+    } finally { feedbackPending.current = false; }
   }
 
   if (loading) {

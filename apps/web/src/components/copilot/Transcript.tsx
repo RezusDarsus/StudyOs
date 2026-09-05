@@ -54,6 +54,7 @@ export default function Transcript({
                 borderBottomRightRadius: bubble.role === 'user' ? 6 : 16,
                 borderBottomLeftRadius: bubble.role === 'user' ? 16 : 6,
                 whiteSpace: 'pre-wrap',
+                overflowWrap: 'anywhere',
               }}
             >
               {bubble.text}

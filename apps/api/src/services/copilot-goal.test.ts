@@ -145,6 +145,7 @@ describe('goal Copilot intent', () => {
   it('routes structural recommendation asks as advice instead of progress analysis', () => {
     expect(goalCopilotIntent('what should I read next')).toBe('ADVICE');
     expect(goalCopilotIntent('suggest something')).toBe('ADVICE');
+    expect(goalCopilotIntent('can you suggest some scifi books like star wars and dune')).toBe('ADVICE');
     expect(goalCopilotIntent('maybe some ideas?')).toBe('ADVICE');
   });
 
@@ -239,6 +240,7 @@ describe('askGoalCopilot � ADVICE turns (structured canonical path)', () => {
     expect(chatJsonMock).toHaveBeenCalledTimes(2);
     const repairPrompt = chatJsonMock.mock.calls[1][0].messages[1].content as string;
     expect(repairPrompt).toContain('Your previous reply was rejected');
+    expect(repairPrompt).toContain('Your previous JSON reply was:');
     expect(repairPrompt).toMatch(/is empty/);
     expect(result.analysis.recommendations).toEqual([potteryItem]);
   });

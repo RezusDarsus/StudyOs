@@ -102,7 +102,8 @@ export function useCopilotInterview({
   const turnRef = useRef(turn);
   turnRef.current = turn;
   const busyRef = useRef(busy);
-  busyRef.current = busy;
+  const generationRef = useRef(false);
+  const epoch = useRef(0);
 
   // The callers pass fresh closures every render; a ref keeps the resume effect
   // from re-firing and replaying the whole conversation.
@@ -110,6 +111,7 @@ export function useCopilotInterview({
   handlers.current = { onError, onResumedDraft, onResumeFailed };
 
   const applyTurn = useCallback((next: InterviewTurn) => {
+    turnRef.current = next;
     setTurn(next);
     setPhase(next.canGenerate && !next.question ? 'READY' : 'INTERVIEWING');
     if (next.assistantMessage) {
@@ -118,6 +120,10 @@ export function useCopilotInterview({
   }, []);
 
   const reset = useCallback(() => {
+    epoch.current++;
+    busyRef.current = false;
+    generationRef.current = false;
+    turnRef.current = null;
     setPhase('OPENING');
     setBubbles([]);
     setTurn(null);
@@ -161,6 +167,11 @@ export function useCopilotInterview({
 
   useEffect(() => {
     if (!resumeSessionId) return;
+    epoch.current++;
+    busyRef.current = false;
+    generationRef.current = false;
+    setBusy(false);
+    setGenerating(false);
     let cancelled = false;
     setPhase('RESUMING');
 
@@ -183,7 +194,9 @@ export function useCopilotInterview({
   const begin = useCallback(
     async (raw: string, opts?: { intentAnswer?: 'goal' | 'question' }) => {
       const text = raw.trim();
-      if (text.length < 3) return null;
+      if (text.length < 3 || busyRef.current || generationRef.current) return null;
+      busyRef.current = true;
+      const operation = epoch.current;
       setBusy(true);
       setClarification(null);
       setBubbles([{ role: 'user', text }]);
@@ -195,6 +208,7 @@ export function useCopilotInterview({
           '/copilot/goal-sessions',
           opts?.intentAnswer ? { goal: text, intentAnswer: opts.intentAnswer } : { goal: text },
         );
+        if (operation !== epoch.current) return null;
         if ('routed' in next) {
           // No session exists. The user bubble and the clarification stay on
           // screen with the two quick actions; nothing else moves.
@@ -206,12 +220,13 @@ export function useCopilotInterview({
         applyTurn(next);
         return next;
       } catch (err) {
+        if (operation !== epoch.current) return null;
         setBubbles([]);
         setPhase('OPENING');
         handlers.current.onError(describeCopilotError(err));
         return null;
       } finally {
-        setBusy(false);
+        if (operation === epoch.current) { busyRef.current = false; setBusy(false); }
       }
     },
     [applyTurn],
@@ -220,7 +235,9 @@ export function useCopilotInterview({
   const answer: AnswerHandler = useCallback(
     async (value, label, skipped = false) => {
       const current = turnRef.current;
-      if (!current?.question || busyRef.current) return;
+      if (!current?.question || busyRef.current || generationRef.current) return;
+      busyRef.current = true;
+      const operation = epoch.current;
       const questionId = current.question.id;
 
       setBusy(true);
@@ -232,17 +249,28 @@ export function useCopilotInterview({
           `/copilot/goal-sessions/${current.sessionId}/answers`,
           { questionId, answer: value, skipped },
         );
-        applyTurn(next);
+        if (operation === epoch.current) applyTurn(next);
       } catch (err) {
-        // The answer is kept server-side; let them retry rather than lose the thread.
+        if (operation !== epoch.current) return;
+        // A lost response may follow a committed answer. Reload before asking
+        // the person to submit the old question again.
+        try {
+          const snapshot = await api.get<SessionSnapshot>(`/copilot/goal-sessions/${current.sessionId}`);
+          if (operation === epoch.current) {
+            adoptSnapshot(snapshot);
+            handlers.current.onError(describeCopilotError(err));
+          }
+          return;
+        } catch { /* Offline: retain the previous question for retry. */ }
+        if (operation !== epoch.current) return;
         handlers.current.onError(describeCopilotError(err));
         setTurn(current);
         setBubbles((prev) => prev.slice(0, -1));
       } finally {
-        setBusy(false);
+        if (operation === epoch.current) { busyRef.current = false; setBusy(false); }
       }
     },
-    [applyTurn],
+    [applyTurn, adoptSnapshot],
   );
 
   /**
@@ -255,7 +283,9 @@ export function useCopilotInterview({
   const generate = useCallback(
     async (opts?: { force?: boolean }): Promise<GoalDraft | null> => {
       const current = turnRef.current;
-      if (!current) return null;
+      if (!current || busyRef.current || generationRef.current) return null;
+      generationRef.current = true;
+      const operation = epoch.current;
       setGenerating(true);
       try {
         const { draft: built } = await api.post<{ draft: GoalDraft }>(
@@ -268,10 +298,12 @@ export function useCopilotInterview({
             revision: turnRef.current?.revision,
           },
         );
+        if (operation !== epoch.current) return null;
         setDraft(built);
         setPhase('DONE');
         return built;
       } catch (err) {
+        if (operation !== epoch.current) return null;
         // The interview moved on under us — another tab answered a question, say.
         // Refetching puts the conversation back on the server's page and leaves
         // the session somewhere the next attempt can succeed from.
@@ -280,7 +312,7 @@ export function useCopilotInterview({
             const data = await api.get<SessionSnapshot>(
               `/copilot/goal-sessions/${current.sessionId}`,
             );
-            adoptSnapshot(data);
+            if (operation === epoch.current) adoptSnapshot(data);
             return null;
           } catch {
             // The refetch is best-effort; the original failure is what is surfaced.
@@ -295,7 +327,7 @@ export function useCopilotInterview({
             const data = await api.get<SessionSnapshot>(
               `/copilot/goal-sessions/${current.sessionId}`,
             );
-            adoptSnapshot(data);
+            if (operation === epoch.current) adoptSnapshot(data);
             return null;
           } catch {
             // Same best-effort contract as the stale-request recovery.
@@ -304,7 +336,7 @@ export function useCopilotInterview({
         handlers.current.onError(describeCopilotError(err));
         return null;
       } finally {
-        setGenerating(false);
+        if (operation === epoch.current) { generationRef.current = false; setGenerating(false); }
       }
     },
     [adoptSnapshot],
@@ -315,9 +347,21 @@ export function useCopilotInterview({
 
   /** Abandons the session server-side. Saving for later is simply not calling this. */
   const discard = useCallback(async () => {
+    if (busyRef.current || generationRef.current) return false;
+    busyRef.current = true;
+    setBusy(true);
     const current = turnRef.current;
-    if (current) await api.del(`/copilot/goal-sessions/${current.sessionId}`).catch(() => {});
-    reset();
+    try {
+      if (current) await api.del(`/copilot/goal-sessions/${current.sessionId}`);
+      reset();
+      return true;
+    } catch (err) {
+      handlers.current.onError(messageOf(err, 'Could not discard this conversation. Try again.'));
+      return false;
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
   }, [reset]);
 
   return {

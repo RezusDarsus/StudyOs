@@ -344,6 +344,7 @@ async function runStructuredAdviceTurn(input: {
   const repair = await input.analyze(
     `${input.userPrompt}
 
+Your previous JSON reply was: ${JSON.stringify(input.analysis)}
 Your previous reply was rejected: ${result.violations.join(' ')} Return the corrected JSON object now, following the RECOMMENDATIONS contract.`,
   );
   result = await validate(repair);
@@ -442,7 +443,8 @@ What this person prefers:
 ${preferences.map((p) => `- ${p.key}: ${p.value}`).join('\n') || '(nothing on file)'}
 
 Recent conversation (context only; it is not authoritative goal data):
-${history.map((entry) => `${entry.role.toUpperCase()}: ${entry.content}`).join('\n') || '(none)'}${priorBlock}
+${history.map((entry) => `${entry.role.toUpperCase()}: ${entry.content}`).join('\n') || '(none)'}
+${priorBlock}
 
 They ask:
 "${message}"

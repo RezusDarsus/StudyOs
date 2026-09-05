@@ -43,20 +43,29 @@ function WidgetInput({
 }: {
   placeholder: string;
   disabled: boolean;
-  onText(text: string): void;
+  onText(text: string): unknown | Promise<unknown>;
   onCommand: CommandHandler;
   initialValue?: string;
 }) {
   const [value, setValue] = useState(initialValue);
+  const sending = useRef(false);
 
-  function submit() {
+  async function submit() {
     // Send is enabled for any non-empty message, so this guard should never fire
     // from a click — it exists for the Enter path.
-    if (!canSubmit(value) || disabled) return;
+    if (!canSubmit(value) || disabled || sending.current) return;
     const parsed = parseInput(value);
-    setValue('');
-    if (parsed.kind === 'command') onCommand(parsed.command, parsed.args);
-    else onText(parsed.text);
+    if (parsed.kind === 'command') {
+      setValue('');
+      onCommand(parsed.command, parsed.args);
+      return;
+    }
+    const submitted = value;
+    sending.current = true;
+    try {
+      const result = await onText(parsed.text);
+      if (result !== null) setValue((current) => current === submitted ? '' : current);
+    } finally { sending.current = false; }
   }
 
   return (
@@ -67,7 +76,7 @@ function WidgetInput({
         onKeyDown={(e) => {
           // Enter sends, Shift+Enter makes a new line — the convention people
           // already expect from a chat box.
-          if (e.key === 'Enter' && !e.shiftKey) {
+          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             submit();
           }
@@ -496,7 +505,7 @@ export default function CopilotWidget({
       return;
     }
     onChangeTarget({ view: 'create' });
-    void interview.begin(text);
+    return interview.begin(text);
   }
 
   async function build() {
@@ -551,7 +560,7 @@ export default function CopilotWidget({
       tabIndex={-1}
       role="dialog"
       aria-label="One Up Copilot"
-      className="copilot-panel fixed z-[90] flex flex-col animate-slide-up"
+      className={`copilot-panel ${target.view === 'create' ? 'copilot-panel--builder' : ''} fixed z-[90] flex flex-col animate-slide-up`}
       style={{
         background: 'var(--surface)',
         border: '1px solid var(--hairline-strong)',
@@ -656,9 +665,10 @@ export default function CopilotWidget({
                 Reopening your conversation…
               </p>
             ) : interview.phase === 'OPENING' ? (
-              <div className="px-4 py-4">
+              <div className="copilot-builder-opening px-4 py-4">
+                <h1>What would you like to achieve?</h1>
                 <p style={{ fontSize: '0.88rem', color: 'var(--text-body)', lineHeight: 1.6 }}>
-                  What would you like to achieve? Say it however you like — the more detail you give,
+                  Say it however you like — the more detail you give,
                   the fewer questions I need to ask.
                 </p>
                 <div className="flex flex-wrap gap-2 mt-3">
@@ -706,7 +716,7 @@ export default function CopilotWidget({
             {interview.question ? (
               <QuestionInput
                 question={interview.question}
-                disabled={interview.busy}
+                disabled={interview.busy || interview.generating}
                 onAnswer={interview.answer}
                 compact
               />
@@ -742,7 +752,7 @@ export default function CopilotWidget({
                   <button
                     className="btn-ghost w-full py-2 text-xs"
                     onClick={() => interview.forceGenerate()}
-                    disabled={interview.generating}
+                    disabled={interview.busy || interview.generating}
                   >
                     Build with what we have
                   </button>

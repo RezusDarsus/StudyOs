@@ -55,6 +55,7 @@ export interface PublicProfile {
 
 /** The signed-in user's own record, which does include the private fields. */
 export interface CurrentUser extends PublicProfile {
+  isAdmin?: boolean;
   email: string;
   timezone: string;
   notifications: {

@@ -31,13 +31,13 @@ export default function CopilotInterview() {
 
   const { phase, bubbles, turn, question, busy, generating, progress } = interview;
 
-  async function build() {
-    const draft = await interview.generate();
+  async function build(force = false) {
+    const draft = await interview.generate({ force });
     if (draft) navigate(`/app/goals/drafts/${draft.id}`, { replace: true });
   }
 
   async function leave(discard: boolean) {
-    if (discard) await interview.discard();
+    if (discard && !(await interview.discard())) return;
     navigate('/app/goals', { replace: true });
   }
 
@@ -85,6 +85,13 @@ export default function CopilotInterview() {
           <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem', marginTop: 6, marginBottom: 18 }}>
             Say it however you like. The more detail you give, the fewer questions I need to ask.
           </p>
+          {interview.clarification && <div className="mb-5" role="status">
+            <p className="mb-3">{interview.clarification.text}</p>
+            <button className="btn-secondary px-4 py-2" disabled={busy}
+              onClick={() => interview.begin(interview.clarification!.prompt, { intentAnswer: 'goal' })}>
+              Create a goal from this
+            </button>
+          </div>}
 
           <textarea
             value={goalText}
@@ -140,7 +147,7 @@ export default function CopilotInterview() {
   // ---------------------------------------------------------- interview
 
   return (
-    <div className="product-page copilot-interview-page flex flex-col" style={{ minHeight: '100%' }}>
+    <div className="product-page copilot-interview-page copilot-interview-page--active flex flex-col">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2.5">
           <UpMarker size={34} />
@@ -175,12 +182,13 @@ export default function CopilotInterview() {
         </span>
       </div>
 
-      <Transcript bubbles={bubbles} busy={busy} maxHeight="52vh" />
+      {phase === 'RESUMING' && <p role="status">Reopening your conversation…</p>}
+      <Transcript bubbles={bubbles} busy={busy || generating} thinkingLabel={generating ? 'Building your plan…' : undefined} className="copilot-full-transcript flex-1 overflow-y-auto" />
 
       {/* answer area */}
-      <div className="mt-4">
+      <div className="copilot-full-composer mt-4">
         {question ? (
-          <QuestionInput question={question} disabled={busy} onAnswer={interview.answer} />
+          <QuestionInput question={question} disabled={busy || generating} onAnswer={interview.answer} />
         ) : phase === 'READY' ? (
           <div className="card shadow-card p-5 text-center">
             <p style={{ fontSize: '0.9rem', color: 'var(--text-body)', marginBottom: 14 }}>
@@ -188,7 +196,7 @@ export default function CopilotInterview() {
             </p>
             <button
               className="btn-primary w-full py-3.5 text-sm flex items-center justify-center gap-2"
-              onClick={build}
+              onClick={() => build()}
               disabled={generating}
             >
               <Sparkles size={15} />
@@ -199,8 +207,8 @@ export default function CopilotInterview() {
         {phase === 'INTERVIEWING' && !turn?.canGenerate && (turn?.questionCount ?? 0) >= 2 && (
           <button
             className="btn-ghost w-full py-2.5 text-xs mt-2"
-            onClick={() => interview.forceGenerate()}
-            disabled={generating}
+            onClick={() => build(true)}
+            disabled={busy || generating}
           >
             Build with what we have
           </button>
@@ -219,6 +227,7 @@ export default function CopilotInterview() {
             <button
               className="btn-primary px-4 py-2.5 text-sm"
               style={{ background: 'var(--red)', boxShadow: 'none' }}
+              disabled={busy || generating}
               onClick={() => leave(true)}
             >
               Discard

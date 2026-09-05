@@ -400,6 +400,16 @@ h3, h4, h5, h6 { letter-spacing: normal; line-height: 1.35; }
 .copilot-interview-page { max-width: 760px; padding-top: 44px; }
 .copilot-opening { grid-template-columns: 48px 1fr; }
 .copilot-opening textarea { min-height: 112px; }
+.product-page.copilot-interview-page { max-width: 1120px; padding-top: 24px; }
+.copilot-interview-page .copilot-opening { max-width: 880px; margin: 5vh auto 0; }
+.copilot-interview-page--active { height: calc(100dvh - 32px); min-height: 0; padding-bottom: 24px; }
+.copilot-full-transcript { min-height: 120px; padding: 24px max(8px, calc((100% - 800px) / 2)); }
+.copilot-full-composer { width: 100%; max-width: 840px; margin-inline: auto; flex-shrink: 0; max-height: 45dvh; overflow-y: auto; }
+.copilot-full-composer textarea, .copilot-interview-page textarea { font-size: 16px; }
+.copilot-full-transcript > div { gap: 24px; }
+@media (max-width: 1023px) {
+  .copilot-interview-page--active { height: calc(100dvh - 140px); }
+}
 .showcase-frame { width: 100vw; height: 100vh; display: flex; overflow: hidden; background: var(--bg); }
 .showcase-sidebar { display: flex !important; flex-direction: column; height: 100%; }.showcase-side-top { padding: 20px; }.showcase-side-top .brand-link { display: flex; align-items: center; gap: 10px; margin-bottom: 30px; }.showcase-side-top .brand-link strong { color: var(--text); font-size: 17px; }.showcase-side-top nav { display: grid; gap: 2px; }.showcase-side-bottom { margin-top: auto; padding: 18px 20px; border-top: 1px solid var(--hairline); }.showcase-side-bottom .sidebar-nav-item b { margin-left: auto; color: var(--text); font-family: var(--font-mono); font-size: 9px; }.showcase-profile { display: grid; grid-template-columns: 38px 1fr; gap: 10px; align-items: center; margin-top: 14px; padding: 12px; border: 1px solid var(--hairline); border-radius: 14px; background: var(--surface); }.showcase-profile > span { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%; background: var(--accent-wash); color: var(--text); font-size: 10px; font-weight: 700; }.showcase-profile strong, .showcase-profile small { display: block; }.showcase-profile strong { color: var(--text); font-size: 12px; }.showcase-profile small { margin-top: 3px; color: var(--text-muted); font-family: var(--font-mono); font-size: 8px; }
 .showcase-main { flex: 1; min-width: 0; height: 100vh; overflow-y: auto; }.showcase-main .product-page { padding-top: 30px; }.showcase-main .product-page-header { margin-bottom: 28px; }.showcase-main .product-page-header h1 { font-size: 34px; }.showcase-main .challenge-body { padding-top: 24px; }.showcase-main .momentum-track { margin-block: 20px 16px; }.showcase-goal-title { display: inline-flex; align-items: center; gap: 9px; color: var(--text); font-size: 13px; font-weight: 700; }.showcase-task { min-height: 64px; display: grid; grid-template-columns: 25px 1fr 28px; gap: 11px; align-items: center; padding: 10px 12px; border: 1px solid var(--hairline); border-radius: 12px; background: var(--surface); }.showcase-task > span { width: 24px; height: 24px; display: grid; place-items: center; border: 2px solid var(--hairline-strong); border-radius: 50%; }.showcase-task.is-complete { background: var(--leaf-wash); }.showcase-task.is-complete > span { border-color: var(--green); background: var(--green); color: #fff; }.showcase-task.is-current { border-color: var(--accent-line); }.showcase-task strong, .showcase-task small { display: block; }.showcase-task strong { color: var(--text); font-size: 12px; }.showcase-task small { margin-top: 3px; color: var(--text-muted); font-size: 9px; }.showcase-task em { color: var(--text-muted); font-family: var(--font-mono); font-size: 9px; font-style: normal; }.showcase-main .active-goals-section { margin-top: 26px; }
@@ -473,6 +483,25 @@ h3, h4, h5, h6 { letter-spacing: normal; line-height: 1.35; }
 
 @media (min-width: 1024px) {
   .copilot-fab { right: 24px; bottom: 24px; }
+}
+
+/* Goal creation opens as a spacious chat workspace from the Copilot menu. */
+.copilot-panel--builder { height: 100dvh; max-height: 100dvh; border-radius: 0; overflow: hidden; }
+.copilot-builder-opening { margin-block: auto; }
+.copilot-builder-opening h1 { margin-bottom: 12px; color: var(--text); font-size: clamp(24px, 3vw, 32px); font-weight: 600; letter-spacing: -.02em; }
+.copilot-panel--builder > .flex-1 { min-height: 0; }
+.copilot-panel--builder > .flex-shrink-0:last-child { max-height: 45dvh; overflow-y: auto; }
+.copilot-panel--builder textarea { min-height: 72px; font-size: 16px; }
+@media (min-width: 640px) {
+  .copilot-panel.copilot-panel--builder {
+    left: 24px; right: 24px; top: 24px; bottom: 24px;
+    width: auto; height: calc(100dvh - 48px); max-height: none;
+    max-width: 1180px; margin-inline: auto; border-radius: 16px;
+  }
+  .copilot-panel--builder > .flex-1 > *,
+  .copilot-panel--builder > .flex-shrink-0:last-child > * {
+    width: 100%; max-width: 860px; margin-inline: auto;
+  }
 }
 
 /* Short viewports (a landscape phone) get the whole screen — 88dvh of 380px is

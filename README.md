@@ -538,3 +538,13 @@ adding to them.
 Email delivery was taken out of Phase 2.5, so there is no `EmailProvider` and no
 transactional email integration. Notifications are in-app and realtime only. The
 acceptance suite records this as a skipped test rather than silently omitting it.
+
+# Registration IP administration
+
+Set `ADMIN_EMAILS=darsavelidzerezo@gmail.com` in the API deployment environment, apply migrations with `npm run db:deploy --workspace=apps/api`, and restart/rebuild the application. Local `.env` has this account configured. The Docker API service already loads `.env`.
+
+Sign in with that existing account and open Profile → Admin · Registrations by IP. The server enforces the allowlist on every request; public profiles and ordinary users never receive IP data. Pagination shows 50 IPs at a time, highest account count first.
+
+New registrations store Fastify's resolved client IP. Configure `TRUST_PROXY` for the actual trusted reverse proxy and ensure the public proxy overwrites forwarded headers. Never accept a client-supplied signup IP. Historical and seeded accounts remain “IP not recorded”; counts represent currently existing accounts, and account deletion removes their recorded IP.
+
+Shared IPs can represent households, workplaces, VPNs, or carrier networks and do not establish that accounts belong to the same person.
