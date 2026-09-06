@@ -68,6 +68,7 @@ function safeQuestionId(payload: string): string | null {
 function astConstraintLines(contracts: ReturnType<typeof contractsFromState>): string[] {
   const lines: string[] = [];
   for (const [index, contract] of contracts.entries()) {
+    if (contract.minWeekly !== undefined) lines.push(`at least ${contract.minWeekly} sessions per week`);
     if (contract.exactWeekly !== undefined) lines.push(`exactly ${contract.exactWeekly} sessions per week`);
     if (contract.maxWeekly !== undefined) lines.push(`at most ${contract.maxWeekly} sessions per week`);
     if (contract.requiredWeekdays.length) {

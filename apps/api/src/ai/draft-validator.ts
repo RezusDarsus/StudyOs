@@ -51,6 +51,7 @@ function progressionPolicyFromSource(sourceText: string):
  */
 function parsedFromContract(contract: ConstraintContract): ExplicitGoalConstraints {
   return {
+    minWeekly: contract.minWeekly,
     exactWeekly: contract.exactWeekly,
     maxWeekly: contract.maxWeekly,
     allowedDays: contract.allowedWeekdays ? [...contract.allowedWeekdays] : undefined,
@@ -1026,6 +1027,35 @@ export function validateAndNormalizeDraft(
         };
       }
     }
+    // Apply the lower side after the upper-side trim. Removing a multi-session
+    // task to get under the maximum can otherwise drop a range such as 4-5 down
+    // to 3, even though 4 was the user's minimum.
+    if (explicit.minWeekly !== undefined && normalizedTasks.length) {
+      const current = normalizedTasks.reduce(
+        (sum, task) => sum + weeklyFrequency(task.recurrenceType, task.recurrenceConfig), 0,
+      );
+      if (current < explicit.minWeekly) {
+        const target = Math.min(7, Math.max(1, explicit.minWeekly));
+        const first = normalizedTasks[0];
+        const excluded = [...new Set(explicit.excludedDays)];
+        const available = explicit.allowedDays?.length
+          ? [...new Set(explicit.allowedDays)].filter((day) => !excluded.includes(day))
+          : [0, 1, 2, 3, 4, 5, 6].filter((day) => !excluded.includes(day));
+        const desired = Math.min(target, available.length);
+        if (desired > 0) {
+          // A count/range says how often, not which weekdays. Keep the schedule
+          // flexible instead of silently turning a capacity answer into fixed
+          // Monday-through-Thursday work.
+          first.recurrenceType = 'TIMES_PER_WEEK';
+          first.recurrenceConfig = {
+            timesPerWeek: desired,
+            allowedWeekdays: available.length < 7 ? available : undefined,
+            excludedWeekdays: excluded.length ? excluded : undefined,
+          };
+          adjustments.push(`Aligned the executable schedule to at least ${desired} sessions per week`);
+        }
+      }
+    }
     if (explicit.allowedDays?.length) {
       for (const task of normalizedTasks) {
         if (task.recurrenceType === 'TIMES_PER_WEEK') {
@@ -1230,7 +1260,7 @@ export function validateAndNormalizeDraft(
         );
       }
     }
-    const errors = [
+    const errors = [...new Set([
       ...(explicit
         ? explicitConstraintErrors(explicit, {
             targetType,
@@ -1243,7 +1273,7 @@ export function validateAndNormalizeDraft(
       // be persisted — this is the same checker the benchmark scorer reuses.
       ...checkContract(contract, { targetType, targetValue, deadline, tasks: normalizedTasks })
         .map((violation) => violation.message),
-    ];
+    ])];
     for(const task of normalizedTasks)assertValidRecurrence(task.recurrenceType,task.recurrenceConfig);
     if (errors.length) throw new DraftValidationError(errors.join(' '));
   }

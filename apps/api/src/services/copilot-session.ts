@@ -10,7 +10,7 @@ import {
   type CopilotQuestion,
 } from '../ai/schemas.js';
 import { interviewResponseSchemaAst, type InterviewResponseAst } from '../ai/schemas.js';
-import { requirementFragmentSchema } from '../ai/requirements/extract-schema.js';
+import { requirementFragmentSchema, withoutProperties } from '../ai/requirements/extract-schema.js';
 import {
   promoteMultiSelect,
   ensureCustomAnswer,
@@ -38,13 +38,12 @@ import {
   ingestExtraction,
   markExtractionFailed,
   toPlanReadiness,
-  deterministicGapResolution,
+  deterministicGapResolutions,
   type PlanReadiness,
   type RequirementState,
 } from '../ai/requirements/index.js';
-import type { RequirementFragment } from '../ai/requirements/extract-schema.js';
 import { memoryGateCategory } from '../ai/category.js';
-import { badRequest, forbidden, notFound } from '../lib/errors.js';
+import { badRequest, conflict, forbidden, notFound } from '../lib/errors.js';
 import { prisma } from '../lib/prisma.js';
 import { getPreferencesForPrompt } from './preferences.js';
 import { recordEvent } from './copilot-analytics.js';
@@ -371,6 +370,8 @@ async function applyTurn(
      * though the answer was demonstrably in.
      */
     deterministicallyIngested?: boolean;
+    /** Requirement properties already resolved from the user's structured answer. */
+    deterministicProperties?: ReadonlySet<string>;
     /** RC-P1-F2: product timezone for the deadline domain gate. */
     timezone?: string;
   },
@@ -395,7 +396,17 @@ async function applyTurn(
   if (turnIsStale) {
     requirementState = markExtractionFailed(existing);
   } else {
-    requirementState = ingestExtraction(existing, input.response?.requirements ?? { atoms: [], groups: [], pendingAmbiguity: [], unmodeledSpans: [] }, grounding).state;
+    const fragment = input.response?.requirements ?? {
+      atoms: [],
+      groups: [],
+      pendingAmbiguity: [],
+      unmodeledSpans: [],
+    };
+    requirementState = ingestExtraction(
+      existing,
+      withoutProperties(fragment, input.deterministicProperties ?? new Set()),
+      grounding,
+    ).state;
   }
   context.requirements = requirementState;
 
@@ -641,6 +652,16 @@ export async function answerQuestion(
     };
   }
 
+  // A second tab, a delayed response, or an old widget can otherwise submit a
+  // question that is no longer on the server's page. Accepting it would let a
+  // stale frequency answer reopen a gap the user already resolved.
+  if (pending && session.status === 'INTERVIEWING' && input.questionId !== pending.id) {
+    throw conflict(
+      'That question is no longer current. Reload the latest Copilot turn and try again.',
+      'STALE_REQUEST',
+    );
+  }
+
   const answerText = input.skipped ? '(skipped)' : formatAnswer(input.answer);
 
   // RC-P1-F / RC-P1-F2: the product timezone, observed by BOTH deadline
@@ -663,6 +684,7 @@ export async function answerQuestion(
   // depend on the model choosing to extract it, and nothing weaker can overwrite
   // it. A later answer to the same question replaces the earlier one, so a
   // correction works without special-casing.
+  let deterministicProperties = new Set<string>();
   if (!input.skipped && input.answer !== null && input.answer !== undefined) {
     const context = parseContext(session.structuredContext, session.initialGoalText);
     const askedQuestion = [...session.messages]
@@ -677,8 +699,8 @@ export async function answerQuestion(
       value: input.answer,
     });
 
-    // Deterministic GapResolution (Rev.3): a structured answer to one of the
-    // three registered gap questions is parsed and ingested WITHOUT a model —
+    // Deterministic GapResolution (Rev.3): a structured answer to a registered
+    // gap question is parsed and ingested WITHOUT a model —
     // its resolution contract is the parser. This is the current turn's
     // authoritative ingest; the model turn (if it runs) re-affirms it.
     const pendingForAnswer = [...session.messages]
@@ -688,15 +710,18 @@ export async function answerQuestion(
     // RC-P1-F: the timeframe validity check observes the user's timezone —
     // the same `todayIn` the draft validator will apply later, so a date the
     // interview accepts is a date the draft keeps.
-    const resolution = deterministicGapResolution(input.questionId, input.answer, {
+    const resolutions = deterministicGapResolutions(input.questionId, input.answer, {
       timezone: userProfile?.timezone ?? 'UTC',
     });
-    if (resolution && pendingForAnswer) {
+    deterministicProperties = pendingForAnswer
+      ? new Set(resolutions.map((resolution) => resolution.property))
+      : new Set<string>();
+    if (resolutions.length > 0 && pendingForAnswer) {
       const state = parseRequirementState(session.structuredContext);
       const { state: next } = ingestExtraction(
         state,
         requirementFragmentSchema.parse({
-          atoms: [{
+          atoms: resolutions.map((resolution) => ({
             property: resolution.property,
             scope: resolution.scope,
             relation: resolution.relation,
@@ -704,7 +729,7 @@ export async function answerQuestion(
             strength: 'REQUIRED',
             source: 'stated',
             evidence: answerText,
-          }],
+          })),
         }),
         astGroundingFor(session, { questionId: input.questionId, text: answerText }, userProfile?.timezone ?? 'UTC'),
       );
@@ -746,6 +771,7 @@ export async function answerQuestion(
         // on the ingested state, and the answered question is never asked
         // again. Only the message acknowledges the hiccup.
         deterministicallyIngested: true,
+        deterministicProperties,
         currentAnswer: groundingAnswer,
         timezone: userProfile?.timezone ?? 'UTC',
         assistantMessageOverride:
@@ -755,6 +781,7 @@ export async function answerQuestion(
     return applyTurn(refreshed, {
       response: null,
       extractionFailed: true,
+      deterministicProperties,
       currentAnswer: groundingAnswer,
       timezone: userProfile?.timezone ?? 'UTC',
     });
@@ -762,6 +789,7 @@ export async function answerQuestion(
   return applyTurn(refreshed, {
     response: result,
     injectedPreferences: preferences,
+    deterministicProperties,
     currentAnswer: groundingAnswer,
     timezone: userProfile?.timezone ?? 'UTC',
   });

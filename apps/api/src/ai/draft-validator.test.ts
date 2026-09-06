@@ -135,3 +135,30 @@ describe('authority-gated build-ups', () => {
     expect(result.tasks[0].progression?.requiresApproval).toBe(false);
   });
 });
+
+describe('weekly capacity ranges', () => {
+  it('keeps the generated schedule inside the stated range', () => {
+    const result = validateAndNormalizeDraft(
+      {
+        ...draft([task({
+          title: 'Move more',
+          recurrence: { type: 'TIMES_PER_WEEK' as const, timesPerWeek: 3 },
+        })]),
+        category: 'FITNESS',
+        title: 'Move more',
+        description: 'A sustainable movement plan.',
+        rationale: 'You want to move more consistently.',
+        tasks: [task({
+          title: 'Move more',
+          recurrence: { type: 'TIMES_PER_WEEK' as const, timesPerWeek: 3 },
+        })],
+      },
+      'UTC',
+      new Date('2026-08-25T10:00:00Z'),
+      'Move more',
+      contractOf({ minWeekly: 4, maxWeekly: 5 }),
+    );
+    expect(result.tasks[0].recurrenceConfig.timesPerWeek).toBeGreaterThanOrEqual(4);
+    expect(result.tasks[0].recurrenceConfig.timesPerWeek).toBeLessThanOrEqual(5);
+  });
+});

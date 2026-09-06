@@ -3,6 +3,8 @@ import type { NormalizedTask } from './draft-validator.js';
 import { familyFor, meaningfulTokens } from './plan-quality.js';
 
 export interface ExplicitGoalConstraints {
+  /** Lower bound of a stated weekly-count range, when the user gave one. */
+  minWeekly?: number;
   exactWeekly?: number;
   maxWeekly?: number;
   allowedDays?: number[];
@@ -285,6 +287,7 @@ export function explicitConstraintErrors(
 ): string[] {
   const errors:string[]=[];
   const recurring=draft.tasks.reduce((sum,t)=>sum+taskWeeklyFrequency(t),0);
+  if(constraints.minWeekly!==undefined && recurring<constraints.minWeekly) errors.push(`The user requires at least ${constraints.minWeekly} total sessions per week, but the tasks total ${Number(recurring.toFixed(2))}.`);
   if (constraints.exactWeekly !== undefined && constraints.allowedDays?.length && constraints.exactWeekly > constraints.allowedDays.length) {
     errors.push(`The requested ${constraints.exactWeekly} different days cannot fit the ${constraints.allowedDays.length} allowed weekdays; clarification is required.`);
   }

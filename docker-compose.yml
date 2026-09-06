@@ -145,6 +145,8 @@ services:
       NODE_ENV: production
       PORT: 4000
       WEB_ORIGIN: ${APP_ORIGIN:-http://localhost:8080}
+      # Server-side allowlist for the admin tools. The browser never controls this.
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       # Believe X-Forwarded-For, because in this topology it is trustworthy: this service
       # publishes no ports, so the only thing that can reach it is the nginx container, and
       # that container overwrites the header rather than appending to it (see nginx.conf).

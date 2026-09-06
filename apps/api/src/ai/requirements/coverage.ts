@@ -449,15 +449,16 @@ export interface GapResolutionCandidate {
 type RequirementValue2 = RequirementRecord['value'];
 
 /**
- * The only answer shape a deterministic numeric slot may accept: a BARE
- * integer, with nothing else. (RC-P1-G, the lossless-parsing rule.)
+ * The only answer shape a deterministic numeric slot may accept as an exact
+ * value: a BARE integer, with nothing else. (RC-P1-G, the lossless-parsing
+ * rule.)
  *
  * parseInt-style prefix parsing collapsed "5-6" into exactly 5 and "30-40"
  * into exactly 30 — silent semantic corruption of a user-stated constraint.
  * A number carrying ANY other semantics (a range, a bound, a hedge, trailing
- * words, a unit) is not deterministically parseable: the parser returns null
- * and the answer takes the extraction/clarification path instead. The parser
- * accepts only what it can preserve exactly.
+ * words, a unit) is not an exact value: this singular parser returns null. The
+ * range-aware plural parser below handles the one structured range the weekly
+ * capacity slot can represent.
  */
 function bareIntegerOf(answer: unknown): number | null {
   if (typeof answer === 'number' && Number.isInteger(answer)) return answer;
@@ -466,6 +467,27 @@ function bareIntegerOf(answer: unknown): number | null {
   if (!/^-?\d+$/.test(text)) return null;
   const n = Number.parseInt(text, 10);
   return Number.isSafeInteger(n) ? n : null;
+}
+
+/**
+ * Parse an inclusive weekly-count range without collapsing it to one endpoint.
+ *
+ * A weekly count is integral, so `4-6` is exactly representable as a lower and
+ * upper bound in the requirement AST. The old parser rejected every range and
+ * left WEEKLY_CAPACITY open; that made the deterministic gate ask the same
+ * question forever. This parser remains deliberately strict: it accepts only a
+ * complete range and never extracts a prefix from free text.
+ */
+function weeklyIntegerRangeOf(answer: unknown): [number, number] | null {
+  if (typeof answer !== 'string') return null;
+  const text = answer.trim();
+  const match = /^(?:\s*(\d+)\s*(?:-|–|—|to)\s*(\d+)|\s*between\s+(\d+)\s+and\s+(\d+))(?:\s*(?:days?|times?|sessions?))?(?:\s*(?:per|a|each)\s*week|\s*\/\s*week|\s*weekly)?\s*$/i.exec(text);
+  if (!match) return null;
+  const lower = Number(match[1] ?? match[3]);
+  const upper = Number(match[2] ?? match[4]);
+  if (!Number.isSafeInteger(lower) || !Number.isSafeInteger(upper)) return null;
+  if (lower < 1 || upper > 7 || lower > upper) return null;
+  return [lower, upper];
 }
 
 /** The minimum length an outcome answer must have to be a real answer. */
@@ -490,9 +512,9 @@ export function deterministicGapResolution(
   opts: { now?: Date; timezone?: string } = {},
 ): GapResolutionCandidate | null {
   if (questionId === 'gap_weekly_capacity') {
-    // RC-P1-G: only a bare exact integer is an exact frequency. "5-6",
-    // "about 5", "at least 5", "5+" and friends carry semantics this slot
-    // cannot represent exactly, so they never ingest deterministically.
+    // RC-P1-G: only a bare exact integer is an exact frequency. "about 5",
+    // "at least 5", "5+" and other qualified values remain on the model
+    // extraction path; the range-aware wrapper handles complete ranges.
     const n = bareIntegerOf(answer);
     if (n === null || n < 1 || n > 7) return null;
     return { property: 'schedule.frequency.count', scope: 'schedule', relation: 'eq', value: { kind: 'count', value: n } };
@@ -525,4 +547,47 @@ export function deterministicGapResolution(
     return { property: 'goal.outcome', scope: 'goal', relation: 'contains', value: { kind: 'text', value: text.toLowerCase() } };
   }
   return null;
+}
+
+/**
+ * Resolve a registered answer into one or more authoritative AST atoms.
+ *
+ * Most registered slots have one exact atom. Weekly capacity also accepts an
+ * inclusive range, represented losslessly by lower and upper bounds. This
+ * preserves the range without silently choosing an endpoint.
+ */
+export function deterministicGapResolutions(
+  questionId: string,
+  answer: unknown,
+  opts: { now?: Date; timezone?: string } = {},
+): GapResolutionCandidate[] {
+  const exact = deterministicGapResolution(questionId, answer, opts);
+  if (exact) return [exact];
+  if (questionId !== 'gap_weekly_capacity') return [];
+
+  const range = weeklyIntegerRangeOf(answer);
+  if (!range) return [];
+  const [lower, upper] = range;
+  if (lower === upper) {
+    return [{
+      property: 'schedule.frequency.count' as const,
+      scope: 'schedule' as const,
+      relation: 'eq' as const,
+      value: { kind: 'count' as const, value: lower },
+    }];
+  }
+  return [
+    {
+      property: 'schedule.frequency.count' as const,
+      scope: 'schedule' as const,
+      relation: 'gte' as const,
+      value: { kind: 'count' as const, value: lower },
+    },
+    {
+      property: 'schedule.frequency.count' as const,
+      scope: 'schedule' as const,
+      relation: 'lte' as const,
+      value: { kind: 'count' as const, value: upper },
+    },
+  ];
 }

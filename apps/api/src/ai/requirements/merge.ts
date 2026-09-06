@@ -229,6 +229,42 @@ function effectiveKeyOfAtom(atom: BuiltAtom): string {
 }
 
 /**
+ * Weekly capacity answers can be an exact count or a bounded range. An exact
+ * correction replaces the range bounds, and a later range replaces an earlier
+ * exact count; otherwise the two representations would remain active together
+ * and the contract would read a correction as a contradiction.
+ */
+function supersedeConflictingFrequencySlots(ctx: MergeCtx, record: RequirementRecord): boolean {
+  if (record.property !== 'schedule.frequency.count') return true;
+  if (!['eq', 'gte', 'lte'].includes(record.relation)) return true;
+
+  const replacementTargets = ctx.records.filter((other) => {
+    if (other.status !== 'ACTIVE' || other.id === record.id) return false;
+    if (other.property !== record.property || other.scope !== record.scope) return false;
+    if (temporalKey(other.temporal) !== temporalKey(record.temporal)) return false;
+    if ((other.branchScope ?? '') !== (record.branchScope ?? '')) return false;
+    if (!['eq', 'gte', 'lte'].includes(other.relation) || other.relation === record.relation) return false;
+    const replacesRange = record.relation === 'eq' && (other.relation === 'gte' || other.relation === 'lte');
+    const replacesExact = other.relation === 'eq' && (record.relation === 'gte' || record.relation === 'lte');
+    return replacesRange || replacesExact;
+  });
+
+  // Check all targets before mutating any of them. An ungrounded model claim
+  // must never partially rewrite a set of stronger user constraints.
+  if (replacementTargets.some((other) => provenanceRank(record.provenance) > provenanceRank(other.provenance))) {
+    return false;
+  }
+
+  for (const other of replacementTargets) {
+    other.status = 'SUPERSEDED';
+    other.supersededById = record.id;
+    other.updatedAt = ctx.at;
+    ctx.events.push({ kind: 'superseded', recordId: other.id, reason: 'FREQUENCY_CORRECTION' });
+  }
+  return true;
+}
+
+/**
  * Merge one built atom by semantic key.
  * Returns the id of the record that now carries the semantics (ACTIVE), or
  * null when the atom was rejected (weaker provenance than what holds).
@@ -236,6 +272,11 @@ function effectiveKeyOfAtom(atom: BuiltAtom): string {
 function mergeAtom(ctx: MergeCtx, atom: BuiltAtom): string | null {
   const record = atom.record;
   const key = effectiveKeyOfAtom(atom);
+
+  if (!supersedeConflictingFrequencySlots(ctx, record)) {
+    ctx.events.push({ kind: 'rejected', recordId: record.id, effectiveKey: key, reason: 'WEAKER_PROVENANCE' });
+    return null;
+  }
 
   const existing = ctx.records.find(
     (r) => r.status === 'ACTIVE' && effectiveKeyOfRecord(r) === key,

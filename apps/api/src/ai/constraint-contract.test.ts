@@ -62,6 +62,13 @@ describe('constraint contract', () => {
       .toContain('MAX_WEEKLY_EXCEEDED');
   });
 
+  it('accepts a weekly range inside its lower and upper bounds', () => {
+    const contract = buildConstraintContract(constraints({ minWeekly: 4, maxWeekly: 5 }));
+    expect(codes(contract, [task('Walk', [1, 3, 5, 6])])).not.toContain('MIN_WEEKLY_UNDERFLOW');
+    expect(codes(contract, [task('Walk', [1, 3, 5])])).toContain('MIN_WEEKLY_UNDERFLOW');
+    expect(codes(contract, [task('Walk', [1, 2, 3, 4, 5, 6])])).toContain('MAX_WEEKLY_EXCEEDED');
+  });
+
   it('catches required and role weekdays, excluded and outside-allowed days', () => {
     const contract = buildConstraintContract(constraints({
       allowedDays: [1, 3, 6],

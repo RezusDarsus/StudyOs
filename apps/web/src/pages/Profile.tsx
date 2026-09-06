@@ -15,7 +15,6 @@ import {
 import { ApiError, api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import AiMemoryPanel from '../components/AiMemoryPanel';
-import RegistrationIpPanel from '../components/RegistrationIpPanel';
 import { CATEGORY_EMOJI, type CurrentUser, type GoalCategory, type PublicProfile } from '../lib/types';
 
 interface ProfileGoal {
@@ -54,7 +53,7 @@ export default function Profile() {
     [id],
   );
   const [editing, setEditing] = useState(false);
-  const { logout, user: currentUser } = useAuth();
+  const { logout } = useAuth();
   const { push } = useToast();
 
   async function exportData() {
@@ -224,7 +223,6 @@ export default function Profile() {
 
       {/* Only ever shown on your own profile — this is your data, not public. */}
       {isSelf && <AiMemoryPanel />}
-      {isSelf && currentUser?.isAdmin && <RegistrationIpPanel />}
 
       {isSelf && (
         <Section title="Your data">

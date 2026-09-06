@@ -47,6 +47,7 @@ interface SessionSnapshot {
   draftId: string | null;
   messages: Array<{ role: string; content: string }>;
   question: CopilotQuestion | null;
+  requirements?: InterviewTurn['requirements'];
 }
 
 function messageOf(err: unknown, fallback: string) {
@@ -70,10 +71,15 @@ export function interviewProgress(turn: InterviewTurn | null): number {
 export function interviewPhaseLabel(phase: InterviewPhase, turn: InterviewTurn | null): string {
   if (phase === 'OPENING' || phase === 'RESUMING' || phase === 'DONE') return '';
   if (phase === 'READY') return 'Ready to build your plan';
+  const missing = turn?.requirements?.missing ?? [];
+  if (missing.includes('DESIRED_OUTCOME')) return 'Defining success';
+  if (missing.includes('WEEKLY_CAPACITY')) return 'Setting your weekly pace';
+  if (missing.includes('TIMEFRAME')) return 'Setting your timeframe';
+  if (missing.includes('SESSION_SHAPE')) return 'Shaping each session';
   const count = turn?.questionCount ?? 0;
   if (count <= 1) return 'Understanding your goal';
   if (count <= 3) return 'Setting up your plan';
-  return 'Almost ready';
+  return 'Gathering the details';
 }
 
 /**
@@ -161,6 +167,7 @@ export function useCopilotInterview({
       context: data.context,
       canGenerate: data.canGenerate,
       revision: data.revision,
+      requirements: data.requirements,
     });
     setPhase(data.canGenerate && !data.question ? 'READY' : 'INTERVIEWING');
   }, []);

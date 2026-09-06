@@ -53,8 +53,15 @@ describe('interviewPhaseLabel', () => {
     expect(interviewPhaseLabel('INTERVIEWING', turn({ questionCount: 3 }))).toBe(
       'Setting up your plan',
     );
-    expect(interviewPhaseLabel('INTERVIEWING', turn({ questionCount: 4 }))).toBe('Almost ready');
-    expect(interviewPhaseLabel('INTERVIEWING', turn({ questionCount: 9 }))).toBe('Almost ready');
+    expect(interviewPhaseLabel('INTERVIEWING', turn({ questionCount: 4 }))).toBe('Gathering the details');
+    expect(interviewPhaseLabel('INTERVIEWING', turn({ questionCount: 9 }))).toBe('Gathering the details');
+  });
+
+  it('names the outstanding blocker instead of claiming the interview is nearly done', () => {
+    expect(interviewPhaseLabel('INTERVIEWING', turn({
+      questionCount: 4,
+      requirements: { ready: false, shouldAsk: false, missing: ['WEEKLY_CAPACITY', 'TIMEFRAME'] },
+    }))).toBe('Setting your weekly pace');
   });
 
   it('starts at the beginning when no turn has arrived yet', () => {

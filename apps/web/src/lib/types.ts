@@ -55,7 +55,7 @@ export interface PublicProfile {
 
 /** The signed-in user's own record, which does include the private fields. */
 export interface CurrentUser extends PublicProfile {
-  isAdmin?: boolean;
+  isAdmin: boolean;
   email: string;
   timezone: string;
   notifications: {
@@ -543,6 +543,12 @@ export interface InterviewTurn {
   canGenerate: boolean;
   /** Server-side edit counter, quoted back by generate so a stale request is refused. */
   revision: number;
+  /** Deterministic readiness details used to keep progress copy truthful. */
+  requirements?: {
+    missing: string[];
+    ready: boolean;
+    shouldAsk: boolean;
+  };
 }
 
 /**

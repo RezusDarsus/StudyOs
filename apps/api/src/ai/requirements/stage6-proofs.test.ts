@@ -8,8 +8,10 @@ import {
   evaluateAstReadiness,
   estimateRemainingAskable,
   deterministicGapResolution,
+  deterministicGapResolutions,
   detectConflicts,
   buildValidationSource,
+  contractsFromState,
   type GroundingContext,
   type RequirementState,
 } from './index.js';
@@ -74,6 +76,68 @@ describe('Stage 6: deterministic gap parser — the three registered questions',
     expect(deterministicGapResolution('gap_weekly_capacity', 0)).toBeNull();
     expect(deterministicGapResolution('gap_weekly_capacity', 8)).toBeNull();
     expect(deterministicGapResolution('gap_weekly_capacity', 'three-ish')).toBeNull();
+  });
+
+  it('gap_weekly_capacity preserves a user range as lower and upper bounds', () => {
+    expect(deterministicGapResolutions('gap_weekly_capacity', '4-5')).toEqual([
+      {
+        property: 'schedule.frequency.count',
+        scope: 'schedule',
+        relation: 'gte',
+        value: { kind: 'count', value: 4 },
+      },
+      {
+        property: 'schedule.frequency.count',
+        scope: 'schedule',
+        relation: 'lte',
+        value: { kind: 'count', value: 5 },
+      },
+    ]);
+    expect(deterministicGapResolutions('gap_weekly_capacity', '4-6 weekly')).toHaveLength(2);
+    expect(deterministicGapResolutions('gap_weekly_capacity', '6-4')).toEqual([]);
+    expect(deterministicGapResolutions('gap_weekly_capacity', 'about 4')).toEqual([]);
+  });
+
+  it('a weekly range closes the capacity gap and remains correctable', () => {
+    let state = ingest(emptyRequirementState(), frag([outcomeAtom('move more', 'move more')]), G({
+      turn: 0,
+      message: 'I want to move more',
+    })).state;
+    const range = deterministicGapResolutions('gap_weekly_capacity', '4-5');
+    state = ingest(state, frag(range.map((item) => ({
+      ...item,
+      strength: 'REQUIRED' as const,
+      source: 'stated' as const,
+      evidence: '4-5',
+    }))), G({
+      turn: 1,
+      answer: { questionId: 'gap_weekly_capacity', text: '4-5' },
+    })).state;
+
+    const readiness = evaluateAstReadiness(state, { questionCount: 1, maxQuestions: HARD_MAX_QUESTIONS });
+    expect(readiness.missing).not.toContain('WEEKLY_CAPACITY');
+    const contract = contractsFromState(state)[0];
+    expect(contract.minWeekly).toBe(4);
+    expect(contract.maxWeekly).toBe(5);
+
+    state = ingest(state, frag([{
+      property: 'schedule.frequency.count',
+      scope: 'schedule',
+      relation: 'eq',
+      value: { kind: 'count', value: 3 },
+      strength: 'REQUIRED',
+      source: 'stated',
+      evidence: '3',
+    }]), G({
+      turn: 2,
+      answer: { questionId: 'gap_weekly_capacity', text: '3' },
+    })).state;
+    const activeFrequency = state.records.filter(
+      (record) => record.status === 'ACTIVE' && record.property === 'schedule.frequency.count',
+    );
+    expect(activeFrequency).toHaveLength(1);
+    expect(activeFrequency[0].relation).toBe('eq');
+    expect((activeFrequency[0].value as { value: number }).value).toBe(3);
   });
 
   it('gap_session_shape parses minutes 5-300; gap_timeframe parses an ISO date', () => {

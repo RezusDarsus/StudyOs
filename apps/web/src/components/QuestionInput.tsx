@@ -189,7 +189,7 @@ export default function QuestionInput({
       <div className="flex gap-2">
         <input
           type={inputType}
-          inputMode={numeric ? 'decimal' : undefined}
+          inputMode={numeric && question.id !== 'gap_weekly_capacity' ? 'decimal' : undefined}
           min={minDate}
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -200,7 +200,9 @@ export default function QuestionInput({
             question.type === 'FREE_TEXT'
               ? 'Type your answer…'
               : numeric
-                ? 'A number, or say it in your own words…'
+                ? question.id === 'gap_weekly_capacity'
+                  ? 'For example, 4 or 4-5 days per week…'
+                  : 'A number, or say it in your own words…'
                 : ''
           }
           className="flex-1 px-4 py-3 text-sm"

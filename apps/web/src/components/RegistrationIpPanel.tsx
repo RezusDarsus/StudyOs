@@ -15,7 +15,7 @@ export default function RegistrationIpPanel() {
     () => api.get<RegistrationIps>(`/admin/registration-ips?page=${page}`), [page],
   );
   return <section className="card p-5 sm:p-6 mb-5" aria-labelledby="registration-ip-title">
-    <h2 id="registration-ip-title" className="font-semibold text-lg mb-2">Admin · Registrations by IP</h2>
+    <h2 id="registration-ip-title" className="font-semibold text-lg mb-2">Registrations by IP</h2>
     <p className="text-sm mb-4">Accounts grouped by the IP recorded at signup. Shared networks can have several accounts.</p>
     {loading ? <p role="status">Loading registration counts…</p> : error ? <ErrorState message={error} onRetry={reload} /> : data && <>
       <p className="text-sm mb-4">{data.totalAccounts.toLocaleString()} accounts · {data.unknownAccounts.toLocaleString()} with IP not recorded</p>

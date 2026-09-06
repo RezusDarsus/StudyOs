@@ -18,6 +18,7 @@ import {
 // the same checker over raw model drafts later.
 
 export type ContractViolationCode =
+  | 'MIN_WEEKLY_UNDERFLOW'
   | 'EXACT_WEEKLY_MISMATCH'
   | 'MAX_WEEKLY_EXCEEDED'
   | 'REQUIRED_WEEKDAY_MISSING'
@@ -51,6 +52,8 @@ export interface ContractMonthlyPhase {
 }
 
 export interface ConstraintContract {
+  /** Inclusive lower bound for a flexible weekly-count answer. */
+  minWeekly?: number;
   exactWeekly?: number;
   maxWeekly?: number;
   /** Days that must carry a scheduled occurrence, Monday-first canonical order. */
@@ -115,10 +118,15 @@ export function buildConstraintContract(
   const roleDays = constraints.requiredRoleDays.map((requirement) => ({ ...requirement }));
   const cadence: ConstraintContract['cadence'] = roleDays.length
     ? 'FIXED'
-    : constraints.allowedDays?.length && (constraints.exactWeekly !== undefined || constraints.maxWeekly !== undefined)
+    : constraints.allowedDays?.length && (
+        constraints.minWeekly !== undefined
+        || constraints.exactWeekly !== undefined
+        || constraints.maxWeekly !== undefined
+      )
       ? 'FLEXIBLE'
       : 'UNSPECIFIED';
   return {
+    minWeekly: constraints.minWeekly,
     exactWeekly: constraints.exactWeekly,
     maxWeekly: constraints.maxWeekly,
     requiredWeekdays: canonicalWeekdayOrder(roleDays.flatMap((requirement) => requirement.days)),
@@ -169,6 +177,12 @@ export function checkContract(contract: ConstraintContract, draft: ContractDraft
   const violations: ContractViolation[] = [];
   const tasks = draft.tasks;
   const total = tasks.reduce((sum, task) => sum + taskWeeklyFrequency(task), 0);
+  if (contract.minWeekly !== undefined && total < contract.minWeekly) {
+    violations.push({
+      code: 'MIN_WEEKLY_UNDERFLOW',
+      message: `The user requires at least ${contract.minWeekly} total sessions per week, but the tasks total ${Number(total.toFixed(2))}.`,
+    });
+  }
   if (contract.exactWeekly !== undefined && Math.abs(total - contract.exactWeekly) > 0.01) {
     violations.push({
       code: 'EXACT_WEEKLY_MISMATCH',

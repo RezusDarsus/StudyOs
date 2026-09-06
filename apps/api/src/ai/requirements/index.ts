@@ -80,6 +80,7 @@ export {
   estimateRemainingAskable,
   hasLoadBearingQuarantine,
   deterministicGapResolution,
+  deterministicGapResolutions,
   conflictQuestion,
   pendingQuestion,
   stableHash,

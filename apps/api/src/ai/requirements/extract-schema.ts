@@ -310,6 +310,43 @@ export interface NormalizedFragment {
   conditionalGroups: Array<{ guard: { property: string; value: RequirementValue }; atoms: NormalizedCandidate[] }>;
 }
 
+/** Remove model claims for slots already resolved by a deterministic answer. */
+export function withoutProperties(
+  fragment: RequirementFragment,
+  properties: ReadonlySet<string>,
+): RequirementFragment {
+  if (properties.size === 0) return fragment;
+  const keep = (atom: RawAtom) => !properties.has(atom.property);
+  const atoms = fragment.atoms.filter(keep);
+  const groups: RequirementFragment['groups'] = [];
+  for (const group of fragment.groups) {
+    if (group.kind === 'and' || group.kind === 'conditional') {
+      // A conditional guarded by a protected slot is not safe to retain: the
+      // model's branch decision may depend on a value it no longer owns.
+      if (group.kind === 'conditional' && properties.has(group.guard.property)) continue;
+      const atoms = group.atoms.filter(keep);
+      if (atoms.length) groups.push({ ...group, atoms });
+      continue;
+    }
+    if (group.kind === 'not') {
+      if (keep(group.atom)) groups.push(group);
+      continue;
+    }
+    // Removing one side of an OR changes its meaning. If any branch mentions a
+    // protected property, discard the whole model group rather than turning a
+    // surviving branch into an unconditional assertion.
+    if (!group.branches.some((branch) => branch.atoms.some((atom) => !keep(atom)))) {
+      groups.push(group);
+    }
+  }
+  return requirementFragmentSchema.parse({
+    ...fragment,
+    atoms,
+    pendingAmbiguity: fragment.pendingAmbiguity.filter((item) => !properties.has(item.property)),
+    groups,
+  });
+}
+
 /** Fully normalized fragment ready for the deterministic merge. */
 export function normalizeFragment(fragment: RequirementFragment): NormalizedFragment {
   return {

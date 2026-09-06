@@ -239,6 +239,75 @@ describe('Copilot acceptance', () => {
     expect(readyTurn.assistantMessage).toBe("That's everything I need.");
   });
 
+  it('accepts a weekly commitment range and advances past the capacity question', async () => {
+    const user = await h.createUser({ timezone: TZ });
+
+    // The model may still ask about frequency in its own response. The AST gate
+    // must use the deterministic answer state, not re-display that same gap.
+    h.ai.queue(
+      'INTERVIEW',
+      asksWithReq({ id: 'model_outcome', type: 'FREE_TEXT', prompt: 'What outcome?' }, []),
+      asksWithReq({ id: 'model_frequency', type: 'NUMBER', prompt: 'How many days per week?' }, []),
+      asksWithReq(
+        { id: 'model_repeat', type: 'NUMBER', prompt: 'How many days per week?' },
+        [{
+          property: 'schedule.frequency.count',
+          scope: 'schedule',
+          relation: 'eq',
+          value: { kind: 'count', value: 3 },
+          strength: 'REQUIRED',
+          source: 'stated',
+          evidence: 'How many days per week?',
+        }],
+      ),
+    );
+
+    const started = await h.ok(user, 'POST', '/api/copilot/goal-sessions', {
+      goal: 'I want to get fitter',
+    });
+    expect(started.question?.id).toBe('gap_desired_outcome');
+
+    const outcome = await h.ok(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${started.sessionId}/answers`,
+      { questionId: 'gap_desired_outcome', answer: 'to lose weight' },
+    );
+    expect(outcome.question?.id).toBe('gap_weekly_capacity');
+
+    const ranged = await h.ok(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${started.sessionId}/answers`,
+      { questionId: 'gap_weekly_capacity', answer: '4-5' },
+    );
+    expect(ranged.question?.id).toBe('gap_timeframe');
+    expect(ranged.question?.id).not.toBe('gap_weekly_capacity');
+
+    const session = await prisma.copilotSession.findUniqueOrThrow({
+      where: { id: started.sessionId },
+    });
+    const state = parseRequirementStateOf(session);
+    const frequency = state.records.filter(
+      (record) => record.status === 'ACTIVE' && record.property === 'schedule.frequency.count',
+    );
+    expect(frequency.map((record) => `${record.relation}:${(record.value as { value: number }).value}`)).toEqual([
+      'gte:4',
+      'lte:5',
+    ]);
+
+    // A delayed old client cannot submit a second capacity answer against the
+    // new timeframe question and reopen the old loop.
+    const stale = await h.call(
+      user,
+      'POST',
+      `/api/copilot/goal-sessions/${started.sessionId}/answers`,
+      { questionId: 'gap_weekly_capacity', answer: '4-6' },
+    );
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('STALE_REQUEST');
+  });
+
     it('answers a goal-related recommendation with structured items', async () => {
     const user = await h.createUser({ timezone: TZ });
     const { goal } = await h.ok(user, 'POST', '/api/goals', {

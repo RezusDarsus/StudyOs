@@ -5,6 +5,7 @@ import {
   Gift,
   Home,
   LogOut,
+  Shield,
   Target,
   Trophy,
   User,
@@ -116,6 +117,16 @@ function Sidebar() {
             Profile
           </NavLink>
 
+          {user?.isAdmin && (
+            <NavLink
+              to="/app/admin"
+              className={({ isActive }) => `sidebar-nav-item ${isActive ? 'active' : ''}`}
+            >
+              <Shield size={17} />
+              Admin
+            </NavLink>
+          )}
+
           <button
             className="sidebar-nav-item"
             onClick={async () => {
@@ -174,6 +185,10 @@ function Sidebar() {
 }
 
 function MobileNav() {
+  const { user } = useAuth();
+  const tabs = user?.isAdmin
+    ? [...mobileTabs, { icon: Shield, label: 'Admin', to: '/app/admin' }]
+    : mobileTabs;
   return (
     <nav
       className="lg:hidden fixed bottom-0 left-0 right-0 flex items-center z-50"
@@ -185,7 +200,7 @@ function MobileNav() {
       }}
       aria-label="Main"
     >
-      {mobileTabs.map(({ icon: Icon, label, to }) => (
+      {tabs.map(({ icon: Icon, label, to }) => (
         <NavLink
           key={to}
           to={to}

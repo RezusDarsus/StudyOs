@@ -11,7 +11,7 @@ import { normalizeQuantity, normalizedValueRepr, type RequirementRecord, type Re
 // ONE branch of every OR group ("30 or 60 minutes" accepts either).
 //
 // Field inventory (verification pass):
-//   PROJECTED_FROM_AST: exactWeekly, maxWeekly, requiredWeekdays,
+//   PROJECTED_FROM_AST: minWeekly, exactWeekly, maxWeekly, requiredWeekdays,
 //     excludedWeekdays, allowedWeekdays, cadence (derived), roleMinWeekly,
 //     roleDays, monthly.intervalMonths/dayOfMonth, excludedMonths, deadline,
 //     monthlyMoneyCap, maxMinutesPerSession, maxWeeklyMinutes,
@@ -80,6 +80,7 @@ function roleOf(property: string): SemanticTaskRole | null {
 
 /** Build one contract from a chosen set of projected atoms (one per OR branch slot). */
 function buildOneContract(atoms: ProjectedAtom[]): ConstraintContract {
+  let minWeekly: number | undefined;
   let exactWeekly: number | undefined;
   let maxWeekly: number | undefined;
   const requiredWeekdays: number[] = [];
@@ -102,6 +103,9 @@ function buildOneContract(atoms: ProjectedAtom[]): ConstraintContract {
     const record = atom.record;
     if (atom.negated) continue;
     switch (true) {
+      case record.property === 'schedule.frequency.count' && record.relation === 'gte':
+        minWeekly = minutesOf(record) ?? undefined;
+        break;
       case record.property === 'schedule.frequency.count' && record.relation === 'eq':
         exactWeekly = minutesOf(record) ?? undefined;
         break;
@@ -203,11 +207,12 @@ function buildOneContract(atoms: ProjectedAtom[]): ConstraintContract {
   const cadence: ConstraintContract['cadence'] =
     roleDays.length || requiredWeekdays.length
       ? 'FIXED'
-      : allowedWeekdays?.length && (exactWeekly !== undefined || maxWeekly !== undefined)
+      : allowedWeekdays?.length && (minWeekly !== undefined || exactWeekly !== undefined || maxWeekly !== undefined)
         ? 'FLEXIBLE'
         : 'UNSPECIFIED';
 
   return {
+    minWeekly,
     exactWeekly,
     maxWeekly,
     requiredWeekdays: canonicalWeekdayOrder(requiredWeekdays),

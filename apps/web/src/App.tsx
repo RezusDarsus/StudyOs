@@ -20,6 +20,7 @@ const CreateGoalChoice = lazy(() => import('./pages/CreateGoalChoice'));
 const CopilotInterview = lazy(() => import('./pages/CopilotInterview'));
 const DraftReview = lazy(() => import('./pages/DraftReview'));
 const ProductShowcase = lazy(() => import('./pages/ProductShowcase'));
+const Admin = lazy(() => import('./pages/Admin'));
 
 function FullPageSpinner() {
   return (
@@ -84,6 +85,7 @@ export default function App() {
               <Route path="notifications" element={<Notifications />} />
               <Route path="profile" element={<Profile />} />
               <Route path="profile/:id" element={<Profile />} />
+              <Route path="admin" element={<Admin />} />
               <Route path="rewards" element={<Rewards />} />
             </Route>
 
