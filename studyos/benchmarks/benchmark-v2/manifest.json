@@ -1,0 +1,68 @@
+{
+  "benchmark": "benchmark-v2",
+  "purpose": "Prediction calibration corpus for exam-prediction backtesting and provider benchmarking. Subject-neutral importer; this corpus happens to be networking.",
+  "created": "2026-08-29",
+  "corpusKind": "REAL_PLUS_SYNTHETIC_MIX",
+  "honesty": {
+    "realExams": ["REAL-midterm-exam-1-2024.txt", "REAL-networking-midterm-2025.txt"],
+    "realHomework": ["REAL-CNDS-homework-week01-2026.txt", "REAL-CNDS-homework-week02-2026.txt", "REAL-CNDS-homework-week03-2026.txt", "REAL-CNDS-homework-week04-2026.txt", "REAL-CNDS-homework-week05-2026.txt", "REAL-CNDS-homework-week06-2026.txt"],
+    "realLectures": 6,
+    "syntheticExams": 6,
+    "note": "The six SYNTHETIC-* exams assemble real questions from the corpus into dated exam-shaped documents so a multi-fold walk-forward is possible. Metrics from this corpus validate the prediction pipeline; they are NOT real-world predictive accuracy."
+  },
+  "import": {
+    "title": "Networking prediction benchmark",
+    "types": {
+      "REAL-midterm-exam-1-2024.txt": "PAST_EXAM",
+      "REAL-networking-midterm-2025.txt": "PAST_EXAM",
+      "REAL-CNDS-homework-week01-2026.txt": "HOMEWORK",
+      "REAL-CNDS-homework-week02-2026.txt": "HOMEWORK",
+      "REAL-CNDS-homework-week03-2026.txt": "HOMEWORK",
+      "REAL-CNDS-homework-week04-2026.txt": "HOMEWORK",
+      "REAL-CNDS-homework-week05-2026.txt": "HOMEWORK",
+      "REAL-CNDS-homework-week06-2026.txt": "HOMEWORK"
+    },
+    "examYears": {
+      "REAL-midterm-exam-1-2024.txt": 2024,
+      "REAL-networking-midterm-2025.txt": 2025,
+      "SYNTHETIC-exam-2026-05.txt": 2026,
+      "SYNTHETIC-exam-2026-05b.txt": 2026,
+      "SYNTHETIC-exam-2026-06.txt": 2026,
+      "SYNTHETIC-exam-2026-06b.txt": 2026,
+      "SYNTHETIC-exam-2026-07.txt": 2026,
+      "SYNTHETIC-exam-2026-07b.txt": 2026
+    },
+    "examDates": {
+      "REAL-midterm-exam-1-2024.txt": "2024-04-05",
+      "REAL-networking-midterm-2025.txt": "2025-06-02",
+      "SYNTHETIC-exam-2026-05.txt": "2026-05-08",
+      "SYNTHETIC-exam-2026-05b.txt": "2026-05-22",
+      "SYNTHETIC-exam-2026-06.txt": "2026-06-05",
+      "SYNTHETIC-exam-2026-06b.txt": "2026-06-19",
+      "SYNTHETIC-exam-2026-07.txt": "2026-07-03",
+      "SYNTHETIC-exam-2026-07b.txt": "2026-07-17"
+    }
+  },
+  "fixtureOrder": [
+    "REAL-lecture-2026-03-03_215900.txt",
+    "REAL-lecture-2026-03-09_113221.txt",
+    "REAL-lecture-2026-03-15_155421.txt",
+    "REAL-lecture-2026-03-22_180614.txt",
+    "REAL-lecture-2026-03-29_171510.txt",
+    "REAL-lecture-2026-04-06_213810.txt",
+    "REAL-midterm-exam-1-2024.txt",
+    "REAL-networking-midterm-2025.txt",
+    "REAL-CNDS-homework-week01-2026.txt",
+    "REAL-CNDS-homework-week02-2026.txt",
+    "REAL-CNDS-homework-week03-2026.txt",
+    "REAL-CNDS-homework-week04-2026.txt",
+    "REAL-CNDS-homework-week05-2026.txt",
+    "REAL-CNDS-homework-week06-2026.txt",
+    "SYNTHETIC-exam-2026-05.txt",
+    "SYNTHETIC-exam-2026-05b.txt",
+    "SYNTHETIC-exam-2026-06.txt",
+    "SYNTHETIC-exam-2026-06b.txt",
+    "SYNTHETIC-exam-2026-07.txt",
+    "SYNTHETIC-exam-2026-07b.txt"
+  ]
+}

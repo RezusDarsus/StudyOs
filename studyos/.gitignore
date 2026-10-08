@@ -1,0 +1,5 @@
+tools/
+backend/target/
+backend/data/
+backend/.env
+*.log

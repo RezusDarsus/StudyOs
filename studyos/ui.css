@@ -1,0 +1,160 @@
+/* Reusable UI components: statuses, badges, chips, skeletons. Feature styles live with features. */
+
+/* ---------------------------------------------------------------- keyboard focus
+   One visible, consistent focus ring for every interactive control — colour alone never carries
+   meaning, and keyboard users must always see where they are. */
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 2px solid #177d72;
+  outline-offset: 2px;
+}
+
+/* Destructive text action: distinct text label in addition to colour. */
+.text-button.danger { color: #a8402a; }
+
+/* ---------------------------------------------------------------- statuses */
+.loading-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 4px;
+  color: #5b6b66;
+  font-size: 13px;
+}
+.loading-state.compact { padding: 6px 0; font-size: 12px; }
+.loading-spinner {
+  width: 14px; height: 14px;
+  border: 2px solid #cfe1da;
+  border-top-color: #177d72;
+  border-radius: 50%;
+  animation: studyos-spin .8s linear infinite;
+}
+@keyframes studyos-spin { to { transform: rotate(360deg); } }
+
+.error-state {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid #e5c9c0;
+  border-left: 4px solid #c0603f;
+  border-radius: 10px;
+  background: #fdf5f2;
+  font-size: 13px;
+}
+.error-state strong { color: #93412a; font-size: 13px; }
+.error-state span { color: #6d5348; }
+.error-state.warn { border-color: #e8d6a8; border-left-color: #c99a2e; background: #fdfaee; }
+.error-state.warn strong { color: #8a6a14; }
+.error-state.warn span { color: #6d5a2c; }
+
+/* ---------------------------------------------------------------- skeletons */
+.skeleton-stack { display: flex; flex-direction: column; gap: 10px; padding: 6px 0; }
+.skeleton-row { display: flex; flex-direction: column; gap: 6px; }
+.skeleton-line {
+  height: 12px; border-radius: 6px;
+  background: linear-gradient(90deg, #e7eeeb 25%, #f2f7f5 50%, #e7eeeb 75%);
+  background-size: 200% 100%;
+  animation: studyos-shimmer 1.4s ease-in-out infinite;
+}
+.skeleton-line.short { width: 40%; }
+@keyframes studyos-shimmer { to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .loading-spinner, .skeleton-line { animation: none; }
+}
+
+/* ---------------------------------------------------------------- badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: .02em;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.badge-strong { background: #e5f4ee; border-color: #bfe0d4; color: #14665c; }
+.badge-medium { background: #eef2fb; border-color: #ccd8ef; color: #33518f; }
+.badge-warn { background: #fdf3e2; border-color: #eed9ac; color: #8a6414; }
+.badge-muted { background: #f1f4f3; border-color: #dbe2e0; color: #5d6d68; }
+.badge-external { background: #f3f0fb; border-color: #b9aee0; color: #4f3f8f; border-style: dashed; text-decoration: underline; text-decoration-color: #b9aee0; text-underline-offset: 3px; }
+.badge-material { background: #edf7f3; border-color: #cfe1da; color: #176c63; }
+.badge-derived { background: #f7f2ea; border-color: #e2d3ba; color: #7a5d2e; font-style: italic; }
+
+.badge-line { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+
+/* ---------------------------------------------------------------- chips & details */
+.topic-chip {
+  display: inline-flex;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #eef4f2;
+  border: 1px solid #d9e5e1;
+  font-size: 11.5px;
+  color: #33473f;
+}
+.topic-chip.ok { background: #e5f4ee; border-color: #bfe0d4; color: #14665c; }
+.topic-chip.warn { background: #fdf3e2; border-color: #eed9ac; color: #8a6414; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.why-details { margin-top: 6px; font-size: 12.5px; }
+.why-details summary { cursor: pointer; color: #177d72; font-weight: 650; }
+.why-details p { margin: 6px 0 0; color: #4c5b55; }
+
+.reason-list { margin: 4px 0 0; padding-left: 16px; color: #5b6b66; font-size: 12.5px; }
+p.reason-list { list-style: none; padding-left: 0; }
+
+/* ---------------------------------------------------------------- curriculum tree details */
+.module-card { border: 1px solid #e2eae7; border-radius: 12px; background: #fff; margin-bottom: 12px; overflow: hidden; }
+.module-card > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; gap: 10px; padding: 14px 16px; }
+.module-card > summary::-webkit-details-marker { display: none; }
+.module-card.current { border-color: #9fd4c5; box-shadow: inset 3px 0 0 #177d72; }
+.module-toggle::before { content: '▸'; color: #8aa39b; }
+.module-card[open] .module-toggle::before { content: '▾'; }
+.module-body { padding: 0 16px 14px; }
+.module-card.current h3, .module-card summary h3 { display: flex; align-items: center; gap: 8px; }
+
+.syllabus-unit { border-bottom: 1px solid #eef2f1; }
+.syllabus-unit > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; gap: 10px; padding: 10px 4px; }
+.syllabus-unit > summary::-webkit-details-marker { display: none; }
+.unit-label { min-width: 74px; font-size: 11px; font-weight: 750; letter-spacing: .05em; color: #177d72; text-transform: uppercase; }
+.syllabus-unit small { color: #7c8b85; }
+.unit-body { padding: 2px 4px 12px 84px; display: flex; flex-direction: column; gap: 8px; }
+.unit-group { display: flex; flex-direction: column; gap: 5px; margin-top: 4px; }
+
+/* ---------------------------------------------------------------- exam mode & lesson rows */
+.exam-mode-block { display: flex; align-items: flex-start; gap: 12px; padding: 10px 2px; border-bottom: 1px solid #eef2f1; }
+.exam-mode-block:last-of-type { border-bottom: 0; }
+.block-copy { flex: 1; }
+.lesson-side { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; min-width: 160px; }
+.lesson-side .bar { width: 140px; }
+
+/* ---------------------------------------------------------------- hint ladder */
+.hint-ladder { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.ladder-exhausted { color: #7c8b85; font-size: 12px; }
+
+/* ---------------------------------------------------------------- research */
+.research-run { display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px; }
+.research-headline { font-weight: 700; font-size: 14px; color: #24352f; }
+.research-headline.active::after {
+  content: '';
+  display: inline-block;
+  width: 8px; height: 8px;
+  margin-left: 8px;
+  border-radius: 50%;
+  background: #c99a2e;
+  animation: studyos-pulse 1.6s ease-in-out infinite;
+}
+@keyframes studyos-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+.research-stats { color: #5b6b66; font-size: 12.5px; }
+.research-error { color: #93412a; font-size: 12.5px; }
+.research-sources, .research-coverage { margin-top: 10px; }
+.coverage-badges { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }

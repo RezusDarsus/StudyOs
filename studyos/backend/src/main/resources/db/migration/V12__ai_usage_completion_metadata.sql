@@ -1,0 +1,2 @@
+ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS finish_reason VARCHAR(64);
+ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS reasoning_tokens INTEGER;

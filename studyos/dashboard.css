@@ -1,0 +1,46 @@
+/* Dashboard: the learner's answer to "what should I do now". */
+
+.dashboard-panel { margin-bottom: 18px; }
+
+.dashboard-top {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr);
+  gap: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #e9efec;
+}
+.dashboard-readiness strong { font-size: 30px; font-weight: 750; color: #1c2b26; }
+.readiness-line { display: flex; align-items: baseline; gap: 10px; margin: 4px 0 6px; }
+.readiness-line span { color: #5b6b66; font-size: 12.5px; }
+.dashboard-readiness small { color: #7c8b85; font-size: 12px; }
+.dashboard-readiness .coverage-row { margin: 4px 0 6px; }
+.dashboard-position { display: flex; flex-direction: column; gap: 4px; }
+.dashboard-position strong { font-size: 15px; color: #1c2b26; }
+.dashboard-position small, .dashboard-cell small { color: #7c8b85; font-size: 12px; }
+
+.dashboard-next {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid #e9efec;
+}
+.dashboard-next-copy { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.dashboard-next-copy strong { font-size: 16px; color: #1c2b26; }
+.dashboard-next-copy small { color: #5b6b66; font-size: 12.5px; }
+.dashboard-cta { white-space: nowrap; }
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 16px;
+  padding-top: 12px;
+}
+.dashboard-cell { display: flex; flex-direction: column; gap: 6px; }
+.dashboard-cell .empty-state { padding: 8px 0; }
+
+@media (max-width: 900px) {
+  .dashboard-top { grid-template-columns: 1fr; }
+  .dashboard-next { flex-direction: column; align-items: stretch; }
+  .dashboard-cta { width: 100%; }
+}

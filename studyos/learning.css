@@ -1,0 +1,160 @@
+/* Tutor mode, learning path, adaptive ladder and the long-term learner profile. */
+
+.tutor-controls { display: flex; align-items: flex-end; gap: 12px; }
+.minutes-field { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--muted); border: 1px solid var(--line); background: #fff; border-radius: 9px; padding: 8px 11px; }
+.minutes-field input { width: 52px; border: 0; background: none; font: inherit; font-size: 14px; color: var(--ink); text-align: right; }
+.minutes-field input:focus { outline: none; }
+
+.tutor-plan, .tutor-runner, .tutor-log { margin-bottom: 18px; }
+.tutor-summary { display: flex; flex-wrap: wrap; gap: 26px; padding-bottom: 18px; border-bottom: 1px solid #e7eeeb; }
+.tutor-summary div { display: flex; flex-direction: column; gap: 4px; }
+.tutor-summary strong { font-size: 19px; letter-spacing: -.03em; }
+.tutor-summary small { font-size: 10px; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
+.readiness-shift { display: flex; align-items: baseline; gap: 9px; margin: 16px 0 4px; font-size: 13px; color: #5f6b69; }
+.readiness-shift b { font-size: 21px; color: var(--teal-dark); font-variant-numeric: tabular-nums; }
+.readiness-shift .arrow { color: var(--muted); }
+.readiness-shift .projected { color: var(--teal); }
+
+.step-list { counter-reset: step; margin-top: 6px; }
+.step { display: grid; grid-template-columns: 30px 1fr auto; gap: 14px; align-items: start; padding: 15px 0; border-top: 1px solid #eef0ee; }
+.step:first-child { border-top: 0; }
+.step-index { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: #e9f3ef; color: var(--teal-dark); font-size: 11px; font-weight: 750; }
+.step.done .step-index { background: var(--teal); color: #fff; }
+.step.skipped .step-index { background: #eceeed; color: #9aa19f; }
+.step.current .step-index { background: var(--orange); color: #fff; }
+.step-copy strong { display: block; font-size: 13px; }
+.step-copy p { margin: 5px 0 0; font-size: 12px; color: #697371; }
+.step-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.step-tag { font-size: 10px; font-weight: 700; color: var(--teal); background: #e9f3ef; border-radius: 5px; padding: 4px 7px; }
+.step-tag.level { color: var(--navy); background: #e8eef0; }
+.step-tag.unaided { color: #b06a35; background: #fbeee4; }
+.step-minutes { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; padding-top: 4px; }
+
+.runner-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; margin-bottom: 4px; }
+.runner-progress { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.runner-why { font-size: 12px; color: #697371; margin: 8px 0 0; }
+.runner-body { margin-top: 16px; }
+.runner-body h3 { font-size: 15px; margin: 0 0 8px; }
+.runner-body textarea { box-sizing: border-box; width: 100%; min-height: 120px; margin-top: 12px; padding: 12px; border: 1px solid #cbd8d3; border-radius: 9px; font: inherit; }
+.runner-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 14px; }
+.runner-actions .spacer { flex: 1; }
+.support-note { margin-top: 12px; padding: 12px 14px; border-left: 3px solid var(--teal); border-radius: 0 9px 9px 0; background: #f1f7f4; font-size: 12px; color: #35544e; }
+.support-note.gated { border-left-color: var(--orange); background: #fdf3ec; color: #7d4d29; }
+.support-note strong { display: block; margin-bottom: 5px; font-size: 11px; letter-spacing: .05em; text-transform: uppercase; }
+.support-note small { display: block; margin-top: 7px; color: #7c8886; }
+.grade-note { margin-top: 14px; padding: 13px 15px; border-radius: 10px; background: #edf5f1; font-size: 12px; color: #2c4b46; }
+.grade-note.incorrect { background: #fbeee4; color: #7d4d29; }
+.grade-note strong { display: block; margin-bottom: 5px; }
+.grade-note small { display: block; margin-top: 7px; color: #6d7a78; }
+.teaching-note { margin-top: 14px; font-size: 13px; line-height: 1.55; }
+
+.frontier-panel { margin-bottom: 18px; }
+.frontier-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+.frontier-grid .card-label { display: block; margin-bottom: 10px; }
+.coverage-row { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; font-size: 12px; color: #5f6b69; }
+.coverage-row .bar { flex: 1; height: 7px; background: #edf0ee; border-radius: 5px; }
+.coverage-row .bar span { display: block; height: 100%; border-radius: 5px; background: var(--teal); }
+.coverage-row b { font-variant-numeric: tabular-nums; color: var(--teal-dark); }
+
+.module-card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; margin-bottom: 12px; }
+.module-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; }
+.module-heading h3 { font-size: 16px; margin: 0; }
+.module-heading small { font-size: 10px; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+.module-card > p { font-size: 12px; color: #697371; margin: 7px 0 0; }
+.lesson { display: grid; grid-template-columns: 1fr 110px 90px; gap: 14px; align-items: center; padding: 13px 0; border-top: 1px solid #eef0ee; font-size: 12px; }
+.lesson:first-of-type { margin-top: 10px; }
+.lesson strong { display: block; font-size: 13px; }
+.lesson small { display: block; margin-top: 4px; color: var(--muted); }
+.lesson .bar { height: 6px; background: #edf0ee; border-radius: 5px; }
+.lesson .bar span { display: block; height: 100%; border-radius: 5px; background: var(--teal); }
+.lesson .bar.warn span { background: var(--orange); }
+.lesson-state { font-size: 10px; font-weight: 700; text-align: right; color: var(--teal); }
+.lesson-state.warn { color: var(--orange); }
+.lesson-state.locked { color: #9aa19f; }
+.lesson.locked strong { color: #7d8589; }
+.lesson[role="button"] { cursor: pointer; margin: 0 -10px; padding-left: 10px; padding-right: 10px; border-radius: 8px; }
+.lesson[role="button"]:hover, .lesson[role="button"]:focus-visible { background: #f4f8f6; outline: none; }
+.lesson[role="button"]:focus-visible { box-shadow: 0 0 0 2px rgba(23, 125, 114, .3); }
+
+/* One lesson, opened from the learning path: intuition, the precise statement, an example, a check. */
+.lesson-card { width: min(720px, 100%); max-height: calc(100vh - 48px); overflow: auto; }
+.lesson-body { margin-top: 18px; }
+.lesson-body > .profile-note { font-size: 13px; color: #5f6b69; margin: 0 0 4px; }
+.lesson-note { margin: 14px 0 2px; padding: 12px 14px; border-left: 3px solid var(--orange); border-radius: 0 9px 9px 0; background: #fdf3ec; font-size: 12px; color: #7d4d29; }
+.lesson-section { padding: 18px 0 0; border-top: 1px solid #eef0ee; margin-top: 18px; font-size: 13px; line-height: 1.6; color: #33484c; }
+.lesson-section:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
+.lesson-section .card-label { display: block; margin-bottom: 9px; }
+.lesson-section p { margin: 0 0 9px; }
+.lesson-section p:last-child { margin-bottom: 0; }
+.lesson-section h3 { font-size: 14px; margin: 14px 0 7px; }
+.lesson-section h4 { font-size: 13px; margin: 12px 0 6px; }
+.lesson-check { padding: 11px 0; border-bottom: 1px solid #f1f3f2; }
+.lesson-check:last-child { border-bottom: 0; padding-bottom: 0; }
+.lesson-check > p { font-weight: 600; }
+.lesson-check details { margin-top: 7px; }
+.lesson-check summary { color: var(--teal); font-size: 11px; font-weight: 650; cursor: pointer; }
+.lesson-check details[open] summary { color: var(--muted); }
+.lesson-check details p { margin: 8px 0 0; font-weight: 400; color: #4d6265; }
+.lesson-citations { font-size: 11px; color: var(--muted); }
+
+.ladder-panel { margin-top: 20px; }
+.ladder-row { display: grid; grid-template-columns: 1fr 128px 74px; gap: 14px; align-items: center; padding: 13px 0; border-top: 1px solid #eef0ee; font-size: 12px; }
+.ladder-row:first-of-type { border-top: 0; }
+.ladder-row strong { display: block; font-size: 13px; }
+.ladder-row small { display: block; margin-top: 4px; color: var(--muted); }
+.ladder-track { display: flex; gap: 3px; }
+.ladder-track i { flex: 1; height: 7px; border-radius: 3px; background: #edf0ee; }
+.ladder-track i.filled { background: var(--teal); }
+.ladder-track i.diagnostic { background: var(--orange); }
+.ladder-level { font-size: 10px; font-weight: 700; text-align: right; color: var(--navy); }
+
+.profile-panel { margin-bottom: 20px; }
+.profile-note { font-size: 12px; color: var(--muted); margin: 0 0 14px; }
+.profile-hints { display: flex; flex-direction: column; gap: 7px; margin-bottom: 18px; }
+.profile-hint { font-size: 12px; color: #35544e; background: #f1f7f4; border-left: 3px solid var(--teal); border-radius: 0 8px 8px 0; padding: 9px 13px; }
+.profile-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; }
+.trait { padding: 11px 0; border-bottom: 1px solid #e7eeeb; font-size: 12px; }
+.trait:last-child { border-bottom: 0; }
+.trait-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.trait-top strong { font-size: 12px; }
+.trait-kind { font-size: 10px; font-weight: 700; color: var(--teal); white-space: nowrap; }
+.trait.negative .trait-kind { color: var(--orange); }
+.trait.neutral .trait-kind { color: var(--muted); }
+.trait p { margin: 5px 0 0; color: #697371; font-size: 11px; }
+.trait small { display: block; margin-top: 5px; color: #9aa19f; font-size: 10px; }
+
+/* Several chats per workspace, all reading the same memory: the sidebar says which one is open and what it is for. */
+/* A workspace can hold many chats, so the list scrolls inside the sidebar instead of pushing PROJECTS off the page. */
+#chatList { max-height: 272px; overflow-y: auto; overscroll-behavior: contain; }
+.chat-item { align-items: flex-start; width: 100%; }
+.chat-item:hover { background: #e9edea; }
+.chat-item .project-dot { margin-top: 5px; background: #a9c9c1; flex: 0 0 auto; }
+.chat-item.active .project-dot { background: var(--teal); }
+.chat-item-copy { display: grid; gap: 2px; min-width: 0; }
+.chat-item-title { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-item small { color: #8c9593; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-empty { font-size: 11px; color: #9ba1a0; margin: 0; padding: 2px 11px 0; }
+.chat-heading-tools { display: flex; align-items: center; gap: 9px; }
+.chat-purpose-tag { font-size: 9px; letter-spacing: .08em; font-weight: 750; text-transform: uppercase; color: var(--teal-dark); background: var(--mint); border-radius: 20px; padding: 4px 9px; white-space: nowrap; }
+
+/* Seven purposes plus a name field is taller than a short laptop screen, so the card scrolls like the other tall ones. */
+.chat-card { width: min(520px, 100%); max-height: calc(100vh - 48px); overflow: auto; }
+.chat-modal-note { font-size: 12px; color: #6c7674; line-height: 1.55; margin: 14px 0 0; }
+.purpose-list { display: grid; gap: 8px; margin: 16px 0 4px; }
+.purpose-option { display: flex; gap: 11px; align-items: flex-start; border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px; cursor: pointer; font-size: 13px; }
+.purpose-option:hover { border-color: #bcd6d0; background: #fafcfb; }
+.purpose-option:focus-within { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(23, 125, 114, .16); }
+.purpose-option input { margin: 2px 0 0; accent-color: var(--teal); }
+.purpose-option strong { display: block; font-weight: 650; }
+.purpose-option small { display: block; margin-top: 3px; color: #7d8785; font-size: 11px; line-height: 1.45; }
+
+@media (max-width: 900px) {
+  .frontier-grid, .profile-grid { grid-template-columns: 1fr; }
+  .lesson, .ladder-row { grid-template-columns: 1fr 90px; }
+  .lesson .bar, .ladder-track { display: none; }
+}
+@media (max-width: 700px) {
+  .tutor-controls { display: block; margin-top: 15px; }
+  .tutor-controls .primary-button { margin-top: 10px; }
+  .tutor-summary { gap: 16px; }
+}

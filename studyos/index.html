@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>StudyOS — persistent study workspace</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="views.css" />
+    <link rel="stylesheet" href="sources.css" />
+    <link rel="stylesheet" href="project-modal.css?v=20260814-1" />
+    <link rel="stylesheet" href="vendor/katex/katex.min.css" />
+    <link rel="stylesheet" href="visuals.css?v=20260814-12" />
+    <link rel="stylesheet" href="learning.css?v=20260825-3" />
+    <link rel="stylesheet" href="ui.css?v=20260829-1" />
+    <link rel="stylesheet" href="dashboard.css?v=20260829-1" />
+    <link rel="stylesheet" href="mobile.css?v=20260821-1" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand"><span class="brand-mark">S</span><span>StudyOS</span></div>
+        <button class="new-chat" id="newChatButton"><span>＋</span> New chat</button>
+        <nav class="nav-list" aria-label="Primary navigation">
+          <button class="nav-item active" data-view="today"><span>⌂</span> Today</button>
+          <button class="nav-item" data-view="tutor"><span>▶</span> Study session</button>
+          <button class="nav-item" data-view="curriculum"><span>⊞</span> Learning path</button>
+          <button class="nav-item" data-view="knowledge"><span>◈</span> Knowledge map</button>
+          <button class="nav-item" data-view="exam"><span>◇</span> Exam prep</button>
+          <button class="nav-item" data-view="history"><span>◷</span> Learning history</button>
+          <button class="nav-item" data-view="memory"><span>◎</span> What StudyOS knows</button>
+          <button class="nav-item" data-view="sources"><span>▤</span> Sources</button>
+        </nav>
+        <div class="sidebar-label">CHATS</div>
+        <div id="chatList"></div>
+        <div class="sidebar-label">PROJECTS</div>
+        <div id="projectList"></div>
+        <button class="project-item muted" id="newProjectButton"><span class="project-dot"></span><span>New project</span></button>
+        <button class="project-item muted" id="newProjectFooterButton"><span class="project-dot"></span><span>＋ New project</span></button>
+        <div class="sidebar-bottom"><div class="avatar">R</div><div><strong>Rezus</strong><small>Personal workspace</small></div><span class="more">•••</span></div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div class="workspace-title"><button class="mobile-menu-button" id="mobileNavButton" type="button" aria-label="Open navigation" aria-expanded="false">☰</button><div><span class="eyebrow">LEARNING WORKSPACE</span><h1>Loading workspace…</h1></div></div>
+          <div class="top-actions"><button class="primary-button" id="startSessionButton">Start session <span>→</span></button></div>
+        </header>
+
+        <section class="view" data-view-panel="today">
+        <section class="exam-banner">
+          <div><span class="eyebrow warm">LEARNING WORKSPACE</span><h2>Build understanding one evidence-backed session at a time.</h2><p>Your project brain has enough evidence to make today’s plan specific.</p></div>
+          <div class="readiness-ring"><strong>—</strong><span>readiness</span></div>
+        </section>
+
+        <section class="panel dashboard-panel" id="dashboardPanel" aria-label="Learner dashboard"><div class="empty-state">Loading your dashboard…</div></section>
+
+        <section class="stats-grid">
+          <article class="stat-card"><span class="card-label">READINESS</span><strong>—</strong><span class="trend">Awaiting evidence</span></article>
+          <article class="stat-card"><span class="card-label">STUDIED THIS WEEK</span><strong>0m</strong><span class="trend">No learning events yet</span></article>
+          <article class="stat-card"><span class="card-label">OPEN GAPS</span><strong>0</strong><span class="trend">No evidence yet</span></article>
+          <article class="stat-card"><span class="card-label">PROJECT MEMORY</span><strong>0</strong><span class="trend">topics · 0 events</span></article>
+        </section>
+
+        <div class="content-grid">
+          <section class="panel today-panel">
+            <div class="panel-heading"><div><span class="eyebrow">RECOMMENDED FOR YOU</span><h2>Today’s study plan</h2></div><button class="text-button" id="editPlanButton" type="button">Edit plan</button></div>
+            <div class="time-row"><span id="planMinutes">Working out how long this takes…</span><span>0 / 5 completed</span></div>
+            <div class="progress-track"><span style="width: 0%"></span></div>
+            <div class="task-list" id="taskList"></div>
+          </section>
+
+          <section class="panel chat-panel">
+            <div class="panel-heading"><div><span class="eyebrow">SHARED PROJECT MEMORY</span><h2 id="activeChatTitle">Continue learning</h2></div><div class="chat-heading-tools"><span class="chat-purpose-tag hidden" id="activeChatPurpose"></span><span class="memory-status"><i></i> Synced</span></div></div>
+            <div class="chat-history" id="chatHistory"><div class="chat-empty" id="chatEmpty">Start a new workspace conversation. Replies will use your uploaded learning sources and persistent learner state.</div></div>
+            <form class="chat-form" id="chatForm"><select id="explanationDepth" aria-label="Explanation depth"><option value="">Normal</option><option value="simple">Simple</option><option value="deep">Deep</option><option value="exam">Exam level</option></select><input id="chatInput" autocomplete="off" placeholder="Ask your workspace anything…" /><button aria-label="Send message">↑</button></form>
+            <div class="chat-suggestions"><button data-prompt="Explain my biggest weakness">Explain</button><button data-prompt="Teach me my weakest topic from intuition through formal reasoning">Teach me</button><button data-prompt="Quiz me on my uploaded sources">Quiz me</button><button data-prompt="Give me a new exercise unlike my homework">Exercise</button><button data-prompt="Review my recent mistakes">Review</button><button data-prompt="Summarize my uploaded sources">Summarize</button><button data-prompt="Prepare me for my exam using the available evidence">Exam prep</button></div>
+          </section>
+        </div>
+        </section>
+
+        <section class="view hidden" data-view-panel="tutor">
+          <div class="page-title">
+            <div><span class="eyebrow">TUTOR MODE</span><h2>Today’s session</h2><p>One ordered sequence, built from your learning path, your current level, and what you are about to forget.</p></div>
+            <div class="tutor-controls"><label class="minutes-field">I have<input id="tutorMinutes" type="number" min="5" max="480" step="5" placeholder="60" /><span>min</span></label><button class="primary-button" id="startTutorSessionButton">Start study session →</button></div>
+          </div>
+          <section class="panel tutor-plan" id="tutorPlan"><div class="empty-state">Loading today’s session…</div></section>
+          <section class="panel tutor-runner hidden" id="tutorRunner"></section>
+          <section class="panel tutor-log hidden" id="tutorLog"></section>
+        </section>
+
+        <section class="view hidden" data-view-panel="curriculum">
+          <div class="page-title">
+            <div><span class="eyebrow">GOAL → CURRICULUM → MASTERY</span><h2>Learning path</h2><p>Modules and lessons in prerequisite order. A lesson stays locked until what it depends on holds.</p></div>
+            <button class="primary-button" id="generateCurriculumButton">Build learning path →</button>
+          </div>
+          <section class="panel frontier-panel" id="curriculumFrontier"></section>
+          <section class="panel syllabus-panel" id="syllabusPanel" aria-label="Parsed syllabus"><div class="empty-state">Loading the parsed syllabus…</div></section>
+          <div id="curriculumTree"><div class="empty-state">Loading your learning path…</div></div>
+        </section>
+
+        <section class="view hidden" data-view-panel="knowledge">
+          <div class="page-title"><div><span class="eyebrow">SUBJECT STRUCTURE</span><h2>Knowledge map</h2><p>See what you know, what is weak, and what unlocks the next concept.</p></div><button class="primary-button" id="quizWeakButton">Quiz my weak topics →</button></div>
+          <div class="map-grid" id="knowledgeMap"></div>
+          <section class="panel ladder-panel"><div class="panel-heading"><div><span class="eyebrow">ADAPTIVE DIFFICULTY</span><h2>Where each topic sits</h2></div><span class="memory-status" id="ladderLegend"></span></div><div id="ladderList"></div></section>
+        </section>
+
+        <section class="view hidden" data-view-panel="exam">
+          <div class="page-title"><div><span class="eyebrow">EVIDENCE-BASED EXAM MODE</span><h2>Exam intelligence</h2><p>Likely structures are probabilities—not promises—and always show their evidence.</p></div><button class="primary-button" id="createMockExamButton">Create mock exam →</button></div>
+          <section class="panel exam-mode-panel"><div class="panel-heading"><div><span class="eyebrow">EXAM MODE</span><h2>Today’s preparation plan</h2><p>A bounded block plan from the exam-mode planner: remediation first, exam relevance second, pedagogy always first.</p></div><button class="primary-button" id="startExamModeButton" type="button">Start Exam Preparation</button></div><div id="examModePanel"><div class="empty-state">Start exam preparation to get a bounded plan for today.</div></div></section>
+          <div class="memory-grid">
+            <section class="panel"><div class="panel-heading"><div><span class="eyebrow">LIKELY TOPICS</span><h2>What matters most</h2></div></div><div id="examTopicPredictions"></div></section>
+            <section class="panel"><div class="panel-heading"><div><span class="eyebrow">QUESTION STRUCTURES</span><h2>What to practice</h2></div></div><div id="examStructurePredictions"></div></section>
+          </div>
+          <details class="panel why-details hidden" id="examBacktestDebug"><summary>Engineering: model backtest quality</summary><div data-backtest-body></div></details>
+          <section class="panel mock-exam-panel hidden" id="mockExamPanel"><div class="panel-heading"><div><span class="eyebrow">MOCK EXAM</span><h2 id="mockExamTitle">Adaptive mock exam</h2></div><span id="mockExamStatus" class="source-type"></span></div><p id="mockExamInstructions"></p><div id="mockExamQuestions"></div><div class="modal-actions"><button class="primary-button hidden" id="finishMockExamButton" type="button">Finish and update readiness</button></div></section>
+        </section>
+
+        <section class="view hidden" data-view-panel="history">
+          <div class="page-title"><div><span class="eyebrow">YOUR LEARNING RECORD</span><h2>Learning history</h2><p>Every meaningful study event contributes evidence to your project memory.</p></div><span class="memory-status"><i></i> Memory is up to date</span></div>
+          <div class="timeline" id="timeline"></div>
+        </section>
+
+        <section class="view hidden" data-view-panel="memory">
+          <div class="page-title"><div><span class="eyebrow">PRIVATE LEARNER STATE</span><h2>What StudyOS knows</h2><p>Review the evidence and preferences StudyOS uses to personalize your plan.</p></div><span class="memory-status"><i></i> Private by default</span></div>
+          <section class="panel profile-panel">
+            <div class="panel-heading"><div><span class="eyebrow">HOW YOU LEARN</span><h2>Your long-term learner profile</h2></div><button class="text-button" id="refreshProfileButton" type="button">Recompute now</button></div>
+            <p class="profile-note" id="profileNote"></p>
+            <div class="profile-hints" id="profileHints"></div>
+            <div class="profile-grid">
+              <div><span class="card-label">WHAT IS WORKING</span><div id="profileStrengths"></div></div>
+              <div><span class="card-label">WHAT IS AT RISK</span><div id="profileRisks"></div></div>
+              <div><span class="card-label">HOW YOU STUDY</span><div id="profileBehaviour"></div></div>
+            </div>
+          </section>
+          <div class="memory-grid">
+            <section class="panel"><div class="panel-heading"><div><span class="eyebrow">READINESS BREAKDOWN</span><h2>Why readiness is here</h2></div></div><div id="readinessBreakdown"></div></section>
+            <section class="panel"><div class="panel-heading"><div><span class="eyebrow">FASTEST IMPROVEMENTS</span><h2>Highest-impact next moves</h2></div></div><div id="readinessImprovements"></div></section>
+            <section class="panel"><div class="panel-heading"><div><span class="eyebrow">OPEN MISCONCEPTIONS</span><h2>Ideas to revisit</h2></div></div><div id="memoryMisconceptions"></div></section>
+            <section class="panel"><div class="panel-heading"><div><span class="eyebrow">LEARNING PREFERENCES</span><h2>How StudyOS should teach</h2></div></div><div id="memoryPreferences"></div><form id="preferenceForm" class="preference-form"><select id="preferenceKey"><option value="EXPLANATION_ORDER">Explanation order</option><option value="SESSION_LENGTH">Session length</option><option value="EXPLANATION_LANGUAGE">Explanation language</option><option value="EXERCISE_DIFFICULTY">Exercise difficulty</option><option value="NOTATION_STYLE">Notation style</option><option value="FEEDBACK_STYLE">Feedback style</option></select><input id="preferenceValue" required maxlength="500" placeholder="e.g. Examples before theory" /><button class="primary-button" type="submit">Remember</button></form></section>
+          </div>
+        </section>
+
+        <section class="view hidden" data-view-panel="sources">
+          <div class="page-title"><div><span class="eyebrow">WORKSPACE SOURCES</span><h2>Learning sources</h2><p>Upload once. Keep original material and its provenance available to every chat.</p></div><div class="source-actions"><button class="text-button" id="pasteSourceButton" type="button">Paste notes</button><label class="primary-button upload-button">＋ Upload source<input id="sourceUpload" type="file" accept=".pdf,.txt,.md,.markdown,application/pdf,text/plain,text/markdown" multiple hidden /></label><button class="text-button danger" id="deleteWorkspaceButton" type="button">Delete workspace</button></div></div>
+          <div class="source-summary"><strong id="sourceCount">0</strong><span>sources in this project</span><strong id="topicCount">0</strong><span>topics extracted</span><strong id="chunkCount">0</strong><span>evidence chunks</span></div>
+          <div id="researchPanel"></div>
+          <div class="source-list" id="sourceList"></div>
+        </section>
+      </main>
+    </div>
+          <div class="modal hidden" id="projectModal" role="dialog" aria-modal="true" aria-labelledby="projectModalTitle">
+      <form class="modal-card" id="projectForm">
+        <div class="panel-heading"><div><span class="eyebrow">NEW WORKSPACE</span><h2 id="projectModalTitle">What are you learning?</h2></div><button type="button" class="icon-button" id="closeProjectModal" aria-label="Close">×</button></div>
+        <div class="hidden" id="projectModalError"></div>
+        <label>Workspace title<input id="projectName" required maxlength="255" placeholder="e.g. German B2 or Distributed Systems" /></label>
+        <div class="form-row">
+          <label>Workspace type<select id="workspaceType"><option value="COURSE">Course</option><option value="EXAM">Exam preparation</option><option value="CERTIFICATION">Certification</option><option value="SKILL">Skill</option><option value="LANGUAGE">Language</option><option value="SELF_STUDY">Self study</option><option value="OTHER">Other</option></select></label>
+          <label>Objective<select id="workspaceObjective"><option value="UNDERSTAND_DEEPLY">Understand deeply</option><option value="PASS_EXAM">Pass an exam</option><option value="FINISH_COURSE">Finish a course</option><option value="PREPARE_CERTIFICATION">Prepare for certification</option><option value="BUILD_SKILL">Build a skill</option><option value="IMPROVE_LANGUAGE">Improve language ability</option></select></label>
+        </div>
+        <label>Deadline <span class="optional">optional</span><input id="workspaceDeadline" type="date" /></label>
+        <label>Description <span class="optional">optional</span><textarea id="projectDescription" maxlength="2000" placeholder="What do you want to be able to do?"></textarea></label>
+        <label>Sources
+          <span class="research-mode-options">
+            <span class="research-option"><input type="radio" name="researchMode" value="SOURCE_ONLY" checked /> My documents</span>
+            <span class="research-option"><input type="radio" name="researchMode" value="SOURCE_PLUS_RESEARCH" /> Documents + online research</span>
+            <span class="research-option"><input type="radio" name="researchMode" value="RESEARCH_ONLY" /> Online research only</span>
+          </span>
+        </label>
+        <div class="modal-actions"><button type="button" class="text-button" id="cancelProject">Cancel</button><button class="primary-button" type="submit">Create workspace</button></div>
+      </form>
+    </div>
+    <div class="modal hidden" id="chatModal" role="dialog" aria-modal="true" aria-labelledby="chatModalTitle">
+      <form class="modal-card chat-card" id="newChatForm">
+        <div class="panel-heading"><div><span class="eyebrow">NEW CHAT IN THIS WORKSPACE</span><h2 id="chatModalTitle">What is this chat for?</h2></div><button type="button" class="icon-button" id="closeChatModal" aria-label="Close">×</button></div>
+        <p class="chat-modal-note">Every chat shares the same course and student memory. What you get wrong here is known in your other chats — the purpose only decides how short messages like “another one” are read.</p>
+        <div class="hidden" id="chatModalError"></div>
+        <div class="purpose-list" id="chatPurposeList"></div>
+        <label>Name this chat <span class="optional">optional</span><input id="chatTitle" maxlength="500" placeholder="Main tutor" /></label>
+        <div class="modal-actions"><button type="button" class="text-button" id="cancelChat">Cancel</button><button class="primary-button" type="submit" id="createChatButton">Start chat</button></div>
+      </form>
+    </div>
+    <div class="modal hidden" id="sessionModal" role="dialog" aria-modal="true" aria-labelledby="sessionTitle">
+      <section class="modal-card session-card">
+        <div class="panel-heading"><div><span class="eyebrow" id="sessionTopic">STUDY SESSION</span><h2 id="sessionTitle">Focused practice</h2></div><div class="session-tools"><span class="session-timer" id="sessionTimer">00:00</span><button type="button" class="icon-button" id="closeSessionModal" aria-label="Close">×</button></div></div>
+        <div class="session-context">
+          <div><span class="card-label">WHY THIS TASK?</span><p id="sessionReason"></p></div>
+          <div><span class="card-label">EXPECTED OUTCOME</span><p id="sessionOutcome"></p></div>
+          <div><span class="card-label">USE THESE SOURCES</span><p id="sessionSources"></p></div>
+        </div>
+        <div class="session-exercise" id="sessionExercise"><div class="empty-state">Preparing your evidence-grounded exercise…</div></div>
+        <form id="sessionAnswerForm" class="session-answer hidden">
+          <label>Your answer<textarea id="sessionAnswer" required placeholder="Work through your reasoning here…"></textarea></label>
+          <div class="modal-actions session-actions"><button type="button" class="text-button" id="sessionHintButton">Hint</button><button class="primary-button" type="submit">Submit answer</button></div>
+        </form>
+        <div id="sessionFeedback" class="session-feedback hidden"></div>
+        <div class="modal-actions"><button class="text-button" type="button" id="cancelSession">Leave open</button><button class="primary-button hidden" type="button" id="completeSessionButton">Complete session</button></div>
+      </section>
+    </div>
+    <div class="modal hidden" id="lessonModal" role="dialog" aria-modal="true" aria-labelledby="lessonTitle">
+      <section class="modal-card lesson-card">
+        <div class="panel-heading"><div><span class="eyebrow" id="lessonEyebrow">LESSON</span><h2 id="lessonTitle">Lesson</h2></div><div class="session-tools"><button type="button" class="icon-button" id="closeLessonModal" aria-label="Close">×</button></div></div>
+        <div class="lesson-body" id="lessonBody"><div class="empty-state">Reading your material for this lesson…</div></div>
+        <div class="modal-actions"><button class="text-button" type="button" id="rewriteLessonButton">Rewrite from my material</button><button class="primary-button" type="button" id="doneLessonButton">Done</button></div>
+      </section>
+    </div>
+    <div class="modal hidden" id="topicModal" role="dialog" aria-modal="true" aria-labelledby="topicTitle">
+      <section class="modal-card lesson-card">
+        <div class="panel-heading"><div><span class="eyebrow">TOPIC</span><h2 id="topicTitle">Topic</h2></div><div class="session-tools"><button type="button" class="icon-button" id="closeTopicModal" aria-label="Close">×</button></div></div>
+        <div class="lesson-body" id="topicBody"><div class="empty-state">Collecting what StudyOS knows about this topic…</div></div>
+        <div class="modal-actions"><button class="primary-button" type="button" id="doneTopicButton">Done</button></div>
+      </section>
+    </div>
+      <script src="vendor/katex/katex.min.js"></script>
+      <script src="vendor/mermaid/mermaid.min.js"></script>
+      <script src="diagram-renderer.js?v=20260814-9"></script>
+      <script src="api/api-client.js?v=20260829-5"></script>
+      <script src="state/app-state.js?v=20260829-5"></script>
+      <script src="components/format.js?v=20260829-5"></script>
+      <script src="components/states.js?v=20260829-5"></script>
+      <script src="components/badges.js?v=20260829-5"></script>
+      <script src="router/router.js?v=20260829-5"></script>
+      <script src="chat/citations.js?v=20260829-5"></script>
+      <script src="chat/chat-view.js?v=20260829-5"></script>
+      <script src="tutor/hint-ladder.js?v=20260829-5"></script>
+      <script src="tutor/exercise-view.js?v=20260830-1"></script>
+      <script src="tutor/tutor-session.js?v=20260829-5"></script>
+      <script src="tutor/study-session.js?v=20260829-5"></script>
+      <script src="research/research-panel.js?v=20260829-5"></script>
+      <script src="prediction/readiness-panel.js?v=20260829-5"></script>
+      <script src="prediction/exam-prediction.js?v=20260829-5"></script>
+      <script src="prediction/exam-mode.js?v=20260829-5"></script>
+      <script src="course/curriculum-view.js?v=20260829-5"></script>
+      <script src="course/syllabus-view.js?v=20260829-5"></script>
+      <script src="course/topic-view.js?v=20260829-5"></script>
+      <script src="course/knowledge-view.js?v=20260829-5"></script>
+      <script src="learner/learner-view.js?v=20260829-5"></script>
+      <script src="dashboard/dashboard.js?v=20260829-5"></script>
+      <script src="app.js?v=20260830-1"></script>
+  </body>
+</html>

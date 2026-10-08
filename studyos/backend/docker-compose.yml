@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg18
+    container_name: studyos-db
+    environment:
+      POSTGRES_DB: studyos
+      POSTGRES_USER: studyos
+      POSTGRES_PASSWORD: studyos
+    ports:
+      - "5432:5432"
+    volumes:
+      - studyos_pg18:/var/lib/postgresql
+volumes:
+  studyos_pg18:

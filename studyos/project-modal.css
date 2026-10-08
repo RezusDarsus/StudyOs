@@ -1,0 +1,117 @@
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 34, 39, 0.42);
+}
+
+.modal.hidden {
+  display: none;
+}
+
+.modal-card {
+  width: min(520px, 100%);
+  padding: 28px;
+  border: 1px solid #dce4e0;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 24px 64px rgba(15, 34, 39, 0.24);
+}
+
+.modal-card .panel-heading {
+  gap: 16px;
+}
+
+.modal-card h2 {
+  margin-right: 24px;
+}
+
+.modal-card label {
+  display: grid;
+  gap: 7px;
+  margin-top: 20px;
+  color: #33484c;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.modal-card input,
+.modal-card textarea,
+.modal-card select {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid #cbd8d3;
+  border-radius: 9px;
+  padding: 11px 12px;
+  background: #fff;
+  color: #203438;
+  font: inherit;
+  font-weight: 400;
+  outline: none;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.source-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.session-card { width: min(760px, 100%); max-height: calc(100vh - 48px); overflow: auto; }
+.session-tools { display: flex; align-items: center; gap: 12px; }
+.session-timer { font-variant-numeric: tabular-nums; color: #177d72; font-weight: 700; }
+.session-context { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 20px 0; }
+.session-context > div { padding: 14px; border-radius: 10px; background: #f4f8f6; }
+.session-context p { margin: 7px 0 0; color: #4d6265; font-size: 13px; line-height: 1.45; }
+.session-exercise { padding: 20px; border: 1px solid #dce4e0; border-radius: 12px; }
+.session-exercise h3 { margin: 0 0 10px; }
+.session-exercise p { margin: 0; line-height: 1.6; }
+.session-answer textarea { min-height: 140px; }
+.session-actions { justify-content: space-between; }
+.session-feedback { margin-top: 16px; padding: 16px; border-radius: 10px; background: #edf7f3; color: #294a45; line-height: 1.5; }
+.session-feedback.incorrect { background: #fff5ec; color: #6f4928; }
+.session-feedback strong { display: block; margin-bottom: 6px; }
+
+.modal-card input:focus,
+.modal-card textarea:focus {
+  border-color: #177d72;
+  box-shadow: 0 0 0 3px rgba(23, 125, 114, 0.14);
+}
+
+.modal-card textarea {
+  min-height: 108px;
+  resize: vertical;
+}
+
+.optional {
+  color: #8a9999;
+  font-weight: 400;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+@media (max-width: 600px) {
+  .modal { padding: 14px; }
+  .modal-card { padding: 22px; }
+  .form-row { grid-template-columns: 1fr; gap: 0; }
+  .session-context { grid-template-columns: 1fr; }
+}
+
+
+.research-mode-options{display:flex;flex-direction:column;gap:.35rem;margin-top:.4rem}
+.research-option{display:flex;align-items:center;gap:.5rem;font-size:.9rem;color:var(--text-secondary,#9aa4b2)}
+.research-option input[type=radio]{accent-color:var(--accent,#6c8cff)}

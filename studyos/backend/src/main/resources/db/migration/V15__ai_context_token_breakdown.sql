@@ -1,0 +1,7 @@
+ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS course_summary_tokens INTEGER;
+ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS memory_tokens INTEGER;
+ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS student_state_tokens INTEGER;
+ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS chat_history_tokens INTEGER;
+ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS forecast_tokens INTEGER;
+ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS evidence_tokens INTEGER;
+ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS instruction_tokens INTEGER;

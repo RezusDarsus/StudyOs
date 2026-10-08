@@ -1,0 +1,62 @@
+spring:
+  application:
+    name: studyos-backend
+  datasource:
+    url: jdbc:postgresql://localhost:5432/studyos
+    username: studyos
+    password: studyos
+  flyway:
+    enabled: true
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+server:
+  port: ${STUDYOS_PORT:8081}
+  error:
+    include-message: never
+springdoc:
+  api-docs:
+    enabled: ${STUDYOS_OPENAPI_ENABLED:true}
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+    tags-sorter: alpha
+  packages-to-scan: com.studyos
+  paths-to-match: /api/**
+studyos:
+  storage-root: ./data/uploads
+  ui-root: ${STUDYOS_UI_ROOT:./}
+  ai:
+    provider: ${STUDYOS_AI_PROVIDER:stub}
+    chat-model: ${STUDYOS_AI_CHAT_MODEL:gpt-4.1-mini}
+    primary-model: ${STUDYOS_AI_PRIMARY_MODEL:${STUDYOS_AI_CHAT_MODEL:gpt-4.1-mini}}
+    internal-model: ${STUDYOS_AI_INTERNAL_MODEL:${STUDYOS_AI_PRIMARY_MODEL:${STUDYOS_AI_CHAT_MODEL:gpt-4.1-mini}}}
+    chat-max-output-tokens: ${STUDYOS_AI_CHAT_MAX_OUTPUT_TOKENS:3200}
+    prediction-max-output-tokens: ${STUDYOS_AI_PREDICTION_MAX_OUTPUT_TOKENS:8192}
+    thinking: ${STUDYOS_AI_THINKING:false}
+    input-cost-per-million: ${STUDYOS_AI_INPUT_COST_PER_MILLION:}
+    output-cost-per-million: ${STUDYOS_AI_OUTPUT_COST_PER_MILLION:}
+    embedding-model: ${STUDYOS_AI_EMBEDDING_MODEL:text-embedding-3-small}
+    embedding-model-version: ${STUDYOS_AI_EMBEDDING_MODEL_VERSION:1}
+    topic-extraction: ${STUDYOS_AI_TOPIC_EXTRACTION:false}
+    answer-cache-enabled: ${STUDYOS_AI_ANSWER_CACHE_ENABLED:true}
+  chat:
+    # Wall-clock budget for one chat turn. Provider attempts and verifier batches share it, so a turn stops
+    # asking for more work once an answer could no longer arrive in time, instead of retrying past the client.
+    request-budget-seconds: ${STUDYOS_CHAT_REQUEST_BUDGET_SECONDS:240}
+  embeddings:
+    dimensions: 2048
+  planner:
+    exam-gap-weight: 0.40
+    review-urgency-weight: 0.20
+    misconception-weight: 0.15
+    recent-failure-weight: 0.10
+    prerequisite-gap-weight: 0.10
+    deadline-weight: 0.05
+    prerequisite-weak-threshold: 0.60
+    max-prerequisite-depth: 3
+    max-injected-prerequisites: 3
+    max-tasks: 8
+    minimum-task-minutes: 15
